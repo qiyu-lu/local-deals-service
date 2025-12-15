@@ -9,6 +9,8 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.ShopBloomFilter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,10 +36,19 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private ShopBloomFilter shopBloomFilter;
+
     @Override
     public Result queryShopById(Long id){
         //构造查询的id，在redis中的key
         String shopKey = CACHE_SHOP_KEY + id;
+
+        //  布隆过滤器拦截
+        if (!shopBloomFilter.mightContain(id)) {
+           log.debug("布隆过滤器");
+            return Result.fail("布隆过滤器：店铺不存在");
+        }
         //先设置在redis中存的是json格式
         String shopJson = stringRedisTemplate.opsForValue().get(shopKey);
 
