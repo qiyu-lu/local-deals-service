@@ -57,6 +57,12 @@
             <artifactId>hutool-all</artifactId>
             <version>5.7.17</version>
         </dependency>
+<!--        引入布隆过滤器依赖-->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>31.1-jre</version>
+        </dependency>
     </dependencies>
 
     <build>
