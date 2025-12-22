@@ -59,12 +59,14 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (!shopBloomFilter.mightContain(id)) {
             return Result.fail("店铺不存在");
         }
-       // Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.SECONDS);
-        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.SECONDS);
+        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.SECONDS);
+
 
         // 2️⃣ 选择一种策略
         //Shop shop = queryWithLogicalExpire(id);
         // Shop shop = queryWithMutex(id);
+
+        // Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY,id,Shop.class, this::getById,CACHE_SHOP_TTL,TimeUnit.SECONDS);
 
         if (shop == null) {
             return Result.fail("店铺不存在");
