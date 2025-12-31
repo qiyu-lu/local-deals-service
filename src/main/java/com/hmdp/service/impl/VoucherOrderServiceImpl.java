@@ -29,9 +29,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private ISeckillVoucherService seckillVoucherService;
     @Resource
     private RedisIdWorker  redisIdWorker;
+    @Resource
+    private IVoucherOrderService voucherOrderService;
 
     @Override
-    @Transactional
     public Result seckillVoucher(Long voucherId){
         //查询优惠券信息
         SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
@@ -44,22 +45,53 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if(seckillVoucher.getStock() < 1)
             return Result.fail("秒杀券库存不足");
         //如果库存充足，则扣减库存
+        //一人一单校验
+        Long userId = UserHolder.getUser().getId();
+        // 3. synchronized：控制“一人一单”
+        synchronized (userId.toString().intern()) {
+            //  必须通过代理对象调用
+            return voucherOrderService.createVoucherOrder(voucherId);
+        }
+    }
+    /**
+     * 真正创建订单的方法（负责事务）
+     */
+    @Transactional
+    public Result createVoucherOrder(Long voucherId){
+
+        Long userId = UserHolder.getUser().getId();
+
+        // 4. 一人一单校验
+        boolean exists = this.lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .count() > 0;
+
+        if (exists) {
+            return Result.fail("不能重复下单");
+        }
+
+        // 5. 扣减库存（乐观锁）
         boolean success = seckillVoucherService.lambdaUpdate()
                 .setSql("stock = stock - 1")
                 .eq(SeckillVoucher::getVoucherId, voucherId)
                 .gt(SeckillVoucher::getStock, 0)
                 .update();
-        if(!success) return Result.fail("扣减库存失败，秒杀券库存不足");
-        //创建订单
-        VoucherOrder voucherOrder = new VoucherOrder();
-        Long orderId = redisIdWorker.nextId("seckill_voucher_order");
-        voucherOrder.setId(orderId);
-        voucherOrder.setVoucherId(voucherId);
-        voucherOrder.setUserId(UserHolder.getUser().getId());
-        voucherOrder.setCreateTime(LocalDateTime.now());
-        voucherOrder.setUpdateTime(LocalDateTime.now());
 
-        this.save(voucherOrder);
-        return Result.ok(orderId);
+        if (!success) {
+            return Result.fail("库存不足");
+        }
+
+        // 6. 创建订单
+        VoucherOrder order = new VoucherOrder();
+        order.setId(redisIdWorker.nextId("order"));
+        order.setUserId(userId);
+        order.setVoucherId(voucherId);
+        order.setCreateTime(LocalDateTime.now());
+        order.setUpdateTime(LocalDateTime.now());
+
+        this.save(order);
+
+        return Result.ok(order.getId());
     }
 }
