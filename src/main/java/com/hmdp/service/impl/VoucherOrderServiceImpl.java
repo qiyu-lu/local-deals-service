@@ -8,12 +8,19 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * <p>
@@ -23,7 +30,9 @@ import java.time.LocalDateTime;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
+
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
     @Resource
     private ISeckillVoucherService seckillVoucherService;
@@ -31,6 +40,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private RedisIdWorker  redisIdWorker;
     @Resource
     private IVoucherOrderService voucherOrderService;
+    @Value("${server.port}")
+    private String serverPort;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Result seckillVoucher(Long voucherId){
@@ -47,11 +61,24 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         //如果库存充足，则扣减库存
         //一人一单校验
         Long userId = UserHolder.getUser().getId();
-        // 3. synchronized：控制“一人一单”
-        synchronized (userId.toString().intern()) {
+        // 3. redis锁实现一人一单
+        SimpleRedisLock lock = new SimpleRedisLock(stringRedisTemplate);
+        String lockKey = "order:" + userId;
+
+        boolean success = lock.lock(lockKey,1200L);
+        if(!success){
+            return Result.fail("不能重复多次下单");//这里抢购就不采用重复进行的策略，而是采用直接终止
+        }
+        try{
             //  必须通过代理对象调用
+            log.info("进入 synchronized，port={}, userId={}",
+                    serverPort, userId);
             return voucherOrderService.createVoucherOrder(voucherId);
         }
+        finally{
+            lock.unlock(lockKey);
+        }
+
     }
     /**
      * 真正创建订单的方法（负责事务）
