@@ -12,6 +12,9 @@ import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -45,6 +48,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Autowired
+    private RedissonClient redissonClient;
 
     @Override
     public Result seckillVoucher(Long voucherId){
@@ -62,10 +67,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         //一人一单校验
         Long userId = UserHolder.getUser().getId();
         // 3. redis锁实现一人一单
-        SimpleRedisLock lock = new SimpleRedisLock(stringRedisTemplate);
         String lockKey = "order:" + userId;
+        org.redisson.api.RLock lock = redissonClient.getLock("lock:" + lockKey);
+        boolean success = lock.tryLock();
 
-        boolean success = lock.lock(lockKey,12000L);
         if(!success){
             return Result.fail("不能重复多次下单");//这里抢购就不采用重复进行的策略，而是采用直接终止
         }
@@ -76,7 +81,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return voucherOrderService.createVoucherOrder(voucherId);
         }
         finally{
-            lock.unlock(lockKey);
+            lock.unlock();
         }
 
     }
