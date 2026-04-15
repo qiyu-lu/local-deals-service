@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: hmdp-mysql
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+    volumes:
+      - ./mysql-data:/var/lib/mysql
+    command:
+      --default-authentication-plugin=mysql_native_password
+    networks:
+      - hmdp-net
+
+  redis:
+    image: redis:6.2
+    container_name: hmdp-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-data:/data
+    command: redis-server --requirepass redis123
+    networks:
+      - hmdp-net
+
+networks:
+  hmdp-net:
+    driver: bridge

@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+
+### mysql and ridis data ###
+/mysql-data/
+/redis-data/
