@@ -125,4 +125,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     public Result me(){
         return Result.ok(UserHolder.getUser());
     }
+
+    @Override
+    public Result logout(String token) {
+        // 直接从 Redis 中删除用户信息
+        stringRedisTemplate.delete(LOGIN_USER_KEY + token);
+        // 无需操作 UserHolder，因为拦截器的 afterCompletion 会统一清理
+        return Result.ok();
+    }
 }

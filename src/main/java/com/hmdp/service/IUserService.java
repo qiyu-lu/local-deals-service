@@ -20,4 +20,6 @@ public interface IUserService extends IService<User> {
     public Result sendCode(String phone, HttpSession session);
     public Result login(LoginFormDTO loginForm, HttpSession session);
     public Result me();
+
+    Result logout(String token);
 }
