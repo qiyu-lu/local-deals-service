@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 import cn.hutool.core.util.BooleanUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
@@ -63,8 +64,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     }
 
     private void isBlogLiked(Blog blog) {
+        UserDTO user = UserHolder.getUser();
+        if(user == null){
+            return;
+        }
         //1.获取登录用户
-        Long userId = UserHolder.getUser().getId();
+        Long userId = user.getId();
         //2.判断当前登录用户是否已经点赞
         String key = BLOG_LIKED_KEY + blog.getId();
         Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
