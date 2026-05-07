@@ -4,8 +4,10 @@ import com.hmdp.entity.Shop;
 import com.hmdp.service.impl.ShopServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.UserHolder;
 import io.lettuce.core.api.async.RedisGeoAsyncCommands;
 import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -109,5 +111,27 @@ class HmDianPingApplicationTests {
 
             stringRedisTemplate.opsForGeo().add(key, locations);
         }
+    }
+
+    @DisplayName("测试UV统计，插入数据")
+    @Test
+    void testHyperLogLog(){
+        //准备数组，装用户数据
+        String[] users = new String[1000];
+        //数组角标
+        int index = 0;
+        for(int i = 1; i <= 1000000; i++){
+            users[index++] = "user_" + i;
+            //每1000条发送一次
+            if(i % 1000 == 0){
+                index = 0;
+                stringRedisTemplate.opsForHyperLogLog()
+                        .add("hll1", users);
+            }
+        }
+        //统计数量
+        Long size = stringRedisTemplate
+                .opsForHyperLogLog().size("hll1");
+        System.out.println("size = " + size);
     }
 }
