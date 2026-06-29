@@ -78,7 +78,7 @@ public class CacheClient {
     {
         String cacheKey = keyPrefix + id.toString();
         String cacheValue = stringRedisTemplate.opsForValue().get(cacheKey);
-        //反序列化
+        if (StrUtil.isBlank(cacheValue)) { return null; }
         RedisData redisData = JSONUtil.toBean(cacheValue, RedisData.class);
         if(redisData.getData() == null){
             return null;
@@ -90,7 +90,7 @@ public class CacheClient {
         }
 
         //过期了,尝试重建
-        String lockKey = LOCK_SHOP_KEY + id.toString();
+        String lockKey = "lock:" + keyPrefix + id.toString();
         boolean locked = Boolean.TRUE.equals(
                 stringRedisTemplate.opsForValue()
                         .setIfAbsent(lockKey, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS)

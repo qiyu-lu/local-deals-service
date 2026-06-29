@@ -1,3 +1,5 @@
+<!-- AI session context — 供 Claude Code 等 AI 助手快速恢复项目上下文用，非用户阅读文档 -->
+
 # 项目上下文恢复
 
 本文用于关闭聊天后快速恢复 local-deals-service 项目上下文。它不是聊天流水账，而是记录当前阶段、重要修改、关键结论和下一步计划。
@@ -46,13 +48,13 @@
 
 - 本次收尾决策：今天暂不继续新增代码，停止在已推送的 `a9ae77a Repackage local deals seckill reliability` 之后；原计划中的故障注入脚本和 `docs/reliability-results.md` 尚未实现。
 - 当前本地环境结论：新业务库 `local_deals` 是直接建在旧 Docker 容器 `hmdp-mysql` 中，Redis 仍使用 `hmdp-redis`；当前阶段不需要额外新建 MySQL/Redis 容器。
-- 当前压测命令仍建议显式传入 `--mysql-container hmdp-mysql --redis-container hmdp-redis`，否则脚本默认的 `local-deals-*` 容器名可能和本机环境不一致。
+- 压测脚本现在从 `.env` 的 `LOCAL_DEALS_*` 自动读取 MySQL/Redis 连接参数，无需传入容器名。
 - 对当前改进完备性的判断：已经可以作为第一版可靠性改造展示，但还不是“完备的生产化秒杀项目”。当前结果主要证明正确性、幂等兜底、异步消费可靠性和压测自动化；性能提升不是主要卖点。
 - 当前主要短板：缺少消费失败场景证据、Prometheus 指标样例/截图、订单状态补偿闭环、CI/一键演示，以及和原黑马点评教程版更强的产品化差异说明。
 - 下次如果继续实现，推荐优先做“异常闭环验证”：测试侧注入缺少 `orderId` 的 Redis Stream 消息，确认 pending 重试上限生效并进入 `stream.orders.dlq`，再把结果写入文档。
 - 使用当前本机旧 Docker 容器 `hmdp-mysql` / `hmdp-redis` 和新业务库 `local_deals` 跑通 `reliable-stream-v1` 四组压测。
 - `reliable-stream-v1` 结果已写入 `docs/JmeterTestSummary/seckill-reliable-v1/` 和 `docs/benchmark-results.md`：100、1000、5000、25000 请求四组均 `pass`，pending 为 0，dead-letter 为 0，`drain_ms` 为 72-80 ms。
-- 当前压测命令需要显式传入 `--mysql-container hmdp-mysql --redis-container hmdp-redis`；不传 `--voucher-id`，由工具自动创建或复用 `local_deals` 中的 benchmark 秒杀券。
+- 不传 `--voucher-id` 时，工具自动创建或复用 `local_deals` 中的 benchmark 秒杀券；连接参数从 `.env` 读取。
 - README 增加“项目亮点 / 相比教程版的改造”和可靠性增强版压测摘要，用于对外展示。
 - 项目对外名重塑为 `local-deals-service`，Maven 坐标、Spring 应用名、Java 包名和主类迁移到 `com.localdeals` / `LocalDealsApplication`。
 - 引入 Flyway，新增 `db/migration/V1__baseline_schema.sql` 和 `V2__voucher_order_constraints.sql`，用唯一索引作为一人一单的 DB 最终兜底。
@@ -154,5 +156,5 @@ scripts/run-seckill-benchmark.sh --threads 5000 --loops 5 --stock 1000 --user-co
 当前 baseline 与 reliable-stream-v1 的 2026-05-20 秒杀对比验证已补齐：baseline worktree 在 /home/sd101t/IdeaProjects/hm-dianping-baseline。
 baseline 使用 hmdp-mysql 容器中的 hmdp 数据库，current 使用同一 hmdp-mysql 容器中的 local_deals 数据库，Redis 均为 hmdp-redis。
 已完成 baseline/current 的 1000/5000 正常压测和故障注入对比；结果入口是 docs/benchmark-results.md 和 docs/reliability-results.md。
-当前本机压测命令需要显式传入 --mysql-container hmdp-mysql --redis-container hmdp-redis，并按 runbook 指定 --mysql-database。
+压测脚本从 `.env` 读取连接参数，按 runbook 指定 --mysql-database 可覆盖默认数据库名。
 ```

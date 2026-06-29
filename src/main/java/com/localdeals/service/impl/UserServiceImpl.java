@@ -44,8 +44,6 @@ import static com.localdeals.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
     @Autowired
-    private HttpSession session;
-    @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
     @Override
@@ -103,7 +101,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                 CopyOptions.create()//这是 Hutool 提供的“拷贝配置对象”，后面两个链式方法就是重点
                         .setIgnoreNullValue(true)//忽略所有 null 字段，不放到 Map 中
                         //把每个字段的值强制转成 String
-                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString())
+                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue == null ? "" : fieldValue.toString())
         );
         //写入 Redis（Hash 类型）+ 设置 TTL
         String tokenKey = LOGIN_USER_KEY + token;

@@ -22,12 +22,10 @@ scripts/run-seckill-benchmark.sh \
   --threads 100 \
   --loops 1 \
   --stock 100 \
-  --user-count 1000 \
-  --mysql-container hmdp-mysql \
-  --redis-container hmdp-redis
+  --user-count 1000
 ```
 
-如果后续改用仓库内 `docker-compose.yml` 新建环境，容器名通常会变为 `local-deals-mysql` / `local-deals-redis`，但数据库名仍保持 `local_deals`。
+脚本从 `.env` 中的 `LOCAL_DEALS_*` 变量自动读取 MySQL/Redis 连接信息（主机、端口、密码），不需要传入容器名。
 
 ## 后端接口检查
 

@@ -16,8 +16,8 @@ VOUCHER_ID=""
 FAULT_USER_ID=1
 WAIT_MS=15000
 POLL_MS=200
-MYSQL_CONTAINER="${MYSQL_CONTAINER:-hmdp-mysql}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-hmdp-redis}"
+REDIS_HOST="${REDIS_HOST:-${LOCAL_DEALS_REDIS_HOST:-localhost}}"
+REDIS_PORT="${REDIS_PORT:-${LOCAL_DEALS_REDIS_PORT:-6379}}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-local_deals}"
 MYSQL_USER="${MYSQL_USER:-${LOCAL_DEALS_DATASOURCE_USERNAME:-root}}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-${LOCAL_DEALS_DATASOURCE_PASSWORD:-}}"
@@ -47,8 +47,8 @@ Options:
   --fault-user-id N        userId field used in malformed message. Default: 1.
   --wait-ms N              Max wait for consumer behavior. Default: 15000.
   --poll-ms N              Redis polling interval. Default: 200.
-  --mysql-container NAME   Docker MySQL container. Default: hmdp-mysql.
-  --redis-container NAME   Docker Redis container. Default: hmdp-redis.
+  --redis-host HOST        Redis host. Default: localhost (override via REDIS_HOST or LOCAL_DEALS_REDIS_HOST in .env)
+  --redis-port PORT        Redis port. Default: 6379
   --mysql-database NAME    MySQL database name recorded in output. Default: local_deals.
   --maven-cmd PATH         Maven executable path. Default: mvn, ./mvnw, or IDEA bundled Maven.
   --java-home PATH         JAVA_HOME for Maven benchmark helpers. Default: Dragonwell JDK 8 in ~/.jdks.
@@ -74,8 +74,8 @@ while [[ $# -gt 0 ]]; do
     --fault-user-id) FAULT_USER_ID="$2"; shift 2 ;;
     --wait-ms) WAIT_MS="$2"; shift 2 ;;
     --poll-ms) POLL_MS="$2"; shift 2 ;;
-    --mysql-container) MYSQL_CONTAINER="$2"; shift 2 ;;
-    --redis-container) REDIS_CONTAINER="$2"; shift 2 ;;
+    --redis-host) REDIS_HOST="$2"; shift 2 ;;
+    --redis-port) REDIS_PORT="$2"; shift 2 ;;
     --mysql-database) MYSQL_DATABASE="$2"; shift 2 ;;
     --maven-cmd) MAVEN_CMD="$2"; shift 2 ;;
     --java-home) JAVA_HOME="$2"; shift 2 ;;
@@ -112,9 +112,8 @@ require_secret() {
   fi
 }
 
-require_cmd docker
+require_cmd redis-cli
 require_cmd python3
-require_secret MYSQL_PASSWORD
 require_secret REDIS_PASSWORD
 
 resolve_maven_cmd() {
@@ -166,7 +165,7 @@ METRICS_CSV="${RESULT_DIR}/metrics.csv"
 mkdir -p "$RESULT_DIR"
 
 redis_cli() {
-  docker exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" --raw "$@" 2>/dev/null
+  redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --no-auth-warning --raw "$@" 2>/dev/null
 }
 
 redis_scalar() {
@@ -261,7 +260,7 @@ done
 
 DEAD_LETTER_SAMPLE="$(redis_cli XRANGE "$DEAD_LETTER_KEY" - + COUNT 1 || true)"
 
-export DATE RUN_ID SCENARIO IMPL EXPECTATION PROJECT_DIR OUTPUT_ROOT MYSQL_CONTAINER MYSQL_DATABASE REDIS_CONTAINER
+export DATE RUN_ID SCENARIO IMPL EXPECTATION PROJECT_DIR OUTPUT_ROOT MYSQL_HOST MYSQL_DATABASE REDIS_HOST
 export STREAM_KEY STREAM_GROUP DEAD_LETTER_KEY VOUCHER_ID FAULT_USER_ID INJECTED_RECORD_ID
 export WAIT_MS POLL_MS PENDING="$pending" DEAD_LETTERS="$dead_letters" STREAM_LEN="$stream_len"
 export RETRY_KEY_COUNT="$retry_key_count" CORRECTNESS="$correctness" METRIC_RUN_SUMMARY="$RUN_SUMMARY_REL"
@@ -274,7 +273,7 @@ import sys
 path = sys.argv[1]
 fields = [
     "date", "run_id", "scenario", "impl", "expectation", "project_dir",
-    "mysql_container", "mysql_database", "redis_container", "stream_key",
+    "mysql_host", "mysql_database", "redis_host", "stream_key",
     "stream_group", "dead_letter_key", "voucher_id", "fault_user_id",
     "injected_record_id", "wait_ms", "poll_ms", "pending", "dead_letters",
     "stream_len", "retry_key_count", "correctness", "run_summary",
@@ -302,9 +301,9 @@ cat > "$RUN_SUMMARY" <<EOF
 - expectation: ${EXPECTATION}
 - project_dir: ${PROJECT_DIR}
 - output_root: ${OUTPUT_ROOT}
-- mysql_container: ${MYSQL_CONTAINER}
+- mysql_host: ${MYSQL_HOST}
 - mysql_database: ${MYSQL_DATABASE}
-- redis_container: ${REDIS_CONTAINER}
+- redis_host: ${REDIS_HOST}
 - stream_key: ${STREAM_KEY}
 - stream_group: ${STREAM_GROUP}
 - dead_letter_key: ${DEAD_LETTER_KEY}

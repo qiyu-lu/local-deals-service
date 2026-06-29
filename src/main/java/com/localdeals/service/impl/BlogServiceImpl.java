@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.BrokenBarrierException;
 import java.util.stream.Collectors;
 
 import static com.localdeals.utils.RedisConstants.BLOG_LIKED_KEY;
@@ -42,6 +41,9 @@ import static com.localdeals.utils.RedisConstants.FEED_KEY;
  */
 @Service
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IBlogService {
+
+    private static final int FOLLOW_FEED_PAGE_SIZE = 2;
+
     @Resource
     private IUserService userService;
     @Resource
@@ -176,7 +178,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         //2. 查询收件箱
         String key = FEED_KEY + userId;
         Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
-                .reverseRangeByScoreWithScores(key, 0, max, offset, 2);
+                .reverseRangeByScoreWithScores(key, 0, max, offset, FOLLOW_FEED_PAGE_SIZE);
         if(typedTuples == null || typedTuples.isEmpty()){
             return Result.ok(Collections.emptyList());
         }
@@ -215,6 +217,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     private void queryBlogUser(Blog blog) {
         Long userId = blog.getUserId();
         User user = userService.getById(userId);
+        if (user == null) { return; }
         blog.setName(user.getNickName());
         blog.setIcon(user.getIcon());
     }

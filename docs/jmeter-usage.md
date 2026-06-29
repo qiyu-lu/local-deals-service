@@ -253,12 +253,10 @@ scripts/run-seckill-benchmark.sh \
   --threads 100 \
   --loops 1 \
   --stock 100 \
-  --user-count 1000 \
-  --mysql-container hmdp-mysql \
-  --redis-container hmdp-redis
+  --user-count 1000
 ```
 
-运行前需要保证后端服务、MySQL 容器和 Redis 容器已经启动。当前本机复用旧容器名 `hmdp-mysql` / `hmdp-redis`，业务库是 `local_deals`；如果使用 `docker-compose.yml` 新建环境，则容器名通常是 `local-deals-mysql` / `local-deals-redis`。
+运行前需要保证后端服务、MySQL 和 Redis 已经启动，并在 `.env` 中配置好 `LOCAL_DEALS_*` 连接参数。脚本会自动从环境变量读取主机和端口，无需传入容器名。
 
 脚本默认会使用 `/home/sd101t/.jdks/dragonwell-ex-1.8.0_472` 作为 `JAVA_HOME`。如果终端找不到 `mvn`，脚本会自动尝试 IDEA 内置 Maven：`/opt/idea/plugins/maven/lib/maven3/bin/mvn`。也可以显式指定：
 
@@ -269,9 +267,7 @@ scripts/run-seckill-benchmark.sh \
   --threads 5000 \
   --loops 5 \
   --stock 1000 \
-  --user-count 5000 \
-  --mysql-container hmdp-mysql \
-  --redis-container hmdp-redis
+  --user-count 5000
 ```
 
 脚本会自动完成：
@@ -298,8 +294,10 @@ scripts/run-seckill-benchmark.sh \
 | `--stream-key` | Redis Stream key | `stream.orders` |
 | `--stream-group` | Redis Stream consumer group | `g1` |
 | `--dead-letter-key` | Redis dead-letter Stream key | `stream.orders.dlq` |
-| `--mysql-container` | Docker MySQL 容器名 | 当前本机：`hmdp-mysql`；新 compose 环境：`local-deals-mysql` |
-| `--redis-container` | Docker Redis 容器名 | 当前本机：`hmdp-redis`；新 compose 环境：`local-deals-redis` |
+| `--mysql-host` | MySQL 主机名（默认读取 `LOCAL_DEALS_DATASOURCE_URL`） | `localhost` |
+| `--mysql-port` | MySQL 端口 | `3306` |
+| `--redis-host` | Redis 主机名（默认读取 `LOCAL_DEALS_REDIS_HOST`） | `localhost` |
+| `--redis-port` | Redis 端口 | `6379` |
 | `--mysql-database` | MySQL 数据库名 | `local_deals` |
 | `--maven-cmd` | Maven 可执行文件路径 | `/opt/idea/plugins/maven/lib/maven3/bin/mvn` |
 | `--java-home` | Maven 运行使用的 JDK 路径 | `/home/sd101t/.jdks/dragonwell-ex-1.8.0_472` |
@@ -418,3 +416,13 @@ docs/benchmark-results.md
 - MySQL 正确性校验
 - Redis 正确性校验
 - 当前结论和下一步改进
+
+## 清理压测用户
+
+如果需要删除本轮生成的压测用户和对应 Redis token：
+
+```bash
+mvn -Dtest=BenchmarkDataTool#cleanupBenchmarkUsersAndTokens test
+```
+
+该操作只删除手机号匹配 `bench.phonePrefix`（默认 `138`）的用户及其 Redis token，不影响其他数据。

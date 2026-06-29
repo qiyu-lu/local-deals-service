@@ -1,6 +1,8 @@
-# local-deals-service
+# 优惠券秒杀系统
 
-这是一个基于 Spring Boot、MyBatis-Plus、MySQL、Redis 的本地生活优惠交易后端项目。项目从黑马点评教程原型重塑为 `local-deals-service`，当前主线是围绕优惠券秒杀交易链路做可靠性、可观测性和压测证据建设。
+> GitHub repo: `local-deals-service` | 基于黑马点评教程改造，聚焦于秒杀链路可靠性增强与压测验证
+
+基于黑马点评教程原型改造的高并发优惠券秒杀后端系统。在教程原型的基础上，针对 Redis Stream 异步下单链路做可靠性增强，补齐 DB 层一人一单兜底、pending 消息重试上限和 dead-letter Stream；搭建 JMeter 自动化压测脚本与故障注入验证体系，并接入 Prometheus 指标暴露。
 
 ## 相比教程原型的核心优势
 
@@ -22,7 +24,39 @@
 | Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream | `stream.orders.dlq`、`seckill:stream:retry:*`、`docs/reliability-results.md` |
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 自动化脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、Stream pending 和 dead-letter | `scripts/run-seckill-benchmark.sh`、`docs/benchmark-results.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露请求、消费、重试、死信、pending、DB 幂等等指标 | `/actuator/prometheus` |
-| 教程项目名称、包名和数据库痕迹较强 | 项目对外名、Maven 坐标、Spring 应用名、Java 包名和数据库名统一迁移到 `local-deals-service` / `com.localdeals` / `local_deals` | `pom.xml`、`application.yaml`、`db/migration/` |
+
+## 测试策略
+
+### 测试理念
+
+集成测试直连真实 MySQL 和 Redis，不使用 Mock，确保测试行为与生产路径完全一致。所有 Bug 修复均遵循 TDD 顺序：先写能复现问题的失败测试，确认失败后再修复，修复后测试变绿。测试本身即是对修复正确性的活文档。
+
+### Bug → 测试 → 修复 对照表
+
+| Bug | 测试 | 关键结论 |
+| --- | --- | --- |
+| `BlogServiceImpl.queryBlogUser` 在用户被删除时抛 NPE | `BlogServiceIT` · `queryBlogUser_deletedUser_doesNotThrowNPE` | 先写测试复现 NPE，加 null guard 后通过 |
+| `CacheClient.queryWithLogicalExpire` 缓存缺失时抛 NPE | `CacheClientIT` · `queryWithLogicalExpire_returnsNull_whenCacheIsEmpty` | 防御性 null 检查，避免 JSON 反序列化崩溃 |
+| `CacheClient` 锁 key 硬编码 `LOCK_SHOP_KEY`（通用方法用了专属常量） | `CacheClientIT` · `queryWithLogicalExpire_lockKey_usesKeyPrefix` | 任何非 Shop 实体使用逻辑过期时会争抢同一把锁，修复为 `"lock:" + keyPrefix + id` |
+| `UserServiceImpl` 新用户 icon 为 null 时 Hutool `fieldValueEditor` 抛 NPE | `UserServiceIT` · `login_newUserWithNullIcon_doesNotThrowNPE` | `fieldValueEditor` 需要显式判 null |
+| `RedisIdWorker.nextId` 高并发下是否产生重复 ID | `RedisIdWorkerIT` · `nextId_30kConcurrentCalls_allUnique` | 300 线程 × 100 次 = 30,000 个 ID 全部唯一 |
+
+### 集成测试覆盖速览
+
+| 测试类 | 层次 | 测试内容 |
+| --- | --- | --- |
+| `RedisIdWorkerIT` | 工具层 | 高并发下 ID 无重复 |
+| `CacheClientIT` | 工具层 | 逻辑过期空缓存处理；锁 key 前缀正确性 |
+| `UserServiceIT` | Service 层 | 新用户登录（icon=null）不崩溃，返回 token |
+| `BlogServiceIT` | Service 层 | 查询已删除用户的博客不抛 NPE，gracefully 返回空字段 |
+| `ShopServiceIT` | Service 层 | 缓存缺失→查 DB→写缓存；布隆过滤器拦截无效 ID；updateShop 清除缓存 key |
+
+运行所有集成测试（需要 MySQL 和 Redis 在本地运行）：
+
+```bash
+set -a && source .env && set +a
+mvn -Dtest="RedisIdWorkerIT,CacheClientIT,UserServiceIT,BlogServiceIT,ShopServiceIT" test
+```
 
 ## 对比验证摘要
 
@@ -35,6 +69,49 @@
 | 缺少 `orderId` 的异常 Stream 消息 | pending 1，DLQ 0 | pending 0，DLQ 1，`retries=3` | 当前版本具备异常消费闭环 |
 
 完整结果见 [压测结果记录](docs/benchmark-results.md)、[故障注入结果](docs/reliability-results.md) 和 `docs/JmeterTestSummary/`。
+
+## Quick Start
+
+**前置要求**：JDK 8、Maven、MySQL 8、Redis 6+（本地安装或 Docker 均可）
+
+```bash
+# 1. 准备环境变量（填写 MySQL / Redis 密码）
+cp .env.example .env
+# 编辑 .env，填入真实密码
+set -a && source .env && set +a
+```
+
+**启动 MySQL 和 Redis**（二选一）：
+
+```bash
+# 方式 A：Docker Compose（推荐，开箱即用）
+docker compose up -d
+
+# 方式 B：使用已有的本地 MySQL / Redis 服务
+# 确保 MySQL 已创建数据库，Redis 已启动，并在 .env 中配置好连接信息
+# application.yaml 中的 spring.datasource / spring.redis 会从 .env 读取
+```
+
+```bash
+# 2. 启动服务（Flyway 自动初始化表结构，无需手动建表）
+mvn spring-boot:run
+# 服务启动后默认监听 http://localhost:8083
+
+# 3. （可选）运行秒杀压测
+# 额外需要：jmeter、mysql client、redis-cli 在 PATH 中
+scripts/run-seckill-benchmark.sh \
+  --threads 100 \
+  --loops 1 \
+  --stock 100 \
+  --user-count 1000
+# MySQL/Redis 连接参数从 .env 中的 LOCAL_DEALS_* 自动读取，无需额外指定容器名
+# 压测结束后自动校验 MySQL 订单数、Redis 库存、Stream pending，并输出 P95/P99
+
+# 4. （可选）故障注入验证——向 Redis Stream 注入缺少 orderId 的畸形消息
+# 额外需要：redis-cli 在 PATH 中
+scripts/run-seckill-reliability-check.sh --expect current
+# 预期结果：消息经 3 次重试后写入死信 Stream，pending 清空
+```
 
 ## 技术栈
 
@@ -59,11 +136,10 @@
 ## 文档
 
 - [本地环境与常见问题](docs/environment-setup.md)
-- [秒杀压测方案](docs/benchmark-plan.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)
+- [秒杀对比验证手册](docs/seckill-comparison-test-runbook.md)
 - [压测结果记录](docs/benchmark-results.md)
 - [故障注入结果](docs/reliability-results.md)
-- [项目上下文恢复](docs/project-context.md)
 
 ## 本地启动
 
@@ -111,11 +187,9 @@ scripts/run-seckill-benchmark.sh \
   --threads 100 \
   --loops 1 \
   --stock 100 \
-  --user-count 1000 \
-  --mysql-container hmdp-mysql \
-  --redis-container hmdp-redis
+  --user-count 1000
 ```
 
-不传 `--voucher-id` 时，压测工具会自动创建或复用一张本地压测秒杀券。当前本机复用旧 Docker 容器 `hmdp-mysql` / `hmdp-redis`，但业务库已经切换为 `local_deals`。
+不传 `--voucher-id` 时，压测工具会自动创建或复用一张本地压测秒杀券。MySQL/Redis 连接参数从 `.env` 中的 `LOCAL_DEALS_*` 自动读取。
 
-更多参数和清理规则见 [秒杀压测方案](docs/benchmark-plan.md)。
+更多参数和清理规则见 [JMeter 使用说明](docs/jmeter-usage.md)。

@@ -20,10 +20,10 @@ scripts/run-seckill-benchmark.sh --threads 5000 --loops 5 --stock 1000 --user-co
 可靠性增强版执行命令：
 
 ```bash
-scripts/run-seckill-benchmark.sh --threads 100 --loops 1 --stock 100 --user-count 1000 --mysql-container hmdp-mysql --redis-container hmdp-redis
-scripts/run-seckill-benchmark.sh --threads 1000 --loops 1 --stock 1000 --user-count 2000 --mysql-container hmdp-mysql --redis-container hmdp-redis
-scripts/run-seckill-benchmark.sh --threads 5000 --loops 1 --stock 1000 --user-count 5000 --mysql-container hmdp-mysql --redis-container hmdp-redis
-scripts/run-seckill-benchmark.sh --threads 5000 --loops 5 --stock 1000 --user-count 5000 --mysql-container hmdp-mysql --redis-container hmdp-redis
+scripts/run-seckill-benchmark.sh --threads 100 --loops 1 --stock 100 --user-count 1000
+scripts/run-seckill-benchmark.sh --threads 1000 --loops 1 --stock 1000 --user-count 2000
+scripts/run-seckill-benchmark.sh --threads 5000 --loops 1 --stock 1000 --user-count 5000
+scripts/run-seckill-benchmark.sh --threads 5000 --loops 5 --stock 1000 --user-count 5000
 ```
 
 当前本机仍复用旧 Docker 容器 `hmdp-mysql` / `hmdp-redis`。本轮对比中，baseline 连接 `hmdp` 库并使用 `voucher_id=11`，`reliable-stream-v1` 连接 `local_deals` 库并使用压测工具自动复用的 `voucher_id=10`。

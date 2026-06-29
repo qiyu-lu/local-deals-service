@@ -23,8 +23,10 @@ TOKENS_FILE="benchmark/tokens.csv"
 JMETER_PLAN="docs/Summary Report.jmx"
 POLL_INTERVAL_MS=50
 DRAIN_TIMEOUT_MS=30000
-MYSQL_CONTAINER="${MYSQL_CONTAINER:-local-deals-mysql}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-local-deals-redis}"
+MYSQL_HOST="${MYSQL_HOST:-${LOCAL_DEALS_MYSQL_HOST:-localhost}}"
+MYSQL_PORT="${MYSQL_PORT:-${LOCAL_DEALS_MYSQL_PORT:-3306}}"
+REDIS_HOST="${REDIS_HOST:-${LOCAL_DEALS_REDIS_HOST:-localhost}}"
+REDIS_PORT="${REDIS_PORT:-${LOCAL_DEALS_REDIS_PORT:-6379}}"
 MYSQL_USER="${MYSQL_USER:-${LOCAL_DEALS_DATASOURCE_USERNAME:-root}}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-${LOCAL_DEALS_DATASOURCE_PASSWORD:-}}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-local_deals}"
@@ -63,8 +65,10 @@ Options:
   --stream-key KEY        Redis Stream key. Default: stream.orders
   --stream-group GROUP    Redis Stream consumer group. Default: g1
   --dead-letter-key KEY   Redis dead-letter Stream key. Default: stream.orders.dlq
-  --mysql-container NAME  Docker MySQL container. Default: local-deals-mysql
-  --redis-container NAME  Docker Redis container. Default: local-deals-redis
+  --mysql-host HOST       MySQL host. Default: localhost (override via MYSQL_HOST or LOCAL_DEALS_MYSQL_HOST in .env)
+  --mysql-port PORT       MySQL port. Default: 3306
+  --redis-host HOST       Redis host. Default: localhost (override via REDIS_HOST or LOCAL_DEALS_REDIS_HOST in .env)
+  --redis-port PORT       Redis port. Default: 6379
   --mysql-database NAME   MySQL database name. Default: local_deals
   --maven-cmd PATH        Maven executable path. Default: mvn, ./mvnw, or IDEA bundled Maven.
   --java-home PATH        JAVA_HOME for Maven benchmark helpers. Default: Dragonwell JDK 8 in ~/.jdks.
@@ -107,8 +111,10 @@ while [[ $# -gt 0 ]]; do
     --stream-key) STREAM_KEY="$2"; shift 2 ;;
     --stream-group) STREAM_GROUP="$2"; shift 2 ;;
     --dead-letter-key) DEAD_LETTER_KEY="$2"; shift 2 ;;
-    --mysql-container) MYSQL_CONTAINER="$2"; shift 2 ;;
-    --redis-container) REDIS_CONTAINER="$2"; shift 2 ;;
+    --mysql-host) MYSQL_HOST="$2"; shift 2 ;;
+    --mysql-port) MYSQL_PORT="$2"; shift 2 ;;
+    --redis-host) REDIS_HOST="$2"; shift 2 ;;
+    --redis-port) REDIS_PORT="$2"; shift 2 ;;
     --mysql-database) MYSQL_DATABASE="$2"; shift 2 ;;
     --maven-cmd) MAVEN_CMD="$2"; shift 2 ;;
     --java-home) JAVA_HOME="$2"; shift 2 ;;
@@ -135,7 +141,8 @@ require_cmd() {
 }
 
 require_cmd jmeter
-require_cmd docker
+require_cmd mysql
+require_cmd redis-cli
 require_cmd python3
 
 require_secret() {
@@ -267,11 +274,15 @@ if [[ -z "$VOUCHER_ID" ]]; then
   exit 1
 fi
 
-docker exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" DEL "$DEAD_LETTER_KEY" >/dev/null 2>&1 || true
-retry_keys="$(docker exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" --raw KEYS 'seckill:stream:retry:*' 2>/dev/null || true)"
+redis_cmd() {
+  redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --no-auth-warning "$@" 2>/dev/null
+}
+
+redis_cmd DEL "$DEAD_LETTER_KEY" >/dev/null || true
+retry_keys="$(redis_cmd --raw KEYS 'seckill:stream:retry:*' || true)"
 if [[ -n "$retry_keys" ]]; then
   while IFS= read -r key; do
-    [[ -n "$key" ]] && docker exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" DEL "$key" >/dev/null 2>&1 || true
+    [[ -n "$key" ]] && redis_cmd DEL "$key" >/dev/null || true
   done <<< "$retry_keys"
 fi
 
@@ -303,12 +314,12 @@ jmeter_end_ms="$(date +%s%3N)"
 jmeter_elapsed_ms=$((jmeter_end_ms - jmeter_start_ms))
 
 mysql_scalar() {
-  docker exec "$MYSQL_CONTAINER" mysql -N -B -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" \
+  mysql -N -B -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" \
     -e "$1" 2>/dev/null | tail -1
 }
 
 redis_scalar() {
-  docker exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" --raw "$@" 2>/dev/null | sed -n '1p'
+  redis_cmd --raw "$@" | sed -n '1p'
 }
 
 drain_start_ms="$(date +%s%3N)"
@@ -564,9 +575,9 @@ cat > "$RUN_SUMMARY" <<EOF
 - maven_cmd: ${MAVEN_CMD}
 - project_dir: ${PROJECT_DIR}
 - output_root: ${OUTPUT_ROOT}
-- mysql_container: ${MYSQL_CONTAINER}
+- mysql_host: ${MYSQL_HOST}
 - mysql_database: ${MYSQL_DATABASE}
-- redis_container: ${REDIS_CONTAINER}
+- redis_host: ${REDIS_HOST}
 - mysql_orders: ${orders}
 - mysql_stock: ${db_stock}
 - duplicate_orders: ${duplicate_orders}

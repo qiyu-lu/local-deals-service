@@ -28,7 +28,8 @@ public class RedisIdWorker {
         String redisKey = "icr" + keyPrefix + ":" + date;
 
         //获取序列号
-        long count = stringRedisTemplate.opsForValue().increment(redisKey);
+        Long countVal = stringRedisTemplate.opsForValue().increment(redisKey);
+        long count = countVal != null ? countVal : 0L;
 
         //拼接全局ID
         return (timestamp << COUNT_BITS) | count;
