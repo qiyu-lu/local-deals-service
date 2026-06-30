@@ -7,27 +7,69 @@
 ## 当前快照
 
 - 当前分支：`main`
-- 最新已推送提交：`b4572fe update project-context.md`
+- 最新本地提交：`34a7356 fix: ThreadLocal cleanup, checkLocalTransaction safety, EsSyncConsumer row error handling, CORS pattern`
+- 本地领先 origin/main 共 12 个提交（尚未推送）
 - 冻结原始基线分支：`baseline-video-version`
-- 当前本地阶段：已从教程原型重塑为 `local-deals-service`，并完成秒杀异步下单可靠性增强的第一版代码实现和文档包装。
-- 当前专题：秒杀链路生产化改造、可观测性、正常压测对比和故障注入验证已形成第一版证据。
-- 当前实现版本标签：`reliable-stream-v1`
-- 当前停止点：baseline 与 `reliable-stream-v1` 的 2026-05-20 对比验证已补齐；若聊天上下文丢失，先读 `docs/seckill-comparison-test-runbook.md`、`docs/benchmark-results.md` 和 `docs/reliability-results.md`。
-- 本机仓库路径仍是：`/home/sd101t/IdeaProjects/hm-dianping`
+- 当前本地阶段：已完成两阶段演进。第一阶段：秒杀 Redis Stream 可靠性增强 + 压测验证。第二阶段（2026-06-30 完成）：ES + RocketMQ + Canal + WebSocket 全链路升级。
+- 本机仓库路径：`/home/sd101t/IdeaProjects/hm-dianping`
+
+## 第二阶段（2026-06-30）完成内容
+
+完整提交历史见 `git log --oneline`，主要节点：
+
+| 提交 | 内容 |
+|---|---|
+| `0783ab8` | ES 7.17.18 + RocketMQ + Canal Docker 基础设施 |
+| `0612467` | ES 商铺/博客搜索，IK 分词 + geo-distance |
+| `36c663f` | RocketMQ 事务消息替换 Redis Stream 秒杀 |
+| `770b6d1` | Canal → RocketMQ → ES 自动同步管道 |
+| `e89e33a` | WebSocket 实时推送 + Redis pub/sub 多实例路由 |
+| `ca1c5df` | docs/improvement-comparison.md |
+| `34a7356` | 最终 code review 修复（ThreadLocal、checkLocalTransaction、EsSyncConsumer 错误处理） |
+
+## 关键基础设施状态（docker-compose.yml）
+
+- `local-deals-mysql`（3306）— MySQL 8，ROW binlog 已开启
+- `local-deals-redis`（6379）— Redis 6.2
+- `local-deals-es`（9200）— ES 7.17.18 + IK 7.17.18，`discovery.type=single-node`
+- `local-deals-canal`（`network_mode: host`）— Canal 1.1.7，监听 `local_deals.tb_shop,local_deals.tb_blog`，连接 `127.0.0.1:9876`（RocketMQ 由 ragent 项目提供）
+- RocketMQ：使用 `/home/sd101t/IdeaProjects/ragent` 的 `rocketmq-stack-5.2.0.compose.yaml` 提供，namesrv 9876 / broker 10911
 
 ## 下一步计划
 
-下次恢复时先确认是否继续做“文档包装 / README 面试讲法 / 新专题优化”，不要重复跑已经有效的 2026-05-20 对比证据。
+恢复时先运行：
+```bash
+git log --oneline -5
+docker ps
+~/.m2/wrapper/dists/apache-maven-3.9.11/a2d47e15/bin/mvn -Dtest='*IT' test
+```
 
-1. 先读取本文档、`git status -sb` 和 `git log -5 --oneline --decorate`，确认主线提交仍以 `b4572fe` 为起点继续。
-2. 先读取 `docs/seckill-comparison-test-runbook.md`，里面记录了 worktree 路径、baseline/current 数据库差异、正常压测命令、故障注入命令和完成状态。
-3. 当前已完成 baseline/current 的 1000/5000 正常压测和故障注入对比；有效结果已整理到 `docs/benchmark-results.md` 和 `docs/reliability-results.md`。
-4. 后续更适合继续做 README/简历项目讲法、Prometheus 指标样例、订单状态补偿闭环，或进入下一个优化专题。
-5. 后续如果新建 `local-deals-mysql` / `local-deals-redis` 容器，再决定是否把脚本默认容器名从旧的 `hmdp-*` 迁移到 `local-deals-*`。
+后续可做：
+1. 将 12 个本地提交推送到远端（`git push`）
+2. 面试讲法准备（参考 `docs/superpowers/specs/2026-06-30-es-rocketmq-websocket-design.md` 的”面试叙述要点”）
+3. 补充 Canal 端到端验证（当前 CanalSyncIT 直接调用 consumer；若要验证完整管道需解决 Canal RocketMQ connector 与 RocketMQ 5.x 兼容性问题）
 
 ## 最近更新
 
 按时间倒序记录，最新内容放在最前面。每次只记录“做了什么、改了哪些文件、得到什么结论”，不要记录完整聊天过程。
+
+### 2026-06-30
+
+ES + RocketMQ + Canal + WebSocket 第二阶段全部完成并通过 code review。
+
+- 新增 `src/main/java/com/localdeals/dto/ShopDoc.java`、`BlogDoc.java` — ES 文档模型，`@Document`、IK 分词、`@GeoPointField`
+- 新增 `src/main/java/com/localdeals/config/ElasticsearchConfig.java` — 覆写 `elasticsearchOperations()` 使 `ElasticsearchRestTemplate` 可注入（Spring Data ES 4.0.9 兼容性修复）
+- 新增 `src/main/java/com/localdeals/init/ShopIndexInitializer.java` — `@PostConstruct` 批量导入，`@Profile("!test")` 防止测试时运行
+- 修改 `IShopService`/`ShopServiceImpl`/`ShopController` — 新增 `searchShops(keyword, x, y, radius, typeId, current)`；`typeId` 为 `Long`
+- 修改 `IBlogService`/`BlogServiceImpl`/`BlogController` — 新增 `searchBlogs(keyword, current)`
+- 新增 `src/main/java/com/localdeals/mq/SeckillOrderMessage.java`、`SeckillOrderProducer.java`（事务消息 + Lua）、`SeckillOrderConsumer.java`、`EsSyncConsumer.java`、`CanalMessage.java`
+- 大幅简化 `VoucherOrderServiceImpl`：删除全部 Redis Stream 消费代码（525→109 行）
+- 新增 `src/main/java/com/localdeals/websocket/`：`SeckillWebSocketHandler`、`WebSocketAuthInterceptor`、`WebSocketNotifier`
+- 新增 `src/main/java/com/localdeals/config/WebSocketConfig.java`
+- 新增 `docker/elasticsearch/Dockerfile`（ES 7.17.18 + IK）、`docker/canal/Dockerfile`（修复 plugin 目录和 instance.properties）
+- 新增 `docs/improvement-comparison.md` — before/after 对比数据
+- 测试全通：`ShopSearchBeforeIT`（2/2）、`ShopSearchAfterIT`（2/2）、`SeckillWithRocketMQIT`（1/1）、`CanalSyncIT`（3/3）、`SeckillWebSocketIT`（1/1）
+- 关键 API 兼容性经验：rocketmq-spring-boot-starter 2.2.3 的 `@RocketMQTransactionListener` 没有 `txProducerGroup` 属性，用 `rocketMQTemplateBeanName = "rocketMQTemplate"`；Spring Data ES 4.0.9 的 `createWithMapping()` 不存在，需 `ops.create(); ops.putMapping(ops.createMapping())`；`IndexCoordinates` 在 `...core.mapping` 包而非 `...core`
 
 ### 2026-05-20
 

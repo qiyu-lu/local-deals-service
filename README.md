@@ -1,8 +1,8 @@
 # 优惠券秒杀系统
 
-> GitHub repo: `local-deals-service` | 基于黑马点评教程改造，聚焦于秒杀链路可靠性增强与压测验证
+> GitHub repo: `local-deals-service` | 基于黑马点评教程改造，涵盖秒杀可靠性增强、Elasticsearch 搜索、RocketMQ 事务消息、Canal 数据同步、WebSocket 实时推送
 
-基于黑马点评教程原型改造的高并发优惠券秒杀后端系统。在教程原型的基础上，针对 Redis Stream 异步下单链路做可靠性增强，补齐 DB 层一人一单兜底、pending 消息重试上限和 dead-letter Stream；搭建 JMeter 自动化压测脚本与故障注入验证体系，并接入 Prometheus 指标暴露。
+基于黑马点评教程原型改造的高并发优惠券秒杀后端系统。在教程原型基础上分两阶段演进：第一阶段对 Redis Stream 异步下单链路做可靠性增强，补齐 DB 层一人一单兜底、pending 消息重试上限和 dead-letter Stream，并搭建 JMeter 自动化压测与故障注入验证体系；第二阶段引入 ES + RocketMQ + Canal + WebSocket，升级搜索能力、消息中间件和实时推送。
 
 ## 相比教程原型的核心优势
 
@@ -20,8 +20,12 @@
 
 | 教程原型中的边界 | 当前改造 | 证据 |
 | --- | --- | --- |
-| 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`VoucherOrderServiceImpl#createVoucherOrder` |
-| Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream | `stream.orders.dlq`、`seckill:stream:retry:*`、`docs/reliability-results.md` |
+| 搜索只有 MySQL LIKE%，不支持分词和地理位置组合查询 | Elasticsearch 7.17.18 + IK 分词器；`GET /shop/search?keyword=火锅&x=120.15&y=30.33&radius=5000` 单次请求同时做 IK 分词、geo 过滤、相关性排序 | `ShopSearchBeforeIT`（基线）vs `ShopSearchAfterIT`（ES 验证）；`docs/improvement-comparison.md` |
+| 秒杀异步消息用 Redis Stream，Lua 操作与 XADD 不是原子的，丢消息无法保证 | RocketMQ 事务消息：半消息 → executeLocalTransaction 运行 Lua → COMMIT/ROLLBACK，Lua 操作与消息发送原子绑定；磁盘持久化，Broker 重启不丢 | `SeckillWithRocketMQIT`（500 并发 / 100 库存 / 0 超卖验证） |
+| MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
+| 秒杀结果无实时通知，用户只能轮询 | WebSocket + Redis pub/sub：落库后毫秒级推送，多实例部署下 Redis 广播保证消息路由到持有连接的实例 | `SeckillWebSocketIT`（Awaitility 3s 内断言 WebSocket sendMessage 被调用） |
+| 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
+| Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream（第一阶段可靠性增强，已由 RocketMQ 内置 DLQ 取代） | `stream.orders.dlq`、`docs/reliability-results.md` |
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 自动化脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、Stream pending 和 dead-letter | `scripts/run-seckill-benchmark.sh`、`docs/benchmark-results.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露请求、消费、重试、死信、pending、DB 幂等等指标 | `/actuator/prometheus` |
 
@@ -50,12 +54,17 @@
 | `UserServiceIT` | Service 层 | 新用户登录（icon=null）不崩溃，返回 token |
 | `BlogServiceIT` | Service 层 | 查询已删除用户的博客不抛 NPE，gracefully 返回空字段 |
 | `ShopServiceIT` | Service 层 | 缓存缺失→查 DB→写缓存；布隆过滤器拦截无效 ID；updateShop 清除缓存 key |
+| `ShopSearchBeforeIT` | 搜索基线 | MySQL LIKE% 搜索结果数和耗时（before 对比数据） |
+| `ShopSearchAfterIT` | ES 搜索 | IK 分词 + geo-distance 组合查询；结果与 before 对比 |
+| `SeckillWithRocketMQIT` | MQ 秒杀 | 500 并发 / 100 库存：RocketMQ 事务消息无超卖，恰好 100 单 |
+| `CanalSyncIT` | Canal 同步 | 直接调用 `EsSyncConsumer.onMessage(json)`；验证 INSERT/UPDATE/DELETE 三种操作同步到 ES |
+| `SeckillWebSocketIT` | WebSocket | Awaitility 3s 内断言 mock session.sendMessage() 被调用，消息含 `"success":true` |
 
-运行所有集成测试（需要 MySQL 和 Redis 在本地运行）：
+运行所有集成测试（需要 MySQL、Redis、Elasticsearch 在本地运行）：
 
 ```bash
 set -a && source .env && set +a
-mvn -Dtest="RedisIdWorkerIT,CacheClientIT,UserServiceIT,BlogServiceIT,ShopServiceIT" test
+~/.m2/wrapper/dists/apache-maven-3.9.11/a2d47e15/bin/mvn -Dtest="*IT" test
 ```
 
 ## 对比验证摘要
@@ -115,14 +124,16 @@ scripts/run-seckill-reliability-check.sh --expect current
 
 ## 技术栈
 
-- Java 8
-- Spring Boot 2.3.12
-- MyBatis-Plus
-- MySQL / Flyway
-- Redis / Redis Stream / Redis GEO / Bitmap
-- Redisson
+- Java 8 / Spring Boot 2.3.12 / MyBatis-Plus
+- MySQL 8 / Flyway
+- Redis 6 / Redis Stream / Redis GEO / Bitmap / Redis pub/sub
+- Redisson（分布式锁）
+- **Elasticsearch 7.17.18** + IK 分词器（`ik_max_word` 索引 / `ik_smart` 搜索）+ geo_point
+- **RocketMQ 4.x client**（事务消息、`@RocketMQTransactionListener`）
+- **Canal Server 1.1.7**（binlog 解析，FlatMessage → RocketMQ）
+- **WebSocket**（`TextWebSocketHandler`，Redis pub/sub 多实例路由）
 - Actuator / Micrometer / Prometheus
-- JMeter
+- JMeter（自动化压测与故障注入）
 
 ## 当前重点
 
@@ -135,6 +146,7 @@ scripts/run-seckill-reliability-check.sh --expect current
 
 ## 文档
 
+- [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)
 - [秒杀对比验证手册](docs/seckill-comparison-test-runbook.md)
