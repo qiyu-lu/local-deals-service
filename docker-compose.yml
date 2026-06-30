@@ -47,22 +47,17 @@ services:
     image: canal/canal-server:v1.1.7
     container_name: local-deals-canal
     restart: always
-    ports:
-      - "11111:11111"
+    network_mode: host
     environment:
-      - canal.instance.master.address=local-deals-mysql:3306
+      - canal.instance.master.address=127.0.0.1:3306
       - canal.instance.dbUsername=root
       - canal.instance.dbPassword=${MYSQL_ROOT_PASSWORD}
       - canal.instance.filter.regex=local_deals\\.tb_shop,local_deals\\.tb_blog
-      - canal.mq.servers=host.docker.internal:9876
+      - canal.mq.servers=127.0.0.1:9876
       - canal.mq.topic=mysql-sync-topic
       - canal.serverMode=rocketmq
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - mysql
-    networks:
-      - local-deals-net
 
 networks:
   local-deals-net:
