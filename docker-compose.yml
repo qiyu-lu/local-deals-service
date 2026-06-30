@@ -44,7 +44,7 @@ services:
       - local-deals-net
 
   canal-server:
-    image: canal/canal-server:v1.1.7
+    build: ./docker/canal
     container_name: local-deals-canal
     restart: always
     network_mode: host
