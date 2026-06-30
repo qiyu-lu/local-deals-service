@@ -84,4 +84,17 @@ public class BlogController {
             @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
         return blogService.queryBlogOfFollow(max, offset);
     }
+
+    /**
+     * 基于 Elasticsearch 的探店笔记搜索（IK 分词）
+     * @param keyword 关键词
+     * @param current 页码
+     * @return 笔记列表
+     */
+    @GetMapping("/search")
+    public Result searchBlogs(
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "current", defaultValue = "1") Integer current) {
+        return blogService.searchBlogs(keyword, current);
+    }
 }

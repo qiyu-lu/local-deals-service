@@ -4,6 +4,7 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.localdeals.dto.BlogDoc;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.ScrollResult;
 import com.localdeals.dto.UserDTO;
@@ -17,6 +18,14 @@ import com.localdeals.service.IFollowService;
 import com.localdeals.service.IUserService;
 import com.localdeals.utils.SystemConstants;
 import com.localdeals.utils.UserHolder;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
@@ -51,6 +60,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private IFollowService  followService;
+
+    @Autowired
+    private ElasticsearchRestTemplate esRestTemplate;
 
     @Override
     public Result queryHotBlog(Integer current) {
@@ -220,5 +232,22 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         if (user == null) { return; }
         blog.setName(user.getNickName());
         blog.setIcon(user.getIcon());
+    }
+
+    @Override
+    public Result searchBlogs(String keyword, Integer current) {
+        NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+        if (StrUtil.isNotBlank(keyword)) {
+            queryBuilder.withQuery(QueryBuilders.multiMatchQuery(keyword, "title", "content"));
+        } else {
+            queryBuilder.withQuery(QueryBuilders.matchAllQuery());
+        }
+        queryBuilder.withPageable(PageRequest.of(current - 1, SystemConstants.DEFAULT_PAGE_SIZE));
+
+        SearchHits<BlogDoc> hits = esRestTemplate.search(queryBuilder.build(), BlogDoc.class,
+                IndexCoordinates.of("blog_index"));
+        List<BlogDoc> docs = hits.getSearchHits().stream()
+                .map(SearchHit::getContent).collect(Collectors.toList());
+        return Result.ok(docs);
     }
 }

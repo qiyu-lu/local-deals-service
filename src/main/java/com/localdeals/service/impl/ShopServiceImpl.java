@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.localdeals.dto.Result;
+import com.localdeals.dto.ShopDoc;
 import com.localdeals.entity.Shop;
 import com.localdeals.mapper.ShopMapper;
 import com.localdeals.service.IShopService;
@@ -12,7 +13,17 @@ import com.localdeals.utils.CacheClient;
 import com.localdeals.utils.RedisData;
 import com.localdeals.utils.ShopBloomFilter;
 import com.localdeals.utils.SystemConstants;
+import org.elasticsearch.common.unit.DistanceUnit;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.search.sort.SortBuilders;
+import org.elasticsearch.search.sort.SortOrder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -27,6 +38,7 @@ import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static com.localdeals.utils.RedisConstants.*;
 
@@ -48,6 +60,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Autowired
     private CacheClient cacheClient;
+
+    @Autowired
+    private ElasticsearchRestTemplate esRestTemplate;
 
     @Override
     public Result queryShopById(Long id) {
@@ -214,5 +229,50 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
         }
         return Result.ok(shops);
+    }
+
+    @Override
+    public Result searchShops(String keyword, Double x, Double y, Integer radius, Long typeId, Integer current) {
+        NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+
+        // 关键词全文检索（name 或 address 包含关键词）
+        if (StrUtil.isNotBlank(keyword)) {
+            queryBuilder.withQuery(QueryBuilders.multiMatchQuery(keyword, "name", "address"));
+        } else {
+            queryBuilder.withQuery(QueryBuilders.matchAllQuery());
+        }
+
+        // typeId 过滤
+        if (typeId != null) {
+            queryBuilder.withFilter(QueryBuilders.termQuery("typeId", typeId));
+        }
+
+        // 地理位置过滤 + 距离排序
+        if (x != null && y != null) {
+            int radiusMeters = radius != null ? radius : 5000;
+            queryBuilder.withFilter(
+                    QueryBuilders.geoDistanceQuery("location")
+                            .point(y, x)
+                            .distance(radiusMeters + "m")
+            );
+            queryBuilder.withSort(
+                    SortBuilders.geoDistanceSort("location", y, x)
+                            .order(SortOrder.ASC)
+                            .unit(DistanceUnit.METERS)
+            );
+        }
+
+        // 分页
+        int pageSize = SystemConstants.DEFAULT_PAGE_SIZE;
+        queryBuilder.withPageable(PageRequest.of(current - 1, pageSize));
+
+        SearchHits<ShopDoc> hits = esRestTemplate.search(queryBuilder.build(), ShopDoc.class,
+                IndexCoordinates.of("shop_index"));
+
+        List<ShopDoc> docs = hits.getSearchHits().stream()
+                .map(SearchHit::getContent)
+                .collect(Collectors.toList());
+
+        return Result.ok(docs);
     }
 }

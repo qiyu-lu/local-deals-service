@@ -101,4 +101,25 @@ public class ShopController {
         // 返回数据
         return Result.ok(page.getRecords());
     }
+
+    /**
+     * 基于 Elasticsearch 的商铺搜索（IK 分词 + 地理位置过滤/排序）
+     * @param keyword 关键词
+     * @param x 经度
+     * @param y 纬度
+     * @param radius 搜索半径（米）
+     * @param typeId 商铺类型
+     * @param current 页码
+     * @return 商铺列表
+     */
+    @GetMapping("/search")
+    public Result searchShops(
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "x", required = false) Double x,
+            @RequestParam(value = "y", required = false) Double y,
+            @RequestParam(value = "radius", required = false) Integer radius,
+            @RequestParam(value = "typeId", required = false) Long typeId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current) {
+        return shopService.searchShops(keyword, x, y, radius, typeId, current);
+    }
 }
