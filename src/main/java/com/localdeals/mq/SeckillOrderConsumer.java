@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import com.localdeals.service.IVoucherOrderService;
+import com.localdeals.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +32,9 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     @Resource
     private MeterRegistry meterRegistry;
 
+    @Resource
+    private WebSocketNotifier webSocketNotifier;
+
     private Counter consumeSuccessCounter;
     private Counter consumeFailureCounter;
 
@@ -54,7 +58,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             voucherOrderService.createVoucherOrder(msg.toVoucherOrder());
             consumeSuccessCounter.increment();
             log.debug("Seckill order persisted. orderId={}", msg.getOrderId());
-            // TODO Task 5: notify WebSocket
+            webSocketNotifier.notify(msg.getUserId(), true, msg.getOrderId(), msg.getVoucherId());
         } catch (Exception e) {
             consumeFailureCounter.increment();
             log.error("Failed to persist seckill order. orderId={}", msg.getOrderId(), e);
