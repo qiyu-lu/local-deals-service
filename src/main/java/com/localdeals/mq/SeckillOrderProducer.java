@@ -56,19 +56,25 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
      * @return 0 = success (message committed), 1 = out of stock, 2 = already purchased
      */
     public int sendSeckillTransaction(Long voucherId, Long userId, Long orderId) {
-        SeckillOrderMessage msg = new SeckillOrderMessage(voucherId, userId, orderId);
-        Message<SeckillOrderMessage> message = MessageBuilder.withPayload(msg).build();
+        try {
+            SeckillOrderMessage msg = new SeckillOrderMessage(voucherId, userId, orderId);
+            Message<SeckillOrderMessage> message = MessageBuilder.withPayload(msg).build();
 
-        // sendMessageInTransaction blocks until executeLocalTransaction has completed.
-        rocketMQTemplate.sendMessageInTransaction(
-                TOPIC,
-                message,
-                new Object[]{voucherId, userId, orderId}
-        );
+            // sendMessageInTransaction blocks until executeLocalTransaction has completed.
+            rocketMQTemplate.sendMessageInTransaction(
+                    TOPIC,
+                    message,
+                    new Object[]{voucherId, userId, orderId}
+            );
 
-        int result = luaResultHolder.get();
-        luaResultHolder.remove();
-        return result;
+            Integer result = luaResultHolder.get();
+            return result != null ? result : -1;
+        } catch (Exception e) {
+            log.error("sendSeckillTransaction failed, voucherId={} userId={}", voucherId, userId, e);
+            return -1;
+        } finally {
+            luaResultHolder.remove();
+        }
     }
 
     @Override
@@ -99,12 +105,17 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
     public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
         // Broker callback when commit/rollback ack wasn't received in time: check whether the
         // user is already recorded in the Redis order set (Lua adds them only on success).
-        SeckillOrderMessage payload = JSONUtil.toBean(
-                new String((byte[]) msg.getPayload()), SeckillOrderMessage.class);
-        Boolean inSet = stringRedisTemplate.opsForSet()
-                .isMember(SECKILL_ORDER_KEY + payload.getVoucherId(), payload.getUserId().toString());
-        return Boolean.TRUE.equals(inSet)
-                ? RocketMQLocalTransactionState.COMMIT
-                : RocketMQLocalTransactionState.UNKNOWN;
+        try {
+            SeckillOrderMessage payload = JSONUtil.toBean(
+                    new String((byte[]) msg.getPayload()), SeckillOrderMessage.class);
+            Boolean inSet = stringRedisTemplate.opsForSet()
+                    .isMember(SECKILL_ORDER_KEY + payload.getVoucherId(), payload.getUserId().toString());
+            return Boolean.TRUE.equals(inSet)
+                    ? RocketMQLocalTransactionState.COMMIT
+                    : RocketMQLocalTransactionState.UNKNOWN;
+        } catch (Exception e) {
+            log.error("checkLocalTransaction error, returning UNKNOWN", e);
+            return RocketMQLocalTransactionState.UNKNOWN;
+        }
     }
 }

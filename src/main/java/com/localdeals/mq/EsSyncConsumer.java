@@ -59,18 +59,22 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private void handleShop(CanalMessage msg) {
         boolean isDelete = "DELETE".equalsIgnoreCase(msg.getType());
         for (Map<String, Object> row : msg.getData()) {
-            String id = strVal(row, "id");
-            if (id == null) {
-                continue;
-            }
-            if (isDelete) {
-                esTemplate.delete(id, SHOP_INDEX);
-                log.debug("Deleted shop from ES. id={}", id);
-            } else {
-                ShopDoc doc = rowToShopDoc(row);
-                IndexQuery query = new IndexQueryBuilder().withId(id).withObject(doc).build();
-                esTemplate.index(query, SHOP_INDEX);
-                log.debug("Upserted shop in ES. id={}", id);
+            try {
+                String id = strVal(row, "id");
+                if (id == null) {
+                    continue;
+                }
+                if (isDelete) {
+                    esTemplate.delete(id, SHOP_INDEX);
+                    log.debug("Deleted shop from ES. id={}", id);
+                } else {
+                    ShopDoc doc = rowToShopDoc(row);
+                    IndexQuery query = new IndexQueryBuilder().withId(id).withObject(doc).build();
+                    esTemplate.index(query, SHOP_INDEX);
+                    log.debug("Upserted shop in ES. id={}", id);
+                }
+            } catch (Exception e) {
+                log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
             }
         }
     }
@@ -78,18 +82,22 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private void handleBlog(CanalMessage msg) {
         boolean isDelete = "DELETE".equalsIgnoreCase(msg.getType());
         for (Map<String, Object> row : msg.getData()) {
-            String id = strVal(row, "id");
-            if (id == null) {
-                continue;
-            }
-            if (isDelete) {
-                esTemplate.delete(id, BLOG_INDEX);
-                log.debug("Deleted blog from ES. id={}", id);
-            } else {
-                BlogDoc doc = rowToBlogDoc(row);
-                IndexQuery query = new IndexQueryBuilder().withId(id).withObject(doc).build();
-                esTemplate.index(query, BLOG_INDEX);
-                log.debug("Upserted blog in ES. id={}", id);
+            try {
+                String id = strVal(row, "id");
+                if (id == null) {
+                    continue;
+                }
+                if (isDelete) {
+                    esTemplate.delete(id, BLOG_INDEX);
+                    log.debug("Deleted blog from ES. id={}", id);
+                } else {
+                    BlogDoc doc = rowToBlogDoc(row);
+                    IndexQuery query = new IndexQueryBuilder().withId(id).withObject(doc).build();
+                    esTemplate.index(query, BLOG_INDEX);
+                    log.debug("Upserted blog in ES. id={}", id);
+                }
+            } catch (Exception e) {
+                log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
             }
         }
     }

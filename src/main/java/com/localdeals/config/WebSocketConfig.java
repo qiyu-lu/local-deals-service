@@ -40,6 +40,9 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(webSocketHandler, "/ws/connect")
                 .addInterceptors(webSocketAuthInterceptor)
+                // Dev only: restrict to known origins in production.
+                // Note: setAllowedOriginPatterns(String) requires Spring 5.3+; this project is on
+                // Spring 5.2.15 (Boot 2.3.12), so setAllowedOrigins(String...) is used instead.
                 .setAllowedOrigins("*");
     }
 
