@@ -119,6 +119,12 @@
     created() {
       this.params.typeId = util.getUrlParam("type");
       this.typeName = util.getUrlParam("name");
+      const kw = util.getUrlParam("keyword");
+      if (kw) {
+        this.keyword = decodeURIComponent(kw);
+        this.isSearching = true;
+        this.isEsSearch = true;
+      }
       this.queryTypes();
       this.queryShops();
       // 尝试获取用户地理位置
@@ -155,13 +161,11 @@
         axios.get("/shop/search", {
           params: {
             keyword: this.keyword,
-            x: this.params.x,
-            y: this.params.y,
             typeId: this.params.typeId || undefined,
             current: this.params.current
           }
         }).then(({data}) => {
-          if (!data || !data.length) return;
+          if (!data || !data.length) { this.loading = false; return; }
           data.forEach(s => s.images = (s.images || '').split(',')[0]);
           this.shops = this.shops.concat(data);
         }).catch(err => this.$message.error(err))

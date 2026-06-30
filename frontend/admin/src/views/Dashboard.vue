@@ -59,11 +59,12 @@
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Shop, Ticket, Refresh, Connection } from '@element-plus/icons-vue'
 import { getShopTypeList } from '../api'
+import { useAdminWs } from '../composables/useAdminWs'
 
 const shopTypeCount = ref(14)
 const seckillSold = ref(100)
 const seckillTotal = ref(100)
-const wsConnected = ref(false)
+const { connected: wsConnected } = useAdminWs()
 
 const chartRef = ref(null)
 let chartInstance = null

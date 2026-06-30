@@ -8,27 +8,28 @@
       <el-button type="primary" :icon="Plus" @click="openCreate">创建秒杀券</el-button>
     </div>
 
-    <h3 class="section-title">已有秒杀券</h3>
+    <div class="query-bar">
+      <span class="section-title" style="margin:0">已有秒杀券（商铺 ID：</span>
+      <el-input-number v-model="queryShopId" :min="1" style="width:120px" size="small" />
+      <el-button size="small" type="primary" @click="loadVouchers">查询</el-button>
+    </div>
+    <el-empty v-if="!loading && vouchers.length === 0" description="该商铺暂无秒杀券" />
     <div class="voucher-grid">
-      <el-card v-for="v in mockVouchers" :key="v.id" class="voucher-card" shadow="hover">
+      <el-card v-for="v in vouchers" :key="v.id" class="voucher-card" shadow="hover">
         <div class="voucher-top">
           <span class="voucher-title">{{ v.title }}</span>
-          <el-tag :type="v.status === '进行中' ? 'success' : 'info'" size="small">{{ v.status }}</el-tag>
+          <el-tag :type="voucherStatusType(v)" size="small">{{ voucherStatusText(v) }}</el-tag>
         </div>
         <p class="voucher-sub">{{ v.subTitle }}</p>
         <div class="voucher-price-row">
           <span class="voucher-price tabular-num">¥{{ (v.payValue / 100).toFixed(2) }}</span>
           <span class="voucher-original tabular-num">¥{{ (v.actualValue / 100).toFixed(2) }}</span>
         </div>
-        <el-progress
-          :percentage="Math.round(((v.stock - v.remaining) / v.stock) * 100)"
-          :color="progressColor"
-          :stroke-width="8"
-        />
         <div class="voucher-stock-row">
-          <span class="tabular-num">剩余 {{ v.remaining }} / {{ v.stock }}</span>
-          <span>{{ v.beginTime }} ~ {{ v.endTime }}</span>
+          <span class="tabular-num">剩余库存：{{ v.stock ?? '-' }} 张</span>
+          <span>ID: {{ v.id }}</span>
         </div>
+        <div class="voucher-time-row">{{ v.beginTime }} ~ {{ v.endTime }}</div>
       </el-card>
     </div>
 
@@ -80,14 +81,16 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { createSeckillVoucher } from '../api'
+import { createSeckillVoucher, getVoucherList } from '../api'
 
 const createDialogVisible = ref(false)
 const submitting = ref(false)
-const progressColor = '#D97706'
+const loading = ref(false)
+const queryShopId = ref(1)
+const vouchers = ref([])
 
 const defaultForm = () => ({
   shopId: 1,
@@ -102,44 +105,34 @@ const defaultForm = () => ({
 
 const form = ref(defaultForm())
 
-const mockVouchers = ref([
-  {
-    id: 1,
-    title: '100元代金券',
-    subTitle: '仅限堂食，不可叠加使用',
-    payValue: 8000,
-    actualValue: 10000,
-    stock: 100,
-    remaining: 0,
-    status: '已结束',
-    beginTime: '2026-06-29 10:00',
-    endTime: '2026-06-29 12:00'
-  },
-  {
-    id: 2,
-    title: '50元双人套餐券',
-    subTitle: '需提前1小时预约',
-    payValue: 3900,
-    actualValue: 5000,
-    stock: 200,
-    remaining: 86,
-    status: '进行中',
-    beginTime: '2026-06-30 09:00',
-    endTime: '2026-06-30 22:00'
-  },
-  {
-    id: 3,
-    title: '20元单人代金券',
-    subTitle: '全场通用，无最低消费',
-    payValue: 1500,
-    actualValue: 2000,
-    stock: 500,
-    remaining: 312,
-    status: '进行中',
-    beginTime: '2026-06-30 00:00',
-    endTime: '2026-07-01 00:00'
+async function loadVouchers() {
+  loading.value = true
+  try {
+    const res = await getVoucherList(queryShopId.value)
+    vouchers.value = res.data || res || []
+  } catch {
+    vouchers.value = []
+  } finally {
+    loading.value = false
   }
-])
+}
+
+function voucherStatusText(v) {
+  if (!v.beginTime || !v.endTime) return '普通券'
+  const now = Date.now()
+  const begin = new Date(v.beginTime).getTime()
+  const end = new Date(v.endTime).getTime()
+  if (now < begin) return '未开始'
+  if (now <= end) return '进行中'
+  return '已结束'
+}
+
+function voucherStatusType(v) {
+  const t = voucherStatusText(v)
+  if (t === '进行中') return 'success'
+  if (t === '未开始') return 'warning'
+  return 'info'
+}
 
 function openCreate() {
   form.value = defaultForm()
@@ -170,12 +163,16 @@ async function submitCreate() {
     await createSeckillVoucher(payload)
     ElMessage.success('秒杀券创建成功')
     createDialogVisible.value = false
-  } catch (e) {
+    queryShopId.value = form.value.shopId
+    await loadVouchers()
+  } catch {
     // 错误已在拦截器中提示
   } finally {
     submitting.value = false
   }
 }
+
+onMounted(loadVouchers)
 </script>
 
 <style scoped>
@@ -191,6 +188,19 @@ async function submitCreate() {
   font-weight: 600;
   color: #1e293b;
   margin: 24px 0 12px 0;
+}
+
+.query-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 12px 0;
+}
+
+.voucher-time-row {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
 }
 
 .voucher-grid {

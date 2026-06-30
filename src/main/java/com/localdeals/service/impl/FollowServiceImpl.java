@@ -76,6 +76,22 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     }
 
     @Override
+    public Result getMyFollows() {
+        Long userId = UserHolder.getUser().getId();
+        String key = FOLLOWED_KEY + userId;
+        Set<String> members = stringRedisTemplate.opsForSet().members(key);
+        if (members == null || members.isEmpty()) {
+            return Result.ok(Collections.emptyList());
+        }
+        List<Long> ids = members.stream().map(Long::valueOf).collect(Collectors.toList());
+        List<UserDTO> users = userService.listByIds(ids)
+                .stream()
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
+                .collect(Collectors.toList());
+        return Result.ok(users);
+    }
+
+    @Override
     public Result getCommonFollow(Long id) {
         //要获得目标用户和当前用户的交集
         //获取当前用户

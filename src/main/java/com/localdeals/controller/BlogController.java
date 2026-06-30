@@ -30,6 +30,9 @@ public class BlogController {
     @Resource
     private IBlogService blogService;
 
+    @Resource
+    private IUserService userService;
+
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
         return blogService.saveBlog(blog);
@@ -83,6 +86,26 @@ public class BlogController {
     public Result queryBlogOfFollow(
             @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
         return blogService.queryBlogOfFollow(max, offset);
+    }
+
+    @GetMapping("/of/shop")
+    public Result queryBlogByShopId(
+            @RequestParam("id") Long shopId,
+            @RequestParam(value = "current", defaultValue = "1") Integer current) {
+        Page<Blog> page = blogService.query()
+                .eq("shop_id", shopId)
+                .orderByDesc("liked")
+                .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+        List<Blog> records = page.getRecords();
+        records.forEach(b -> {
+            Long userId = b.getUserId();
+            User user = userService.getById(userId);
+            if (user != null) {
+                b.setName(user.getNickName());
+                b.setIcon(user.getIcon());
+            }
+        });
+        return Result.ok(records);
     }
 
     /**

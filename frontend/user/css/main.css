@@ -22,20 +22,29 @@ html {
 }
 body {
     margin: 0;
-    background-color: #e8e8ed;
-    display: flex;
-    justify-content: center;
-    min-height: 100vh;
+    background-color: var(--surface);
 }
 html, body, #app {
     height: 100%;
 }
 #app {
-    max-width: 430px;
     width: 100%;
     background-color: var(--surface);
-    box-shadow: 0 0 40px rgba(0,0,0,0.18);
     position: relative;
+}
+
+/* Desktop only: center the mobile UI as a "phone on screen" card */
+@media (min-width: 431px) {
+    body {
+        background-color: #e8e8ed;
+        display: flex;
+        justify-content: center;
+        min-height: 100vh;
+    }
+    #app {
+        max-width: 430px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.18);
+    }
 }
 
 /* 底部导航栏 */

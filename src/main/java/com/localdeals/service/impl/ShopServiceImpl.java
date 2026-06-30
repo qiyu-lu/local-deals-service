@@ -170,20 +170,27 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
-    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
-        //判断是否需要根据坐标进行查询
-        if(x==null || y==null){
-            //不需要根据坐标进行查询
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y, String sortBy) {
+        // comments / score sort: handled directly by DB, no geo needed
+        if ("comments".equals(sortBy) || "score".equals(sortBy)) {
+            Page<Shop> page = query()
+                    .eq("type_id", typeId)
+                    .orderByDesc(sortBy)
+                    .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+            return Result.ok(page.getRecords());
+        }
+
+        // distance sort or default: requires Redis GEO
+        if (x == null || y == null) {
             Page<Shop> page = query()
                     .eq("type_id", typeId)
                     .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
             return Result.ok(page.getRecords());
         }
-        //计算分页参数，
-        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
-        int end = current *  SystemConstants.DEFAULT_PAGE_SIZE;
 
-        //查询redis，按照距离排序、分页，结果 ： shopId， 距离
+        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
+        int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
+
         String key = SHOP_GEO_KEY + typeId;
         GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo()
                 .search(
@@ -193,39 +200,31 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                         RedisGeoCommands.GeoSearchCommandArgs
                                 .newGeoSearchArgs().includeDistance().limit(end)
                 );
-        //解析出id
-        if(results == null) {
-            return Result.ok(Collections.emptyList());
+        // Redis GEO key not loaded (e.g., after Redis restart) — fall back to DB
+        if (results == null || results.getContent().isEmpty()) {
+            Page<Shop> page = query()
+                    .eq("type_id", typeId)
+                    .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+            return Result.ok(page.getRecords());
         }
+
         List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list = results.getContent();
-        if(list.size() <= from) {
+        if (list.size() <= from) {
             return Result.ok(Collections.emptyList());
         }
 
-        //获取 from到end  的部分
         List<Long> ids = new ArrayList<>(list.size());
         Map<String, Distance> distanceMap = new HashMap<>(list.size());
+        list.stream().skip(from).forEach(result -> {
+            String shopIdStr = result.getContent().getName();
+            ids.add(Long.parseLong(shopIdStr));
+            distanceMap.put(shopIdStr, result.getDistance());
+        });
 
-        list.stream().skip(from).forEach(
-                result -> {
-                    //获取店铺id
-                    String shopIdStr = result.getContent().getName();
-                    ids.add(Long.parseLong(shopIdStr));
-                    //获取距离
-                    Distance distance = result.getDistance();
-                    distanceMap.put(shopIdStr, distance);
-                }
-        );
-        //根据id查询shop
-
-        //从blog Service中粘贴过来的：
-//        String idStr = StrUtil.join("," , ids);
-//        List<Blog> blogs = query().in("id", ids)
-//                .last("ORDER BY FIELD(id, " + idStr + ")").list();
-        String idStr = StrUtil.join("," , ids);
+        String idStr = StrUtil.join(",", ids);
         List<Shop> shops = query().in("id", ids)
                 .last("ORDER BY FIELD(id, " + idStr + ")").list();
-        for(Shop shop : shops){
+        for (Shop shop : shops) {
             shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
         }
         return Result.ok(shops);
@@ -269,10 +268,19 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         SearchHits<ShopDoc> hits = esRestTemplate.search(queryBuilder.build(), ShopDoc.class,
                 IndexCoordinates.of("shop_index"));
 
-        List<ShopDoc> docs = hits.getSearchHits().stream()
-                .map(SearchHit::getContent)
+        List<Long> ids = hits.getSearchHits().stream()
+                .map(h -> h.getContent().getId())
                 .collect(Collectors.toList());
 
-        return Result.ok(docs);
+        if (ids.isEmpty()) {
+            return Result.ok(Collections.emptyList());
+        }
+
+        // 用 ES 排好序的 ID 回查 DB，保留排序并带上 images 等完整字段
+        String idStr = StrUtil.join(",", ids);
+        List<Shop> shops = query().in("id", ids)
+                .last("ORDER BY FIELD(id, " + idStr + ")").list();
+
+        return Result.ok(shops);
     }
 }

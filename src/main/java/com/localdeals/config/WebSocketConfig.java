@@ -2,8 +2,10 @@ package com.localdeals.config;
 
 import com.localdeals.websocket.SeckillWebSocketHandler;
 import com.localdeals.websocket.WebSocketAuthInterceptor;
+import com.localdeals.websocket.WebSocketNotifier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.context.annotation.Bean;
@@ -50,6 +52,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public RedisMessageListenerContainer redisWebSocketListenerContainer() {
         RedisMessageListenerContainer container = new RedisMessageListenerContainer();
         container.setConnectionFactory(stringRedisTemplate.getConnectionFactory());
+        // 推送给指定用户（下单结果回执）
         container.addMessageListener(
                 (message, pattern) -> {
                     String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
@@ -62,7 +65,15 @@ public class WebSocketConfig implements WebSocketConfigurer {
                         log.warn("Received WebSocket pub/sub message on unexpected channel: {}", channel);
                     }
                 },
-                new PatternTopic(CHANNEL_PREFIX + "*")
+                new PatternTopic(CHANNEL_PREFIX + "[0-9]*")
+        );
+        // 广播给所有已连接的管理端 session（实时订单面板）
+        container.addMessageListener(
+                (message, pattern) -> {
+                    String body = new String(message.getBody(), StandardCharsets.UTF_8);
+                    webSocketHandler.sendToAll(body);
+                },
+                new ChannelTopic(WebSocketNotifier.ADMIN_CHANNEL)
         );
         return container;
     }

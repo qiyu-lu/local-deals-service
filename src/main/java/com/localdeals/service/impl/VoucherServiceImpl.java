@@ -43,6 +43,8 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     @Transactional
     public void addSeckillVoucher(Voucher voucher) {
         // 1. 保存优惠券
+        voucher.setStatus(1);  // 上架，否则 queryVoucherOfShop 过滤掉
+        voucher.setType(1);    // 秒杀券
         save(voucher);
 
         // 2. 保存秒杀信息

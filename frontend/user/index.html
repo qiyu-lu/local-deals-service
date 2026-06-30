@@ -21,8 +21,9 @@
   <div class="search-bar">
     <div class="city-btn">杭州 <i class="el-icon-arrow-down"></i></div>
     <div class="search-input">
-      <el-input size="mini" placeholder="请输入商户名、地点">
-        <i slot="prefix" class="el-input__icon el-icon-search"></i>
+      <el-input size="mini" v-model="keyword" placeholder="搜索商户名、地点..." clearable
+          @keyup.enter.native="doSearch">
+        <i slot="prefix" class="el-input__icon el-icon-search" @click="doSearch" style="cursor:pointer"></i>
       </el-input>
     </div>
     <div class="header-icon" @click="toPage(4)"><i class="el-icon-user"></i></div>
@@ -66,6 +67,7 @@
       types: [], // 类型列表
       blogs: [], // 播客列表
       current: 1,// blog的页码
+      keyword: '',
     },
     created() {
       // 查询类型
@@ -125,6 +127,10 @@
         } else {
           this.isReachBottom = false
         }
+      },
+      doSearch() {
+        if (!this.keyword.trim()) return;
+        location.href = "/shop-list.html?keyword=" + encodeURIComponent(this.keyword.trim()) + "&name=搜索结果";
       },
       toShopList(id, name) {
         location.href = "/shop-list.html?type=" + id + "&name=" + name

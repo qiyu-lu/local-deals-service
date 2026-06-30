@@ -52,15 +52,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Connection, CircleClose, CircleCheck } from '@element-plus/icons-vue'
+import { useAdminWs } from '../composables/useAdminWs'
 
-const connected = ref(false)
-const connecting = ref(false)
+const { connected, connecting, connect, disconnect, onMessage } = useAdminWs()
+
 const orders = ref([])
-let ws = null
 let keyCounter = 0
+let removeListener = null
 
 const statusClass = computed(() => {
   if (connected.value) return 'dot-green'
@@ -84,72 +85,23 @@ function addOrder(payload) {
     message: payload.message,
     time: new Date().toLocaleTimeString()
   })
-  if (orders.value.length > 50) {
-    orders.value.pop()
-  }
+  if (orders.value.length > 50) orders.value.pop()
 }
 
 function toggleConnection() {
   if (connected.value) {
     disconnect()
+    ElMessage.info('已断开 WebSocket')
   } else {
     connect()
   }
 }
 
-function connect() {
-  const token = localStorage.getItem('token')
-  if (!token) {
-    ElMessage.warning('未获取到登录令牌，请先登录')
-    return
-  }
-  connecting.value = true
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const host = 'localhost:8083'
-  const url = `${protocol}://${host}/ws/connect?token=${encodeURIComponent(token)}`
-
+function handleMessage(e) {
   try {
-    ws = new WebSocket(url)
-  } catch (e) {
-    connecting.value = false
-    ElMessage.error('WebSocket 连接失败')
-    return
-  }
-
-  ws.onopen = () => {
-    connecting.value = false
-    connected.value = true
-    ElMessage.success('WebSocket 连接成功')
-  }
-
-  ws.onmessage = (e) => {
-    try {
-      const msg = JSON.parse(e.data)
-      if (msg.type === 'SECKILL_RESULT') {
-        addOrder(msg)
-      }
-    } catch (err) {
-      // 忽略非 JSON 消息
-    }
-  }
-
-  ws.onerror = () => {
-    connecting.value = false
-  }
-
-  ws.onclose = () => {
-    connecting.value = false
-    connected.value = false
-  }
-}
-
-function disconnect() {
-  if (ws) {
-    ws.close()
-    ws = null
-  }
-  connected.value = false
-  connecting.value = false
+    const msg = JSON.parse(e.data)
+    if (msg.type === 'SECKILL_RESULT') addOrder(msg)
+  } catch { /* ignore */ }
 }
 
 function pushMockOrder() {
@@ -162,8 +114,17 @@ function pushMockOrder() {
   })
 }
 
+onMounted(() => {
+  removeListener = onMessage(handleMessage)
+  if (!connected.value && !connecting.value) {
+    connect()
+    ElMessage.success({ message: 'WebSocket 已自动连接', duration: 1500 })
+  }
+})
+
 onBeforeUnmount(() => {
-  disconnect()
+  if (removeListener) removeListener()
+  // 保持连接，不在组件卸载时断开
 })
 </script>
 

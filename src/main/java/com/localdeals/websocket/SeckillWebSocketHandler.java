@@ -64,6 +64,24 @@ public class SeckillWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
+     * Broadcasts a message to every currently open session (used for admin-side seckill result feed).
+     */
+    public void sendToAll(String message) {
+        sessions.values().forEach(session -> {
+            if (!session.isOpen()) return;
+            try {
+                session.sendMessage(new TextMessage(message));
+            } catch (Exception e) {
+                log.warn("Failed to broadcast WebSocket message. sessionId={}", session.getId(), e);
+            }
+        });
+    }
+
+    public int getOnlineCount() {
+        return (int) sessions.values().stream().filter(WebSocketSession::isOpen).count();
+    }
+
+    /**
      * Exposes the internal sessions map for test use only (e.g. to register a mock session
      * directly without going through a real handshake).
      */

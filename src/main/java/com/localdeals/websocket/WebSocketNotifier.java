@@ -17,7 +17,8 @@ import java.util.Map;
 @Component
 public class WebSocketNotifier {
 
-    private static final String CHANNEL_PREFIX = "ws:seckill:";
+    public static final String CHANNEL_PREFIX = "ws:seckill:";
+    public static final String ADMIN_CHANNEL = "ws:seckill:admin";
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -30,6 +31,9 @@ public class WebSocketNotifier {
         payload.put("voucherId", voucherId);
         payload.put("message", success ? "秒杀成功，订单已生成" : "库存不足");
         String json = JSONUtil.toJsonStr(payload);
+        // 推送给下单用户
         stringRedisTemplate.convertAndSend(CHANNEL_PREFIX + userId, json);
+        // 广播给所有管理端连接（实时订单面板）
+        stringRedisTemplate.convertAndSend(ADMIN_CHANNEL, json);
     }
 }

@@ -1,5 +1,6 @@
 package com.localdeals.mq;
 
+import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.Counter;
@@ -59,10 +60,18 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             consumeSuccessCounter.increment();
             log.debug("Seckill order persisted. orderId={}", msg.getOrderId());
             webSocketNotifier.notify(msg.getUserId(), true, msg.getOrderId(), msg.getVoucherId());
-        } catch (Exception e) {
+        } catch (StockExhaustedException e) {
+            // Permanent business failure — DB stock is 0, retrying will never succeed.
+            // ACK the message so it does not loop forever into DLQ.
             consumeFailureCounter.increment();
-            log.error("Failed to persist seckill order. orderId={}", msg.getOrderId(), e);
-            throw e;  // let RocketMQ retry
+            log.warn("DB stock exhausted, dropping message. voucherId={} orderId={}",
+                    msg.getVoucherId(), msg.getOrderId());
+            webSocketNotifier.notify(msg.getUserId(), false, msg.getOrderId(), msg.getVoucherId());
+        } catch (Exception e) {
+            // Transient failures (network, DB timeout, etc.) — let RocketMQ retry.
+            consumeFailureCounter.increment();
+            log.error("Transient failure persisting seckill order, will retry. orderId={}", msg.getOrderId(), e);
+            throw e;
         } finally {
             lock.unlock();
         }

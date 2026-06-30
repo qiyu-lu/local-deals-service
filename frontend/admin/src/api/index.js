@@ -37,6 +37,11 @@ request.interceptors.response.use(response => {
   return Promise.reject(error)
 })
 
+// 发送验证码
+export function sendCode(phone) {
+  return request.post(`/user/code?phone=${phone}`)
+}
+
 // 用户登录
 export function login(data) {
   return request.post('/user/login', data)

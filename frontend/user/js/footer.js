@@ -31,10 +31,12 @@ Vue.component("footBar", {
     toPage(i) {
       if (i === 0) {
         location.href = "/blog-edit.html"
+      } else if (i === 1) {
+        location.href = "/"
       } else if (i === 4) {
         location.href = "/info.html"
-      } else if (i === 1){
-        location.href = "/"
+      } else {
+        this.$message({ message: "功能开发中，敬请期待 🚧", type: "info", duration: 2000 });
       }
     }
   }

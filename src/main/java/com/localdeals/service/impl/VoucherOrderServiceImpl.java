@@ -2,6 +2,7 @@ package com.localdeals.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.dto.Result;
+import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.entity.VoucherOrder;
 import com.localdeals.mapper.VoucherOrderMapper;
 import com.localdeals.mq.SeckillOrderProducer;
@@ -103,7 +104,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         if (!success) {
             stockRollbackCounter.increment();
-            throw new IllegalStateException("DB stock exhausted. voucherId=" + voucherOrder.getVoucherId());
+            throw new StockExhaustedException("DB stock exhausted. voucherId=" + voucherOrder.getVoucherId());
         }
     }
 }

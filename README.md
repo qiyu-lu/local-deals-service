@@ -29,6 +29,46 @@
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 自动化脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、Stream pending 和 dead-letter | `scripts/run-seckill-benchmark.sh`、`docs/benchmark-results.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露请求、消费、重试、死信、pending、DB 幂等等指标 | `/actuator/prometheus` |
 
+
+## 前端
+
+> 前端部分非本项目重点，由 AI 辅助生成，主要作为后端功能的可视化验证入口。
+
+### 用户端（手机 H5）
+
+基于教程原型改进，运行在 `http://localhost:8088/`：
+
+- 修复笔记详情页硬编码"叶小乙"重复评论，改为从 `GET /blog/of/shop` 动态拉取真实评论
+- 修复搜索结果页二次搜索无结果（移除关键词搜索时的地理坐标过滤，测试数据集中在杭州，真实坐标会导致 0 结果）
+- 修复商户搜索结果图片不显示（ES 文档 `ShopDoc` 无 `images` 字段，改为 ES 返回 ID 后再查 MySQL 获取完整字段）
+- nginx 开启 gzip 压缩 + 7 天静态资源缓存（`vue.js` / `element.js` / `element.css` 合计 1.15 MB → gzip 后约 350 KB，消除每次跳页重复下载）
+
+### 管理端（Vue 3 SPA，AI 辅助生成）
+
+新增管理端前端，运行在 `http://localhost:8088/admin/`，基于 Vue 3 + Vite + Element Plus 构建，通过 nginx 反向代理与后端通信：
+
+| 页面 | 功能 |
+| --- | --- |
+| 登录 | 手机号 + 验证码（从 Spring Boot 日志获取），token 存入 localStorage |
+| 仪表盘 | 商铺总数、今日秒杀订单、ES 同步状态、WebSocket 在线用户数 |
+| 实时订单 | WebSocket 长连接，秒杀落库后毫秒级推送订单卡片（成功/失败），支持手动断开重连 |
+| 秒杀券管理 | 创建秒杀券（标题、时间、库存、商铺 ID），按商铺 ID 查询已有券列表及实时状态 |
+| 商铺管理 | 按类型/关键词搜索商铺，查看详情，更新商铺信息（触发 Canal → ES 同步） |
+
+**登录**
+
+![登录管理端](figure/登录管理端.png)
+
+**仪表盘**
+
+![仪表盘](figure/仪表盘.png)
+
+**实时秒杀订单流**（运行 `scripts/run-seckill-benchmark.sh --threads 100 --loops 1 --stock 100 --user-count 1000` 后）
+
+![WebSocket 实时订单](figure/websocket.png)
+
+![秒杀压测结果](figure/秒杀测试.png)
+
 ## 测试策略
 
 ### 测试理念
@@ -124,16 +164,22 @@ scripts/run-seckill-reliability-check.sh --expect current
 
 ## 技术栈
 
+**后端**
 - Java 8 / Spring Boot 2.3.12 / MyBatis-Plus
 - MySQL 8 / Flyway
 - Redis 6 / Redis Stream / Redis GEO / Bitmap / Redis pub/sub
 - Redisson（分布式锁）
-- **Elasticsearch 7.17.18** + IK 分词器（`ik_max_word` 索引 / `ik_smart` 搜索）+ geo_point
-- **RocketMQ 4.x client**（事务消息、`@RocketMQTransactionListener`）
-- **Canal Server 1.1.7**（binlog 解析，FlatMessage → RocketMQ）
-- **WebSocket**（`TextWebSocketHandler`，Redis pub/sub 多实例路由）
+- Elasticsearch 7.17.18 + IK 分词器（`ik_max_word` 索引 / `ik_smart` 搜索）+ geo_point
+- RocketMQ 4.x client（事务消息、`@RocketMQTransactionListener`）
+- Canal Server 1.1.7（binlog 解析，FlatMessage → RocketMQ）
+- WebSocket（`TextWebSocketHandler`，Redis pub/sub 多实例路由）
 - Actuator / Micrometer / Prometheus
 - JMeter（自动化压测与故障注入）
+
+**前端**
+- 用户端：Vue 2 CDN + Element UI（H5 多页应用，无构建步骤）
+- 管理端：Vue 3 + Vite + Element Plus（SPA，`npm run build` 输出到 `dist/`）
+- nginx（反向代理 + 静态资源托管 + gzip 压缩 + 7 天缓存）
 
 ## 当前重点
 
@@ -153,37 +199,6 @@ scripts/run-seckill-reliability-check.sh --expect current
 - [压测结果记录](docs/benchmark-results.md)
 - [故障注入结果](docs/reliability-results.md)
 
-## 本地启动
-
-1. 复制 `.env.example` 为 `.env`，并在 `.env` 中填写本机真实密码。
-2. 启动本地 MySQL 和 Redis，默认配置见 `docker-compose.yml`。
-3. 新环境推荐使用 Flyway 自动初始化：`src/main/resources/db/migration/`。
-4. 如需手工初始化，可参考完整脚本：`src/main/resources/db/local_deals.sql`。
-5. 使用 JDK 8 运行项目。
-6. 后端默认端口为 `8083`。
-
-```bash
-set -a
-source .env
-set +a
-```
-
-```bash
-mvn spring-boot:run
-```
-
-Docker Compose 会自动读取仓库根目录的 `.env`：
-
-```bash
-docker compose up -d
-```
-
-Prometheus 指标入口：
-
-```text
-http://localhost:8083/actuator/prometheus
-```
-
 ## 压测准备
 
 压测不绕过正式登录逻辑，也不删除验证码校验。秒杀压测使用测试侧工具预生成测试用户和 Redis token，JMeter 从 CSV 中读取 token 后请求秒杀接口。
@@ -191,9 +206,7 @@ http://localhost:8083/actuator/prometheus
 推荐使用脚本自动完成测试用户/token 准备、库存重置、JMeter 压测、MySQL/Redis 校验和报告输出：
 
 ```bash
-set -a
-source .env
-set +a
+set -a && source .env && set +a
 
 scripts/run-seckill-benchmark.sh \
   --threads 100 \
