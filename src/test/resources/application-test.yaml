@@ -3,3 +3,11 @@ logging:
     com.localdeals: DEBUG
     org.springframework: WARN
     com.zaxxer.hikari: WARN
+spring:
+  elasticsearch:
+    rest:
+      uris: http://localhost:9200
+rocketmq:
+  name-server: localhost:9876
+  producer:
+    group: local-deals-producer-group

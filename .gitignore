@@ -41,6 +41,7 @@ build/
 ### mysql and ridis data ###
 /mysql-data/
 /redis-data/
+/es-data/
 
 ### benchmark generated files ###
 /benchmark/*.csv
@@ -48,3 +49,4 @@ build/
 /benchmark/*.log
 /benchmark/report*/
 jmeter.log
+.superpowers/

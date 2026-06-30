@@ -29,6 +29,64 @@ services:
     networks:
       - local-deals-net
 
+  elasticsearch:
+    build: ./docker/elasticsearch
+    container_name: local-deals-es
+    restart: always
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - ./es-data:/usr/share/elasticsearch/data
+    networks:
+      - local-deals-net
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:4.9.4
+    container_name: local-deals-namesrv
+    restart: always
+    ports:
+      - "9876:9876"
+    command: sh mqnamesrv
+    networks:
+      - local-deals-net
+
+  rocketmq-broker:
+    image: apache/rocketmq:4.9.4
+    container_name: local-deals-broker
+    restart: always
+    ports:
+      - "10911:10911"
+      - "10909:10909"
+    command: sh mqbroker -n rocketmq-namesrv:9876 autoCreateTopicEnable=true
+    depends_on:
+      - rocketmq-namesrv
+    networks:
+      - local-deals-net
+
+  canal-server:
+    image: canal/canal-server:v1.1.7
+    container_name: local-deals-canal
+    restart: always
+    ports:
+      - "11111:11111"
+    environment:
+      - canal.instance.master.address=local-deals-mysql:3306
+      - canal.instance.dbUsername=root
+      - canal.instance.dbPassword=${MYSQL_ROOT_PASSWORD}
+      - canal.instance.filter.regex=local_deals\\.tb_shop,local_deals\\.tb_blog
+      - canal.mq.servers=rocketmq-namesrv:9876
+      - canal.mq.topic=mysql-sync-topic
+      - canal.serverMode=rocketmq
+    depends_on:
+      - mysql
+      - rocketmq-namesrv
+      - rocketmq-broker
+    networks:
+      - local-deals-net
+
 networks:
   local-deals-net:
     driver: bridge
