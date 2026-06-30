@@ -1,0 +1,91 @@
+:root {
+    --primary: #E11D48;
+    --primary-light: #fff1f2;
+    --primary-dark: #9f1239;
+    --secondary: #FB7185;
+    --accent: #2563EB;
+    --text: #111827;
+    --text-muted: #6B7280;
+    --bg: #F9FAFB;
+    --surface: #ffffff;
+    --border: #F3F4F6;
+    --shadow-sm: 0 1px 4px rgba(0,0,0,0.07);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10);
+    --radius-sm: 8px;
+    --radius-md: 14px;
+    --radius-full: 999px;
+}
+
+html {
+    font-size: 12px;
+    width: 100%;
+}
+body {
+    margin: 0;
+    background-color: #e8e8ed;
+    display: flex;
+    justify-content: center;
+    min-height: 100vh;
+}
+html, body, #app {
+    height: 100%;
+}
+#app {
+    max-width: 430px;
+    width: 100%;
+    background-color: var(--surface);
+    box-shadow: 0 0 40px rgba(0,0,0,0.18);
+    position: relative;
+}
+
+/* 底部导航栏 */
+.el-tabs__item {
+    font-size: 14px;
+    font-weight: bold;
+}
+.el-tabs__active-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(to right, var(--primary), var(--secondary));
+}
+.foot {
+    width: 100%;
+    height: 8%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 -1px 0 0 var(--border);
+    position: absolute;
+    bottom: 0;
+    background: var(--surface);
+}
+.foot .add-btn {
+    width: 38px;
+    height: 38px;
+    box-shadow: var(--shadow-md);
+    border-radius: 18px;
+}
+.foot-box {
+    width: 20%;
+    color: var(--text-muted);
+    text-align: center;
+    transition: color 0.2s;
+}
+.foot-view {
+    font-size: 26px;
+}
+.foot-text {
+    font-size: 8px;
+    margin-top: -4px;
+}
+.foot-text, .foot-view {
+    text-align: center;
+}
+.active {
+    color: var(--primary);
+}
+
+/* Element UI 星级评分间距 */
+.el-rate__icon {
+    margin-right: 0;
+}
