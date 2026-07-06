@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import com.localdeals.utils.RedisIdWorker;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +39,17 @@ class SeckillWithRocketMQIT {
     @BeforeEach
     void setup() {
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + TEST_VOUCHER_ID, String.valueOf(STOCK));
+        stringRedisTemplate.delete(SECKILL_ORDER_KEY + TEST_VOUCHER_ID);
+    }
+
+    @AfterEach
+    void cleanup() {
+        // Clear Redis test data so leftover state doesn't bleed into the next run.
+        // Note: this test only validates Lua admission control (the in-memory gate).
+        // Messages queued to RocketMQ during this test will be gracefully ACKed by
+        // SeckillOrderConsumer via StockExhaustedException — no DB row exists for
+        // TEST_VOUCHER_ID=88888, so no infinite retry loop can occur.
+        stringRedisTemplate.delete(SECKILL_STOCK_KEY + TEST_VOUCHER_ID);
         stringRedisTemplate.delete(SECKILL_ORDER_KEY + TEST_VOUCHER_ID);
     }
 

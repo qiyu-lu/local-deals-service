@@ -77,7 +77,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         //和之前发送的验证码进行比较
 
         //从redis中取出验证码
-        if(rawCode ==null || !rawCode.equals(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + phone))){
+        String codeKey = LOGIN_CODE_KEY + phone;
+        if(rawCode ==null || !rawCode.equals(stringRedisTemplate.opsForValue().get(codeKey))){
             return Result.fail("验证码不正确");
         }
         //根据号码查询用户，如果存在返回用户，不存在新建用户
