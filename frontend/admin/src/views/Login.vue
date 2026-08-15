@@ -3,48 +3,50 @@
     <el-card class="login-card" shadow="always">
       <div class="login-header">
         <h1 class="login-title">LocalDeals Admin</h1>
-        <p class="login-subtitle">本地生活服务管理平台</p>
+        <p class="login-subtitle">商户与平台管理入口</p>
       </div>
-      <el-form :model="form" class="login-form" @submit.prevent>
+      <el-form :model="form" class="login-form" @submit.prevent="handleLogin">
         <el-form-item>
           <el-input
-            v-model="form.phone"
-            type="tel"
-            placeholder="请输入手机号"
+            v-model.trim="form.username"
+            name="username"
+            autocomplete="username"
+            placeholder="后台用户名"
             size="large"
             :prefix-icon="User"
-            :disabled="codeSent"
+            :disabled="loading"
           />
         </el-form-item>
-        <el-form-item v-if="codeSent">
+        <el-form-item>
           <el-input
-            v-model="form.code"
-            placeholder="请输入短信验证码"
+            v-model="form.password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="密码"
             size="large"
-            maxlength="6"
-            :prefix-icon="Key"
-            @keyup.enter="handleLogin"
+            show-password
+            :prefix-icon="Lock"
+            :disabled="loading"
           />
         </el-form-item>
         <el-form-item>
           <el-button
-            v-if="!codeSent"
+            native-type="submit"
             type="primary"
             size="large"
             class="login-btn"
             :loading="loading"
-            @click="handleSendCode"
           >
-            获取验证码
+            登录
           </el-button>
-          <div v-else style="width:100%;display:flex;gap:8px;">
-            <el-button size="large" style="flex:1" @click="codeSent=false;form.code=''">重新发送</el-button>
-            <el-button type="primary" size="large" style="flex:2" :loading="loading" @click="handleLogin">登录</el-button>
-          </div>
         </el-form-item>
-        <el-alert v-if="codeSent"
-          title="验证码已发送；本地调试可按 README 显式开启验证码日志"
-          type="info" :closable="false" show-icon style="margin-top:-8px" />
+        <el-alert
+          title="消费者短信登录与后台账户已完全隔离"
+          type="info"
+          :closable="false"
+          show-icon
+        />
       </el-form>
     </el-card>
   </div>
@@ -52,52 +54,39 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Key } from '@element-plus/icons-vue'
-import { login, sendCode } from '../api'
+import { Lock, User } from '@element-plus/icons-vue'
+import { login, resultData } from '../api'
+import { firstPermittedRoute, setAdminSession } from '../auth/adminSession'
 
+const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
-const codeSent = ref(false)
-
-const form = ref({
-  phone: '17612345678',
-  code: ''
-})
-
-async function handleSendCode() {
-  if (!form.value.phone || form.value.phone.length !== 11) {
-    ElMessage.warning('请输入11位手机号')
-    return
-  }
-  loading.value = true
-  try {
-    await sendCode(form.value.phone)
-    codeSent.value = true
-    ElMessage.success('验证码已发送')
-  } catch { /* interceptor already shows error */ } finally {
-    loading.value = false
-  }
-}
+const form = ref({ username: '', password: '' })
 
 async function handleLogin() {
-  if (!form.value.code) {
-    ElMessage.warning('请输入验证码')
+  if (!form.value.username || !form.value.password) {
+    ElMessage.warning('请输入后台用户名和密码')
     return
   }
+
   loading.value = true
   try {
-    const res = await login({ phone: form.value.phone, code: form.value.code })
-    const token = res.data || res.token || res
-    if (token) {
-      localStorage.setItem('token', typeof token === 'string' ? token : JSON.stringify(token))
-      ElMessage.success('登录成功')
-      router.push('/')
-    } else {
-      ElMessage.error('登录失败，未获取到令牌')
+    const result = await login(form.value)
+    setAdminSession(resultData(result))
+    form.value.password = ''
+    ElMessage.success('登录成功')
+    const redirect = typeof route.query.redirect === 'string' &&
+      route.query.redirect.startsWith('/') && !route.query.redirect.startsWith('//')
+      ? route.query.redirect
+      : firstPermittedRoute()
+    await router.replace(redirect)
+  } catch (error) {
+    if (!error?.isAxiosError && error?.message?.startsWith('后台登录响应')) {
+      ElMessage.error(error.message)
     }
-  } catch { /* interceptor already shows error */ } finally {
+  } finally {
     loading.value = false
   }
 }

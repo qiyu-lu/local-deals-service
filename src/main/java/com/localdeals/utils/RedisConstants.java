@@ -10,6 +10,11 @@ public class RedisConstants {
     public static final String LOGIN_USER_KEY = "login:token:";
     public static final Long LOGIN_USER_TTL = 36000L;
 
+    public static final String ADMIN_LOGIN_TOKEN_KEY = "admin:login:token:";
+    public static final String ADMIN_LOGIN_FAILURE_KEY = "admin:login:failure:";
+    public static final String ADMIN_LOGIN_IP_ATTEMPT_KEY = "admin:login:ip-attempt:";
+    public static final String ADMIN_WEBSOCKET_TICKET_KEY = "admin:ws:ticket:";
+
     public static final Long CACHE_NULL_TTL = 2L;
 
     public static final Long CACHE_SHOP_TTL = 30L;

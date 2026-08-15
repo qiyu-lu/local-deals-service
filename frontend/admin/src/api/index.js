@@ -1,7 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import router from '../router'
-import { useAdminWs } from '../composables/useAdminWs'
+import { clearAdminSession, getAdminToken } from '../auth/adminSession'
 
 const request = axios.create({
   baseURL: '/api',
@@ -9,89 +8,86 @@ const request = axios.create({
 })
 
 request.interceptors.request.use(config => {
-  const token = localStorage.getItem('token')
+  const token = getAdminToken()
   if (token) {
-    config.headers.authorization = token
+    config.headers.Authorization = token.startsWith('Bearer ') ? token : `Bearer ${token}`
   }
   return config
-}, error => {
-  return Promise.reject(error)
-})
+}, error => Promise.reject(error))
 
 request.interceptors.response.use(response => {
-  const data = response.data
-  if (data && data.success === false) {
-    const errorMsg = data.errorMsg || '请求失败'
+  const result = response.data
+  if (result && result.success === false) {
+    const errorMsg = result.errorMsg || '请求失败'
     ElMessage.error(errorMsg)
     return Promise.reject(new Error(errorMsg))
   }
-  return data
+  return result
 }, error => {
-  if (error.response && error.response.status === 401) {
-    ElMessage.error('登录已过期，请重新登录')
-    useAdminWs().disconnect()
-    localStorage.removeItem('token')
-    router.push('/login')
+  const isLoginRequest = error.config?.url === '/admin/auth/login'
+  if (error.response?.status === 401 && !isLoginRequest) {
+    ElMessage.error('后台登录已过期，请重新登录')
+    clearAdminSession()
+    window.dispatchEvent(new CustomEvent('admin:unauthorized'))
   } else {
-    const errorMsg = (error.response && error.response.data && error.response.data.errorMsg) || error.message || '网络错误'
+    const errorMsg = error.response?.data?.errorMsg || error.message || '网络错误'
     ElMessage.error(errorMsg)
   }
   return Promise.reject(error)
 })
 
-// 发送验证码
-export function sendCode(phone) {
-  return request.post(`/user/code?phone=${phone}`)
+export function resultData(result) {
+  return result && Object.prototype.hasOwnProperty.call(result, 'data') ? result.data : result
 }
 
-// 用户登录
+export function resultPage(result) {
+  const payload = resultData(result)
+  if (Array.isArray(payload)) {
+    return { records: payload, total: Number(result?.total ?? payload.length) }
+  }
+  const records = payload?.records || payload?.list || payload?.items || []
+  return { records, total: Number(result?.total ?? payload?.total ?? records.length) }
+}
+
 export function login(data) {
-  return request.post('/user/login', data)
+  return request.post('/admin/auth/login', data)
 }
 
-// 注销当前登录态
+export function getAdminMe() {
+  return request.get('/admin/auth/me')
+}
+
 export function logout() {
-  return request.post('/user/logout')
+  return request.post('/admin/auth/logout')
 }
 
-// 按类型获取商铺
-export function getShopsByType(params) {
-  return request.get('/shop/of/type', { params })
+export function createAdminWsTicket() {
+  return request.post('/admin/auth/ws-ticket')
 }
 
-// ES 搜索商铺
-export function searchShops(params) {
-  return request.get('/shop/search', { params })
+export function getAdminShops(params) {
+  return request.get('/admin/shops', { params })
 }
 
-// 商铺详情
-export function getShopDetail(id) {
-  return request.get(`/shop/${id}`)
+export function getAdminShop(id) {
+  return request.get(`/admin/shops/${id}`)
 }
 
-// 更新商铺
-export function updateShop(data) {
-  return request.put('/shop', data)
+export function createAdminShop(data) {
+  return request.post('/admin/shops', data)
 }
 
-// 查询秒杀券列表
-export function getVoucherList(shopId) {
-  return request.get(`/voucher/list/${shopId}`)
+export function updateAdminShop(data) {
+  const { id, ...payload } = data
+  return request.put(`/admin/shops/${id}`, payload)
 }
 
-// 创建秒杀券
-export function createSeckillVoucher(data) {
-  return request.post('/voucher/seckill', data)
+export function getAdminVouchers(shopId) {
+  return request.get(`/admin/shops/${shopId}/vouchers`)
 }
 
-// 热门博客
-export function getHotBlogs(params) {
-  return request.get('/blog/hot', { params })
-}
-
-// 商铺类型列表
-export function getShopTypeList() {
-  return request.get('/shop-type/list')
+export function createAdminSeckillVoucher(shopId, data) {
+  return request.post(`/admin/shops/${shopId}/vouchers/seckill`, data)
 }
 
 export default request

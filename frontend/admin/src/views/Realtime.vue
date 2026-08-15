@@ -45,9 +45,6 @@
       </transition-group>
     </div>
 
-    <div class="mock-bar">
-      <el-button @click="pushMockOrder">模拟秒杀推送（测试用）</el-button>
-    </div>
   </div>
 </template>
 
@@ -88,12 +85,13 @@ function addOrder(payload) {
   if (orders.value.length > 50) orders.value.pop()
 }
 
-function toggleConnection() {
+async function toggleConnection() {
   if (connected.value) {
     disconnect()
     ElMessage.info('已断开 WebSocket')
   } else {
-    connect()
+    const started = await connect()
+    if (!started) ElMessage.warning('实时订单连接未建立，请稍后重试')
   }
 }
 
@@ -104,21 +102,10 @@ function handleMessage(e) {
   } catch { /* ignore */ }
 }
 
-function pushMockOrder() {
-  const success = Math.random() > 0.2
-  addOrder({
-    orderId: Date.now(),
-    voucherId: Math.floor(Math.random() * 10) + 1,
-    success,
-    message: success ? '秒杀成功，订单已生成' : '库存不足，秒杀失败'
-  })
-}
-
 onMounted(() => {
   removeListener = onMessage(handleMessage)
   if (!connected.value && !connecting.value) {
     connect()
-    ElMessage.success({ message: 'WebSocket 已自动连接', duration: 1500 })
   }
 })
 
@@ -232,12 +219,6 @@ onBeforeUnmount(() => {
   background-color: #f1f5f9;
   border-radius: 4px;
   padding: 4px 8px;
-}
-
-.mock-bar {
-  margin-top: 16px;
-  display: flex;
-  justify-content: center;
 }
 
 .slide-down-enter-active {

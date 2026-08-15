@@ -34,6 +34,11 @@ public class Shop implements Serializable {
     private Long id;
 
     /**
+     * 后台数据范围根：每个商铺必须属于一个商户主体。
+     */
+    private Long merchantId;
+
+    /**
      * 商铺名称
      */
     private String name;

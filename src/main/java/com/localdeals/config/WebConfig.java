@@ -1,8 +1,10 @@
 package com.localdeals.config;
 
-import com.localdeals.interctptor.AdminAccessInterceptor;
+import com.localdeals.interctptor.AdminAuthorizationInterceptor;
+import com.localdeals.interctptor.AdminSessionInterceptor;
 import com.localdeals.interctptor.LoginInterceptor;
 import com.localdeals.interctptor.RefreshTokenInterceptor;
+import com.localdeals.service.AdminSessionService;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -43,16 +45,25 @@ public class WebConfig implements WebMvcConfigurer {
     private StringRedisTemplate stringRedisTemplate;
 
     @Resource
-    private AdminProperties adminProperties;
+    private AdminSessionService adminSessionService;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         //每一个 HTTP 请求进入 Controller 之前，都要经过 LoginInterceptor 的 preHandle()
-        registry.addInterceptor(new LoginInterceptor(PUBLIC_GET_PATHS, PUBLIC_POST_PATHS)).order(1);
+        registry.addInterceptor(new LoginInterceptor(PUBLIC_GET_PATHS, PUBLIC_POST_PATHS))
+                .excludePathPatterns("/admin/**")
+                .order(1);
         //拦截一切，设置执行顺序，优先级
-        registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).addPathPatterns("/**").order(0);
-        registry.addInterceptor(new AdminAccessInterceptor(adminProperties))
-                .addPathPatterns("/shop", "/shop/**", "/voucher", "/voucher/**")
-                .order(2);
+        registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
+                .addPathPatterns("/**")
+                .excludePathPatterns("/admin/**")
+                .order(0);
+        registry.addInterceptor(new AdminSessionInterceptor(adminSessionService))
+                .addPathPatterns("/admin/**")
+                .order(0);
+        registry.addInterceptor(new AdminAuthorizationInterceptor())
+                .addPathPatterns("/admin/**")
+                .excludePathPatterns("/admin/auth/login")
+                .order(1);
     }
 }

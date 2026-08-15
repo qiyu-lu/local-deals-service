@@ -10,4 +10,19 @@
         LEFT JOIN  tb_seckill_voucher sv ON v.id = sv.voucher_id
         WHERE v.shop_id = #{shopId} AND v.status = 1
     </select>
+
+    <select id="queryVoucherOfShopForAdmin" resultType="com.localdeals.entity.Voucher">
+        SELECT
+            v.`id`, v.`shop_id`, v.`title`, v.`sub_title`, v.`rules`, v.`pay_value`,
+            v.`actual_value`, v.`type`, v.`status`, sv.`stock`, sv.`begin_time`, sv.`end_time`,
+            v.`create_time`, v.`update_time`
+        FROM tb_voucher v
+        INNER JOIN tb_shop s ON s.id = v.shop_id
+        LEFT JOIN tb_seckill_voucher sv ON v.id = sv.voucher_id
+        WHERE v.shop_id = #{shopId}
+        <if test="merchantId != null">
+            AND s.merchant_id = #{merchantId}
+        </if>
+        ORDER BY v.id DESC
+    </select>
 </mapper>

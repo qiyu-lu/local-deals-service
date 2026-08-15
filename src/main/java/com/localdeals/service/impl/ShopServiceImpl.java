@@ -11,7 +11,6 @@ import com.localdeals.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.utils.CacheClient;
 import com.localdeals.utils.RedisData;
-import com.localdeals.utils.ShopBloomFilter;
 import com.localdeals.utils.SystemConstants;
 import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -31,7 +30,6 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 
@@ -56,9 +54,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private StringRedisTemplate stringRedisTemplate;
 
     @Autowired
-    private ShopBloomFilter shopBloomFilter;
-
-    @Autowired
     private CacheClient cacheClient;
 
     @Autowired
@@ -67,10 +62,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     public Result queryShopById(Long id) {
 
-        // 1️⃣ 布隆过滤器
-        if (!shopBloomFilter.mightContain(id)) {
-            return Result.fail("店铺不存在");
-        }
         Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.SECONDS);
 
 
@@ -155,19 +146,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
     }
 
-
-    @Override
-    @Transactional
-    public Result updateShop(Shop shop){
-        //根据id修改店铺时，先修改数据库，再删除缓存
-        Long shopId = shop.getId();
-        if(shopId == null){
-            return Result.fail("店铺id不能为空");
-        }
-        updateById(shop);
-        stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
-        return Result.ok();
-    }
 
     @Override
     public Result queryShopByType(Integer typeId, Integer current, Double x, Double y, String sortBy) {

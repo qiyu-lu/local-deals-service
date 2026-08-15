@@ -5,7 +5,7 @@
         <h2 class="page-title">秒杀券管理</h2>
         <p class="page-subtitle">创建与管理限时秒杀优惠券</p>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openCreate">创建秒杀券</el-button>
+      <el-button v-if="canWriteVoucher" type="primary" :icon="Plus" @click="openCreate">创建秒杀券</el-button>
     </div>
 
     <div class="query-bar">
@@ -81,16 +81,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { createSeckillVoucher, getVoucherList } from '../api'
+import { createAdminSeckillVoucher, getAdminShops, getAdminVouchers, resultData, resultPage } from '../api'
+import { useAdminSession } from '../auth/adminSession'
 
 const createDialogVisible = ref(false)
 const submitting = ref(false)
 const loading = ref(false)
 const queryShopId = ref(1)
 const vouchers = ref([])
+const { hasPermission } = useAdminSession()
+const canWriteVoucher = computed(() => hasPermission('voucher:write'))
+const canReadShop = computed(() => hasPermission('shop:read'))
 
 const defaultForm = () => ({
   shopId: 1,
@@ -108,8 +112,9 @@ const form = ref(defaultForm())
 async function loadVouchers() {
   loading.value = true
   try {
-    const res = await getVoucherList(queryShopId.value)
-    vouchers.value = res.data || res || []
+    const result = await getAdminVouchers(queryShopId.value)
+    const payload = resultData(result)
+    vouchers.value = Array.isArray(payload) ? payload : payload?.records || payload?.list || []
   } catch {
     vouchers.value = []
   } finally {
@@ -135,11 +140,13 @@ function voucherStatusType(v) {
 }
 
 function openCreate() {
+  if (!canWriteVoucher.value) return
   form.value = defaultForm()
   createDialogVisible.value = true
 }
 
 async function submitCreate() {
+  if (!canWriteVoucher.value) return
   if (!form.value.title) {
     ElMessage.warning('请输入券标题')
     return
@@ -151,7 +158,6 @@ async function submitCreate() {
   submitting.value = true
   try {
     const payload = {
-      shopId: form.value.shopId,
       title: form.value.title,
       subTitle: form.value.subTitle,
       payValue: Math.round(form.value.payValueYuan * 100),
@@ -160,7 +166,7 @@ async function submitCreate() {
       beginTime: form.value.beginTime,
       endTime: form.value.endTime
     }
-    await createSeckillVoucher(payload)
+    await createAdminSeckillVoucher(form.value.shopId, payload)
     ElMessage.success('秒杀券创建成功')
     createDialogVisible.value = false
     queryShopId.value = form.value.shopId
@@ -172,7 +178,21 @@ async function submitCreate() {
   }
 }
 
-onMounted(loadVouchers)
+onMounted(async () => {
+  if (canReadShop.value) {
+    try {
+      const result = await getAdminShops({ current: 1, size: 1 })
+      const firstShop = resultPage(result).records[0]
+      if (firstShop?.id) {
+        queryShopId.value = firstShop.id
+        form.value.shopId = firstShop.id
+      }
+    } catch {
+      // 查询券接口仍会执行，并由服务端统一校验数据范围。
+    }
+  }
+  await loadVouchers()
+})
 </script>
 
 <style scoped>

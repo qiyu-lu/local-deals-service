@@ -12,19 +12,19 @@
         active-text-color="#ffffff"
         router
       >
-        <el-menu-item index="/">
+        <el-menu-item v-if="canReadDashboard" index="/">
           <el-icon><Odometer /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
-        <el-menu-item index="/shops">
+        <el-menu-item v-if="canReadShops" index="/shops">
           <el-icon><Shop /></el-icon>
           <span>商铺管理</span>
         </el-menu-item>
-        <el-menu-item index="/vouchers">
+        <el-menu-item v-if="canReadVouchers" index="/vouchers">
           <el-icon><Ticket /></el-icon>
           <span>秒杀券管理</span>
         </el-menu-item>
-        <el-menu-item index="/realtime">
+        <el-menu-item v-if="canReadRealtimeOrders" index="/realtime">
           <el-icon><Connection /></el-icon>
           <span>实时订单</span>
         </el-menu-item>
@@ -32,7 +32,10 @@
     </aside>
     <div class="main">
       <header class="header-bar">
-        <div class="header-left"></div>
+        <div class="header-left">
+          <span class="account-name">{{ principal?.displayName || principal?.username }}</span>
+          <el-tag size="small" effect="plain">{{ scopeLabel }}</el-tag>
+        </div>
         <div class="header-right">
           <el-button type="danger" plain size="small" @click="handleLogout">退出登录</el-button>
         </div>
@@ -51,12 +54,19 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { Odometer, Shop, Ticket, Connection } from '@element-plus/icons-vue'
 import { logout } from '../api'
 import { useAdminWs } from '../composables/useAdminWs'
+import { clearAdminSession, useAdminSession } from '../auth/adminSession'
 
 const route = useRoute()
 const router = useRouter()
 const { disconnect } = useAdminWs()
+const { principal, hasPermission } = useAdminSession()
 
 const activeMenu = computed(() => route.path)
+const canReadDashboard = computed(() => hasPermission('dashboard:read'))
+const canReadShops = computed(() => hasPermission('shop:read'))
+const canReadVouchers = computed(() => hasPermission('voucher:read'))
+const canReadRealtimeOrders = computed(() => hasPermission('order:realtime'))
+const scopeLabel = computed(() => principal.value?.scopeType === 'PLATFORM' ? '平台范围' : '商户范围')
 
 function handleLogout() {
   ElMessageBox.confirm('确定要退出登录吗？', '提示', {
@@ -71,7 +81,7 @@ function handleLogout() {
     } catch {
       // Local logout must still complete when the token is already expired or the network is down.
     } finally {
-      localStorage.removeItem('token')
+      clearAdminSession()
       ElMessage.success('已退出登录')
       router.push('/login')
     }
@@ -131,6 +141,18 @@ function handleLogout() {
   justify-content: space-between;
   padding: 0 20px;
   flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
 }
 
 .content {

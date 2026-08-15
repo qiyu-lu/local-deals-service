@@ -1,7 +1,10 @@
 package com.localdeals.websocket;
 
 import cn.hutool.json.JSONUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
@@ -14,14 +17,22 @@ import java.util.Map;
  * consumer (which may run on a different node than the user's WebSocket connection) from the
  * WebSocket session itself.
  */
+@Slf4j
 @Component
 public class WebSocketNotifier {
 
     public static final String CHANNEL_PREFIX = "ws:seckill:";
-    public static final String ADMIN_CHANNEL = "ws:seckill:admin";
+    public static final String ADMIN_PLATFORM_CHANNEL = "ws:seckill:admin:platform";
+    public static final String ADMIN_MERCHANT_CHANNEL_PREFIX = "ws:seckill:admin:merchant:";
+
+    private static final String MERCHANT_BY_VOUCHER_SQL =
+            "SELECT s.merchant_id FROM tb_voucher v " +
+                    "JOIN tb_shop s ON s.id = v.shop_id WHERE v.id = ?";
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private JdbcTemplate jdbcTemplate;
 
     public void notify(Long userId, boolean success, Long orderId, Long voucherId) {
         Map<String, Object> payload = new HashMap<>();
@@ -34,7 +45,27 @@ public class WebSocketNotifier {
         String json = JSONUtil.toJsonStr(payload);
         // 推送给下单用户
         stringRedisTemplate.convertAndSend(CHANNEL_PREFIX + userId, json);
-        // 广播给所有管理端连接（实时订单面板）
-        stringRedisTemplate.convertAndSend(ADMIN_CHANNEL, json);
+        // 平台账号拥有全局数据范围，但 handler 仍会在发送前复核实时订单权限。
+        stringRedisTemplate.convertAndSend(ADMIN_PLATFORM_CHANNEL, json);
+
+        // 商户只能收到归属于自己店铺的订单事件。归属查询失败时保持 fail-closed：
+        // 用户回执和平台事件不受影响，但绝不退化为全商户广播。
+        Long merchantId = resolveMerchantId(voucherId);
+        if (merchantId != null) {
+            stringRedisTemplate.convertAndSend(ADMIN_MERCHANT_CHANNEL_PREFIX + merchantId, json);
+        }
+    }
+
+    private Long resolveMerchantId(Long voucherId) {
+        if (voucherId == null) {
+            return null;
+        }
+        try {
+            return jdbcTemplate.queryForObject(MERCHANT_BY_VOUCHER_SQL, Long.class, voucherId);
+        } catch (DataAccessException e) {
+            log.error("Unable to resolve merchant for admin WebSocket notification. voucherId={}",
+                    voucherId, e);
+            return null;
+        }
     }
 }

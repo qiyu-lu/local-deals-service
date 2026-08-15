@@ -1,42 +1,106 @@
 package com.localdeals.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.convert.DurationUnit;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Temporary fail-closed administrator boundary used until database-backed RBAC is introduced.
+ * Configuration for the independent merchant administration identity boundary.
  */
 @Component
 @ConfigurationProperties(prefix = "local-deals.admin")
 public class AdminProperties {
 
-    private String userIds = "";
+    private final Bootstrap bootstrap = new Bootstrap();
 
-    public boolean isAdminUser(Long userId) {
-        if (userId == null) {
-            return false;
+    @DurationUnit(ChronoUnit.MINUTES)
+    private Duration sessionTtl = Duration.ofMinutes(30);
+
+    private int maxLoginFailures = 5;
+
+    private int maxIpLoginAttempts = 30;
+
+    private List<String> trustedProxies = new ArrayList<>();
+
+    @DurationUnit(ChronoUnit.MINUTES)
+    private Duration loginLockDuration = Duration.ofMinutes(15);
+
+    public Bootstrap getBootstrap() {
+        return bootstrap;
+    }
+
+    public Duration getSessionTtl() {
+        return sessionTtl;
+    }
+
+    public void setSessionTtl(Duration sessionTtl) {
+        this.sessionTtl = sessionTtl;
+    }
+
+    public int getMaxLoginFailures() {
+        return maxLoginFailures;
+    }
+
+    public void setMaxLoginFailures(int maxLoginFailures) {
+        this.maxLoginFailures = maxLoginFailures;
+    }
+
+    public int getMaxIpLoginAttempts() {
+        return maxIpLoginAttempts;
+    }
+
+    public void setMaxIpLoginAttempts(int maxIpLoginAttempts) {
+        this.maxIpLoginAttempts = maxIpLoginAttempts;
+    }
+
+    public List<String> getTrustedProxies() {
+        return trustedProxies;
+    }
+
+    public void setTrustedProxies(List<String> trustedProxies) {
+        this.trustedProxies = trustedProxies == null ? new ArrayList<>() : trustedProxies;
+    }
+
+    public Duration getLoginLockDuration() {
+        return loginLockDuration;
+    }
+
+    public void setLoginLockDuration(Duration loginLockDuration) {
+        this.loginLockDuration = loginLockDuration;
+    }
+
+    public static class Bootstrap {
+        private String username = "";
+        private String password = "";
+        private String displayName = "平台管理员";
+
+        public String getUsername() {
+            return username;
         }
-        String expected = userId.toString();
-        return Arrays.stream(split(userIds)).anyMatch(expected::equals);
-    }
 
-    private String[] split(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return new String[0];
+        public void setUsername(String username) {
+            this.username = username;
         }
-        return Arrays.stream(value.split(","))
-                .map(String::trim)
-                .filter(item -> !item.isEmpty())
-                .toArray(String[]::new);
-    }
 
-    public String getUserIds() {
-        return userIds;
-    }
+        public String getPassword() {
+            return password;
+        }
 
-    public void setUserIds(String userIds) {
-        this.userIds = userIds;
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+
+        public void setDisplayName(String displayName) {
+            this.displayName = displayName;
+        }
     }
 }

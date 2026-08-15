@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mysql:
     image: mysql:8.0
@@ -56,7 +54,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - local-deals-net
+      local-deals-net:
+        ipv4_address: 172.30.55.10
 
   canal-server:
     build: ./docker/canal
@@ -77,3 +76,6 @@ services:
 networks:
   local-deals-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.55.0/24

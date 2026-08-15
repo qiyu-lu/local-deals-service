@@ -28,8 +28,6 @@ import java.nio.charset.StandardCharsets;
 @EnableWebSocket
 public class WebSocketConfig implements WebSocketConfigurer {
 
-    private static final String CHANNEL_PREFIX = "ws:seckill:";
-
     @Resource
     private SeckillWebSocketHandler webSocketHandler;
 
@@ -63,7 +61,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         container.addMessageListener(
                 (message, pattern) -> {
                     String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
-                    String userIdStr = channel.replace(CHANNEL_PREFIX, "");
+                    String userIdStr = channel.substring(WebSocketNotifier.CHANNEL_PREFIX.length());
                     try {
                         Long userId = Long.parseLong(userIdStr);
                         String body = new String(message.getBody(), StandardCharsets.UTF_8);
@@ -72,16 +70,34 @@ public class WebSocketConfig implements WebSocketConfigurer {
                         log.warn("Received WebSocket pub/sub message on unexpected channel: {}", channel);
                     }
                 },
-                new PatternTopic(CHANNEL_PREFIX + "[0-9]*")
+                new PatternTopic(WebSocketNotifier.CHANNEL_PREFIX + "[0-9]*")
         );
-        // 广播给所有已连接的管理端 session（实时订单面板）
+        // 平台实时订单频道。
         container.addMessageListener(
                 (message, pattern) -> {
                     String body = new String(message.getBody(), StandardCharsets.UTF_8);
-                    webSocketHandler.sendToAdmins(body);
+                    webSocketHandler.sendToPlatformAdmins(body);
                 },
-                new ChannelTopic(WebSocketNotifier.ADMIN_CHANNEL)
-        );
+                new ChannelTopic(WebSocketNotifier.ADMIN_PLATFORM_CHANNEL));
+        // 商户频道以 merchantId 精确路由，handler 会再次校验 session 的账号、scope 和权限。
+        container.addMessageListener(
+                (message, pattern) -> {
+                    String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
+                    if (!channel.startsWith(WebSocketNotifier.ADMIN_MERCHANT_CHANNEL_PREFIX)) {
+                        log.warn("Received WebSocket pub/sub message on unexpected channel: {}", channel);
+                        return;
+                    }
+                    String merchantIdValue = channel.substring(
+                            WebSocketNotifier.ADMIN_MERCHANT_CHANNEL_PREFIX.length());
+                    try {
+                        Long merchantId = Long.valueOf(merchantIdValue);
+                        String body = new String(message.getBody(), StandardCharsets.UTF_8);
+                        webSocketHandler.sendToMerchantAdmins(merchantId, body);
+                    } catch (NumberFormatException e) {
+                        log.warn("Received merchant WebSocket message with invalid merchant id: {}", channel);
+                    }
+                },
+                new PatternTopic(WebSocketNotifier.ADMIN_MERCHANT_CHANNEL_PREFIX + "*"));
         return container;
     }
 }

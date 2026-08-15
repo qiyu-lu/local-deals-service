@@ -1,7 +1,6 @@
 package com.localdeals.service;
 
 import com.localdeals.dto.Result;
-import com.localdeals.entity.Shop;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * ShopServiceImpl 缓存策略集成测试。
- * 覆盖三条核心路径：缓存缺失、布隆过滤器拦截、更新清缓存。
+ * 覆盖两条核心路径：缓存缺失与空值缓存。
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -27,7 +26,7 @@ class ShopServiceIT {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
-    // shop id=1 在 DB 中存在且由 ShopBloomFilter @PostConstruct 加载
+    // shop id=1 在 DB 中存在
     private static final Long EXISTING_SHOP_ID = 1L;
     // 不存在于 DB 的 id，布隆过滤器必定拒绝
     private static final Long UNKNOWN_SHOP_ID = 999999L;
@@ -53,31 +52,16 @@ class ShopServiceIT {
     }
 
     /**
-     * 布隆过滤器拦截路径：id 不在布隆过滤器中 → 直接返回失败，不访问 Redis/DB。
-     * 验证缓存穿透的第一道防线有效。
+     * 空值缓存路径：不存在的 id 首次回源 DB 后写入短 TTL 占位符。
+     * 进程内 BloomFilter 会在多实例新增商铺时产生错误否定，因此不再作为权威判断。
      */
     @Test
-    void queryShopById_unknownId_bloomFilterRejectsWithoutRedisWrite() {
+    void queryShopById_unknownId_populatesNullCache() {
         Result result = shopService.queryShopById(UNKNOWN_SHOP_ID);
 
         assertFalse(result.getSuccess(), "不存在的 ID 应返回失败结果");
-        assertFalse(Boolean.TRUE.equals(redisTemplate.hasKey(CACHE_SHOP_KEY + UNKNOWN_SHOP_ID)),
-                "布隆过滤器拦截后不应向 Redis 写入任何占位符");
+        assertTrue(Boolean.TRUE.equals(redisTemplate.hasKey(CACHE_SHOP_KEY + UNKNOWN_SHOP_ID)),
+                "不存在的商铺应写入短 TTL 空值缓存，避免重复穿透数据库");
     }
 
-    /**
-     * 缓存失效路径：updateShop 先更新 DB，再删除 Redis 缓存 key。
-     * 验证"先写数据库，再删缓存"策略正确执行。
-     */
-    @Test
-    void updateShop_deletesRedisCache() {
-        redisTemplate.opsForValue().set(CACHE_SHOP_KEY + EXISTING_SHOP_ID, "{\"id\":1}");
-
-        Shop shop = shopService.getById(EXISTING_SHOP_ID);
-        Result result = shopService.updateShop(shop);
-
-        assertTrue(result.getSuccess(), "updateShop 应返回成功");
-        assertFalse(Boolean.TRUE.equals(redisTemplate.hasKey(CACHE_SHOP_KEY + EXISTING_SHOP_ID)),
-                "更新店铺后应删除 Redis 缓存 key，触发下次查询时重新加载");
-    }
 }

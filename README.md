@@ -2,7 +2,7 @@
 
 > GitHub repo: `local-deals-service` | 基于黑马点评教程改造，涵盖秒杀可靠性增强、Elasticsearch 搜索、RocketMQ 事务消息、Canal 数据同步、WebSocket 实时推送
 
-基于黑马点评教程原型改造的高并发本地生活平台。项目先用 Redis Stream 完成可靠性对比实验，随后迁移到 Elasticsearch + RocketMQ + Canal + WebSocket；当前阶段继续补齐访问边界、秒杀精确预约、失败补偿和可查询回执。历史 Stream 实验与结果仍保留为演进证据，但当前正式下单链路使用 RocketMQ 事务消息。
+基于黑马点评教程原型改造的高并发本地生活平台。项目先用 Redis Stream 完成可靠性对比实验，随后迁移到 Elasticsearch + RocketMQ + Canal + WebSocket；当前阶段继续补齐独立商户后台、RBAC、商户数据范围、秒杀精确预约、失败补偿和可查询回执。历史 Stream 实验与结果仍保留为演进证据，但当前正式下单链路使用 RocketMQ 事务消息。
 
 ## 相比教程原型的核心优势
 
@@ -26,7 +26,7 @@
 | 新活动才写 Redis 元数据，升级后存量活动会被 fail-closed 拒绝 | 启动时从 MySQL 幂等回填存量券；库存只在 key 不存在时初始化，活动字段只补缺失值，不覆盖实时预扣或 `SUSPENDED` | `SeckillVoucherRedisInitializerTest`、`SeckillVoucherRedisInitializerIT` |
 | MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
 | 秒杀结果只依赖单次实时通知，断线或跨实例异常后用户无法确认结果 | WebSocket + Redis pub/sub 作为快速通知，`GET /voucher-order/status/{orderId}` 作为用户隔离的持久兜底；前端超时后有限轮询，64 位订单 ID 全链路按字符串传输 | `WebSocketNotifierTest`、`SeckillWebSocketIT`、`VoucherOrderServiceImplTest` |
-| 商铺、优惠券写接口匿名可调用，管理广播对普通用户可见 | 写接口改为“登录 + 临时管理员白名单”双重校验；用户回执与管理广播使用独立 WebSocket 端点和会话池；发送前复核 token，退出或过期立即失去推送权限 | `LoginInterceptorTest`、`AdminAccessInterceptorTest`、`WebSocketSessionIsolationTest` |
+| 商铺、优惠券写接口匿名可调用，消费者账号可冒充管理端，管理广播没有商户边界 | 新增独立 `tb_admin_account` + BCrypt 登录、固定角色 RBAC 和以 `tb_shop.merchant_id` 为根的数据范围；旧写映射退役。后台 WebSocket 使用 30 秒一次性 ticket、平台/商户独立频道和发送前权限复核；同一连接的并发发送有界串行化 | `AdminMvcSecurityTest`、`AdminRbacIT`、`AdminCatalogServiceTest`、`WebSocketSessionIsolationTest` |
 | 验证码可重复使用、可在有效期内无限猜测 | Redis Lua 原子完成 60 秒发送冷却、一次性消费和每个验证码最多 5 次失败尝试；日志默认不输出验证码 | `UserServiceImplTest`、`UserServiceIT` |
 | 上传目录硬编码，删除接口可路径穿越或跨用户删除 | 上传根目录与 5 MB 上限配置化，校验扩展名/MIME/文件头；`tb_upload_file` 记录归属及 TEMP/DELETING/PUBLISHED 状态，只允许上传者删除未发布图片 | `UploadControllerTest`、`UploadFileServiceIT`、Flyway V3/V4 |
 | 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
@@ -54,11 +54,11 @@
 
 | 页面 | 功能 |
 | --- | --- |
-| 登录 | 手机号 + 验证码，token 存入 localStorage；本地调试可显式开启验证码日志 |
-| 仪表盘 | 商铺总数、今日秒杀订单、ES 同步状态、WebSocket 在线用户数 |
-| 实时订单 | WebSocket 长连接，秒杀落库后毫秒级推送订单卡片（成功/失败），支持手动断开重连 |
-| 秒杀券管理 | 创建秒杀券（标题、时间、库存、商铺 ID），按商铺 ID 查询已有券列表及实时状态 |
-| 商铺管理 | 按类型/关键词搜索商铺，查看详情，更新商铺信息（触发 Canal → ES 同步） |
+| 登录 | 独立后台用户名 + BCrypt 密码；消费者短信 token 不能进入 `/admin/**` |
+| 仪表盘 | 展示当前账号、数据范围、权限数量和范围内商铺概况，不再使用模拟订单数据 |
+| 实时订单 | 先申请 30 秒一次性 ticket，再建立 WebSocket；平台与商户频道隔离，支持手动断开重连 |
+| 秒杀券管理 | 在当前商户可见商铺内查询和创建秒杀券；商铺 ID 篡改由后端范围 SQL 再次拦截 |
+| 商铺管理 | 分页/关键词查询范围内商铺，按权限显示更新入口；历史待分配商铺由平台 API 一次性认领 |
 
 **登录**
 
@@ -98,7 +98,7 @@
 | `CacheClientIT` | 工具层 | 逻辑过期空缓存处理；锁 key 前缀正确性 |
 | `UserServiceIT` | Service 层 | 新用户登录（icon=null）不崩溃，返回 token |
 | `BlogServiceIT` | Service 层 | 查询已删除用户的博客不抛 NPE，gracefully 返回空字段 |
-| `ShopServiceIT` | Service 层 | 缓存缺失→查 DB→写缓存；布隆过滤器拦截无效 ID；updateShop 清除缓存 key |
+| `ShopServiceIT` | Service 层 | 缓存缺失→查 DB→写缓存；不存在商铺写短期空值；后台写入后清理缓存 |
 | `ShopSearchBeforeIT` | 搜索基线 | MySQL LIKE% 搜索结果数和耗时（before 对比数据） |
 | `ShopSearchAfterIT` | ES 搜索 | IK 分词 + geo-distance 组合查询；结果与 before 对比 |
 | `SeckillWithRocketMQIT` | MQ 秒杀 | 500 并发 / 100 库存：恰好 100 个预约经真实 RocketMQ 收敛为 `SUCCESS`；DB 写入在本测试中隔离为 Mock |
@@ -107,6 +107,8 @@
 | `SeckillVoucherRedisInitializerIT` | 升级兼容 | 存量活动回填且不覆盖实时库存、暂停状态和已有时间 |
 | `CanalSyncIT` | Canal 同步 | 直接调用 `EsSyncConsumer.onMessage(json)`；验证 INSERT/UPDATE/DELETE 三种操作同步到 ES |
 | `SeckillWebSocketIT` | WebSocket | Awaitility 3s 内断言 mock session.sendMessage() 被调用，消息含 `"success":true` |
+| `AdminMvcSecurityTest` | MVC 边界 | 真实 Controller 映射与拦截链：匿名/消费者 token 拒绝、权限不足 403、旧写映射 404/405 |
+| `AdminRbacIT` | MySQL + Redis | V5/V6 前向迁移、商户范围 SQL、独立登录、一次性 WS ticket、改密/停用即时撤销会话 |
 
 运行所有集成测试（需要 MySQL、Redis、Elasticsearch、RocketMQ NameServer/Broker
 在本地运行，并预先创建 `seckill-order-topic`）：
@@ -135,13 +137,16 @@ set -a && source .env && set +a
 ```bash
 # 1. 准备环境变量（填写 MySQL / Redis 密码）
 cp .env.example .env
-# 编辑 .env，填入真实密码
-# 将 LOCAL_DEALS_ADMIN_USER_IDS 设置为允许进入管理端的用户 ID；为空时管理写操作和管理 WebSocket 默认全部拒绝
-# 项目尚未接入短信供应商。本地调试登录时可临时设置 LOCAL_DEALS_LOG_VERIFICATION_CODE=true，禁止用于共享或生产环境
+# 编辑 .env，填入真实 MySQL / Redis 密码
+# 首次创建平台管理员时，临时设置 LOCAL_DEALS_ADMIN_BOOTSTRAP_USERNAME/PASSWORD
+# 密码至少 12 个字符且不超过 72 个 UTF-8 字节；验证登录后从运行环境移除 bootstrap 凭据
+# 消费者短信登录仍未接入真实短信供应商；验证码日志只允许在隔离的本地环境显式开启
 set -a && source .env && set +a
 ```
 
-当前管理员 ID 白名单是数据库 RBAC 上线前的过渡边界：它同时保护商铺/优惠券管理写接口和管理端 WebSocket，并在配置为空时默认拒绝。图片上传记录由 Flyway 创建的 `tb_upload_file` 管理；笔记发布会在同一数据库事务中把图片从 `TEMP` 转为 `PUBLISHED`，已发布图片不能再通过临时删除接口移除。
+后台身份与消费者 `tb_user` 完全隔离。首次启动若没有平台账号且未配置 bootstrap 凭据，后台保持 fail-closed；bootstrap 只负责创建第一个平台账号，不会覆盖已有账号密码。V5 会把存量商铺归入停用的 `LEGACY_UNASSIGNED` 主体，平台管理员需通过 `PUT /admin/shops/{id}/merchant` 将它们一次性认领给启用商户；已归属商铺禁止跨商户换绑。完整模型、权限矩阵与 API 见 [商户后台与 RBAC](docs/admin-rbac.md)。
+
+后台登录按“用户名 + 客户 IP”累计失败，并在查库/BCrypt 前用 Redis Lua 原子占用客户 IP 请求配额。只有直连地址命中 `LOCAL_DEALS_ADMIN_TRUSTED_PROXIES` 时才读取 nginx 的真实 IP 头；仓库自带的 Compose 将 nginx 固定为 `172.30.55.10`，修改子网时必须同步修改信任列表。生产环境必须把该列表收窄为实际代理地址并阻止客户端直连 8083。图片上传记录由 Flyway 创建的 `tb_upload_file` 管理；笔记发布会在同一数据库事务中把图片从 `TEMP` 转为 `PUBLISHED`，已发布图片不能再通过临时删除接口移除。
 
 应用启动时会校验并回填所有存量秒杀券的 Redis 活动元数据。回填不会覆盖已经存在的 Redis 库存或暂停状态；若数据库记录非法、数据库不可读或 Redis 回填失败，应用会拒绝启动，修复依赖或数据后可安全重试。
 
@@ -209,6 +214,15 @@ offset 不受影响。
 链路完全排空后再下线。当前代码没有提供这条双轨发布能力，因此不能把普通滚动发布当成
 安全方案。
 
+### 从旧版管理端升级
+
+旧实例仍包含消费者登录复用、旧写接口或无商户范围的管理 WebSocket，因此 V5/V6 **不支持
+新旧实例滚动混跑**。发布前先在网关封禁旧版 `POST/PUT /shop/**`、`POST /voucher/**` 和旧管理
+WebSocket，停止全部旧实例并备份数据库，再让单个新实例执行 Flyway V5/V6。随后完成平台账号
+bootstrap、创建商户/主账号、认领 `LEGACY_UNASSIGNED` 商铺及跨商户 404 冒烟验证，最后移除
+bootstrap 密码并恢复管理入口。无法安排该停机窗口时，应先实现版本化后台入口和双轨隔离；
+当前代码不支持用普通滚动发布规避门禁。
+
 ## 技术栈
 
 **后端**
@@ -231,12 +245,17 @@ offset 不受影响。
 ## 当前重点
 
 - 登录态：验证码登录后将用户信息写入 Redis Hash，拦截器从 `authorization` 请求头恢复 `UserHolder`。
-- 商铺缓存：商铺详情查询结合 Redis 缓存、空值缓存和布隆过滤器，降低无效请求对数据库的压力。
+- 管理边界：独立后台账号、固定角色 RBAC、每请求数据库复核与商户范围 SQL；密码或账号安全状态变化通过 `auth_version` 使旧令牌立即失效。
+- 商铺缓存：商铺详情使用 Redis cache-through 与短期空值缓存。进程内布隆过滤器会在多实例新增商铺时产生错误否定，已从权威查询链移除。
 - 优惠券秒杀：RocketMQ 事务消息把半消息与 Redis Lua 原子预占绑定；Lua 使用 Redis 服务端时间校验活动窗口，并记录精确 reservation 与 `PROCESSING` 状态。
 - 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
 - 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
 - 可观测性：暴露秒杀请求分流、MQ 消费结果、DB 重复与库存回滚等 Prometheus 指标。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
+
+### 管理端本阶段边界
+
+当前管理端采用固定的 `PLATFORM_ADMIN`、`MERCHANT_OWNER`、`MERCHANT_STAFF` 三角色；尚未实现自定义角色编辑、按单店授权、主/子供应商层级和历史订单查询 API。`order:read` 已预留为稳定权限码，管理端 SPA 目前只提供目录维护与实时订单页面；商户、员工账号的管理能力已由 API 提供，但还没有对应的可视化页面。
 
 ### 已知限制：超龄 PROCESSING
 
@@ -258,6 +277,7 @@ offset 不受影响。
 
 ## 文档
 
+- [商户后台、RBAC 与发布门禁](docs/admin-rbac.md)
 - [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)

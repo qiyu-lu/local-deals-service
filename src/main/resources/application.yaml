@@ -37,7 +37,8 @@ mybatis-plus:
   type-aliases-package: com.localdeals.entity # 别名扫描包
 logging:
   level:
-    com.localdeals: debug
+    # Keep mapper parameters (including password hashes and user data) out of production logs.
+    com.localdeals: info
 management:
   endpoints:
     web:
@@ -45,8 +46,17 @@ management:
         include: health,info,metrics,prometheus
 local-deals:
   admin:
-    # Temporary fail-closed boundary until database-backed RBAC is introduced.
-    user-ids: "${LOCAL_DEALS_ADMIN_USER_IDS:}"
+    # Create-only, fail-closed platform account bootstrap. No default credential exists.
+    bootstrap:
+      username: "${LOCAL_DEALS_ADMIN_BOOTSTRAP_USERNAME:}"
+      password: "${LOCAL_DEALS_ADMIN_BOOTSTRAP_PASSWORD:}"
+      display-name: "${LOCAL_DEALS_ADMIN_BOOTSTRAP_DISPLAY_NAME:平台管理员}"
+    session-ttl: "${LOCAL_DEALS_ADMIN_SESSION_TTL:30m}"
+    max-login-failures: "${LOCAL_DEALS_ADMIN_MAX_LOGIN_FAILURES:5}"
+    max-ip-login-attempts: "${LOCAL_DEALS_ADMIN_MAX_IP_LOGIN_ATTEMPTS:30}"
+    login-lock-duration: "${LOCAL_DEALS_ADMIN_LOGIN_LOCK_DURATION:15m}"
+    # Exact IPs or CIDRs. Empty by default: proxy headers require an explicit trust boundary.
+    trusted-proxies: "${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}"
   auth:
     # Never enable this outside an isolated local development environment.
     log-verification-code: "${LOCAL_DEALS_LOG_VERIFICATION_CODE:false}"

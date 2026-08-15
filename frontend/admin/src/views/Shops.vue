@@ -16,7 +16,7 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <span class="search-hint">（ES IK 分词搜索）</span>
+        <span class="search-hint">仅查询当前账户授权范围</span>
       </div>
       <div class="toolbar-right">
         <el-button :icon="Refresh" @click="handleRefresh">刷新</el-button>
@@ -42,7 +42,7 @@
           <span class="tabular-num">{{ row.distance != null ? row.distance.toFixed(0) + 'm' : '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column v-if="canWriteShop" label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
         </template>
@@ -83,7 +83,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
-import { getShopsByType, searchShops, updateShop } from '../api'
+import { getAdminShops, resultPage, updateAdminShop } from '../api'
+import { useAdminSession } from '../auth/adminSession'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -92,26 +93,22 @@ const shopList = ref([])
 const currentPage = ref(1)
 const pageSize = ref(5)
 const total = ref(0)
-
-const defaultX = 120.15
-const defaultY = 30.33
+const { hasPermission } = useAdminSession()
+const canWriteShop = computed(() => hasPermission('shop:write'))
 
 const pagedList = computed(() => shopList.value)
 
 async function loadShops(page = 1) {
   loading.value = true
   try {
-    const res = await getShopsByType({
-      typeId: 1,
-      x: defaultX,
-      y: defaultY,
-      current: page
+    const result = await getAdminShops({
+      keyword: keyword.value || undefined,
+      current: page,
+      size: pageSize.value
     })
-    const list = res.data || res || []
-    shopList.value = Array.isArray(list) ? list : []
-    total.value = shopList.value.length < pageSize.value && page === 1
-      ? shopList.value.length
-      : Math.max(shopList.value.length, page * pageSize.value)
+    const pageResult = resultPage(result)
+    shopList.value = Array.isArray(pageResult.records) ? pageResult.records : []
+    total.value = pageResult.total
   } catch (e) {
     shopList.value = []
   } finally {
@@ -125,23 +122,8 @@ async function handleSearch() {
     loadShops(1)
     return
   }
-  loading.value = true
-  try {
-    const res = await searchShops({
-      keyword: keyword.value,
-      x: defaultX,
-      y: defaultY,
-      current: 1
-    })
-    const list = res.data || res || []
-    shopList.value = Array.isArray(list) ? list : []
-    total.value = shopList.value.length
-    currentPage.value = 1
-  } catch (e) {
-    shopList.value = []
-  } finally {
-    loading.value = false
-  }
+  currentPage.value = 1
+  await loadShops(1)
 }
 
 function handleRefresh() {
@@ -158,6 +140,7 @@ const editDialogVisible = ref(false)
 const editForm = ref({ id: null, name: '', address: '', openHours: '' })
 
 function openEdit(row) {
+  if (!canWriteShop.value) return
   editForm.value = {
     id: row.id,
     name: row.name,
@@ -168,14 +151,12 @@ function openEdit(row) {
 }
 
 async function submitEdit() {
+  if (!canWriteShop.value) return
   submitting.value = true
   try {
-    await updateShop(editForm.value)
+    await updateAdminShop(editForm.value)
     editDialogVisible.value = false
-    ElMessage.success('修改成功，Canal 已检测到 binlog 变更，ES 索引同步中...')
-    setTimeout(() => {
-      ElMessage.success('ES 同步完成')
-    }, 3000)
+    ElMessage.success('商铺信息修改成功')
     loadShops(currentPage.value)
   } catch (e) {
     // 错误已在拦截器中提示
