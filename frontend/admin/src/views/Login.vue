@@ -19,7 +19,7 @@
         <el-form-item v-if="codeSent">
           <el-input
             v-model="form.code"
-            placeholder="输入验证码（查看 Spring Boot 日志）"
+            placeholder="请输入短信验证码"
             size="large"
             maxlength="6"
             :prefix-icon="Key"
@@ -43,7 +43,7 @@
           </div>
         </el-form-item>
         <el-alert v-if="codeSent"
-          title="验证码已生成，请在应用日志中查找：验证码是：XXXXXX"
+          title="验证码已发送；本地调试可按 README 显式开启验证码日志"
           type="info" :closable="false" show-icon style="margin-top:-8px" />
       </el-form>
     </el-card>
@@ -75,7 +75,7 @@ async function handleSendCode() {
   try {
     await sendCode(form.value.phone)
     codeSent.value = true
-    ElMessage.success('验证码已发送，请查看应用日志')
+    ElMessage.success('验证码已发送')
   } catch { /* interceptor already shows error */ } finally {
     loading.value = false
   }

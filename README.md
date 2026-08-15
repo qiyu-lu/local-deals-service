@@ -24,6 +24,9 @@
 | 秒杀异步消息用 Redis Stream，Lua 操作与 XADD 不是原子的，丢消息无法保证 | RocketMQ 事务消息：半消息 → executeLocalTransaction 运行 Lua → COMMIT/ROLLBACK，Lua 操作与消息发送原子绑定；磁盘持久化，Broker 重启不丢 | `SeckillWithRocketMQIT`（500 并发 / 100 库存 / 0 超卖验证） |
 | MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
 | 秒杀结果无实时通知，用户只能轮询 | WebSocket + Redis pub/sub：落库后毫秒级推送，多实例部署下 Redis 广播保证消息路由到持有连接的实例 | `SeckillWebSocketIT`（Awaitility 3s 内断言 WebSocket sendMessage 被调用） |
+| 商铺、优惠券写接口匿名可调用，管理广播对普通用户可见 | 写接口改为“登录 + 临时管理员白名单”双重校验；用户回执与管理广播使用独立 WebSocket 端点和会话池；发送前复核 token，退出或过期立即失去推送权限 | `LoginInterceptorTest`、`AdminAccessInterceptorTest`、`WebSocketSessionIsolationTest` |
+| 验证码可重复使用、可在有效期内无限猜测 | Redis Lua 原子完成 60 秒发送冷却、一次性消费和每个验证码最多 5 次失败尝试；日志默认不输出验证码 | `UserServiceImplTest`、`UserServiceIT` |
+| 上传目录硬编码，删除接口可路径穿越或跨用户删除 | 上传根目录与 5 MB 上限配置化，校验扩展名/MIME/文件头；`tb_upload_file` 记录归属及 TEMP/DELETING/PUBLISHED 状态，只允许上传者删除未发布图片 | `UploadControllerTest`、`UploadFileServiceIT`、Flyway V3/V4 |
 | 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
 | Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream（第一阶段可靠性增强，已由 RocketMQ 内置 DLQ 取代） | `stream.orders.dlq`、`docs/reliability-results.md` |
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 自动化脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、Stream pending 和 dead-letter | `scripts/run-seckill-benchmark.sh`、`docs/benchmark-results.md` |
@@ -49,7 +52,7 @@
 
 | 页面 | 功能 |
 | --- | --- |
-| 登录 | 手机号 + 验证码（从 Spring Boot 日志获取），token 存入 localStorage |
+| 登录 | 手机号 + 验证码，token 存入 localStorage；本地调试可显式开启验证码日志 |
 | 仪表盘 | 商铺总数、今日秒杀订单、ES 同步状态、WebSocket 在线用户数 |
 | 实时订单 | WebSocket 长连接，秒杀落库后毫秒级推送订单卡片（成功/失败），支持手动断开重连 |
 | 秒杀券管理 | 创建秒杀券（标题、时间、库存、商铺 ID），按商铺 ID 查询已有券列表及实时状态 |
@@ -127,8 +130,12 @@ set -a && source .env && set +a
 # 1. 准备环境变量（填写 MySQL / Redis 密码）
 cp .env.example .env
 # 编辑 .env，填入真实密码
+# 将 LOCAL_DEALS_ADMIN_USER_IDS 设置为允许进入管理端的用户 ID；为空时管理写操作和管理 WebSocket 默认全部拒绝
+# 项目尚未接入短信供应商。本地调试登录时可临时设置 LOCAL_DEALS_LOG_VERIFICATION_CODE=true，禁止用于共享或生产环境
 set -a && source .env && set +a
 ```
+
+当前管理员 ID 白名单是数据库 RBAC 上线前的过渡边界：它同时保护商铺/优惠券管理写接口和管理端 WebSocket，并在配置为空时默认拒绝。图片上传记录由 Flyway 创建的 `tb_upload_file` 管理；笔记发布会在同一数据库事务中把图片从 `TEMP` 转为 `PUBLISHED`，已发布图片不能再通过临时删除接口移除。
 
 **启动 MySQL 和 Redis**（二选一）：
 

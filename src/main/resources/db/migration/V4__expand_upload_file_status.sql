@@ -1,0 +1,2 @@
+ALTER TABLE `tb_upload_file`
+  MODIFY COLUMN `status` varchar(16) NOT NULL COMMENT 'TEMP、DELETING 或 PUBLISHED';

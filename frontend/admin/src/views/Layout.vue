@@ -49,9 +49,12 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Odometer, Shop, Ticket, Connection } from '@element-plus/icons-vue'
+import { logout } from '../api'
+import { useAdminWs } from '../composables/useAdminWs'
 
 const route = useRoute()
 const router = useRouter()
+const { disconnect } = useAdminWs()
 
 const activeMenu = computed(() => route.path)
 
@@ -60,10 +63,18 @@ function handleLogout() {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning'
-  }).then(() => {
-    localStorage.removeItem('token')
-    ElMessage.success('已退出登录')
-    router.push('/login')
+  }).then(async () => {
+    // Stop privileged pushes immediately; the HTTP request then revokes the Redis token.
+    disconnect()
+    try {
+      await logout()
+    } catch {
+      // Local logout must still complete when the token is already expired or the network is down.
+    } finally {
+      localStorage.removeItem('token')
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    }
   }).catch(() => {})
 }
 </script>

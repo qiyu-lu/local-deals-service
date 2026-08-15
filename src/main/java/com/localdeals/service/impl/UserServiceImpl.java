@@ -14,8 +14,11 @@ import com.localdeals.service.IUserService;
 import com.localdeals.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
@@ -23,12 +26,14 @@ import javax.servlet.http.HttpSession;
 import java.time.LocalDateTime;
 
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static com.localdeals.utils.RedisConstants.*;
+import static com.localdeals.utils.RegexUtils.isCodeInvalid;
 import static com.localdeals.utils.RegexUtils.isPhoneInvalid;
 import static com.localdeals.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 
@@ -43,8 +48,25 @@ import static com.localdeals.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
+    private static final String INVALID_CODE_MESSAGE = "验证码不正确";
+    private static final DefaultRedisScript<Long> ISSUE_LOGIN_CODE_SCRIPT;
+    private static final DefaultRedisScript<Long> CONSUME_LOGIN_CODE_SCRIPT;
+
+    static {
+        ISSUE_LOGIN_CODE_SCRIPT = new DefaultRedisScript<>();
+        ISSUE_LOGIN_CODE_SCRIPT.setLocation(new ClassPathResource("lua/issue_login_code.lua"));
+        ISSUE_LOGIN_CODE_SCRIPT.setResultType(Long.class);
+
+        CONSUME_LOGIN_CODE_SCRIPT = new DefaultRedisScript<>();
+        CONSUME_LOGIN_CODE_SCRIPT.setLocation(new ClassPathResource("lua/consume_login_code.lua"));
+        CONSUME_LOGIN_CODE_SCRIPT.setResultType(Long.class);
+    }
+
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+
+    @Value("${local-deals.auth.log-verification-code:false}")
+    private boolean logVerificationCode;
 
     @Override
     public Result sendCode(String phone, HttpSession session){
@@ -52,17 +74,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         if(isPhoneInvalid(phone)){//校验传入的电话号码，通过工具类中的方法
             return Result.fail("号码不合法");
         }
-        // 生成验证码 这里是使用随机数方法生成一个6位数的验证码
+        // 生成验证码，并通过 Lua 原子完成按手机号限流与验证码写入。
         String code = RandomUtil.randomNumbers(6);
-
-        //存入session  将验证码存入传入的session中
-        //session.setAttribute("code", code);
-        //这里不是选择将验证码存入session中，而是选择存入redis中
         String codeKey = LOGIN_CODE_KEY + phone;
-        stringRedisTemplate.opsForValue().set(codeKey, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
+        String rateLimitKey = LOGIN_CODE_RATE_LIMIT_KEY + phone;
+        String failureKey = LOGIN_CODE_FAILURE_KEY + phone;
+        Long issued = stringRedisTemplate.execute(
+                ISSUE_LOGIN_CODE_SCRIPT,
+                Arrays.asList(rateLimitKey, codeKey, failureKey),
+                code,
+                String.valueOf(TimeUnit.MINUTES.toSeconds(LOGIN_CODE_TTL)),
+                String.valueOf(LOGIN_CODE_RATE_LIMIT_TTL)
+        );
+        if (!Long.valueOf(1L).equals(issued)) {
+            return Result.fail("验证码发送过于频繁，请稍后再试");
+        }
 
-        //打印或者发送短信
-        log.debug("验证码是：" + code);
+        // 仅供显式开启的本地开发环境使用，生产默认绝不记录验证码。
+        if (logVerificationCode) {
+            log.warn("仅限本地开发：手机号 {} 的验证码为 {}", maskPhone(phone), code);
+        }
         return Result.ok();
     }
     @Override
@@ -72,26 +103,29 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         if(isPhoneInvalid(phone)){//校验传入的手机号码
             return Result.fail("号码不合法");
         }
-        // 取出验证码 用户输入的验证吗
         String rawCode = loginForm.getCode();
-        //和之前发送的验证码进行比较
-
-        //从redis中取出验证码
+        if (isCodeInvalid(rawCode)) {
+            return Result.fail(INVALID_CODE_MESSAGE);
+        }
         String codeKey = LOGIN_CODE_KEY + phone;
-        if(rawCode ==null || !rawCode.equals(stringRedisTemplate.opsForValue().get(codeKey))){
-            return Result.fail("验证码不正确");
+        String failureKey = LOGIN_CODE_FAILURE_KEY + phone;
+        Long consumed = stringRedisTemplate.execute(
+                CONSUME_LOGIN_CODE_SCRIPT,
+                Arrays.asList(codeKey, failureKey),
+                rawCode,
+                String.valueOf(LOGIN_CODE_MAX_FAILURES)
+        );
+        if (!Long.valueOf(1L).equals(consumed)) {
+            return Result.fail(INVALID_CODE_MESSAGE);
         }
         //根据号码查询用户，如果存在返回用户，不存在新建用户
         User user = lambdaQuery()
                 .eq(User::getPhone, phone)
                 .one();
         if(user == null){//如果用户不存在，查询不到，那么就创建新用户，进行保存
-            log.debug("短信登陆用户不存在");
             user = generateUserWithphone(phone);
-            log.debug("新建的用户：{}", user);
             save(user);
         }
-        log.debug("用户存在：{}", user);
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);//复制不隐私的信息，不过我认为这里应该使用vo
 
         String token = UUID.randomUUID().toString(true);
@@ -108,9 +142,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String tokenKey = LOGIN_USER_KEY + token;
         stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
         stringRedisTemplate.expire(tokenKey, 30, TimeUnit.MINUTES);// 设置有效期（30 分钟）
-        log.debug("存入redis中的token：{}", tokenKey);
         //返回token到前端
         return Result.ok(token);
+    }
+
+    private String maskPhone(String phone) {
+        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
     }
 
     private User generateUserWithphone(String phone){

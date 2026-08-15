@@ -1,5 +1,6 @@
 package com.localdeals.config;
 
+import com.localdeals.websocket.AdminWebSocketAuthInterceptor;
 import com.localdeals.websocket.SeckillWebSocketHandler;
 import com.localdeals.websocket.WebSocketAuthInterceptor;
 import com.localdeals.websocket.WebSocketNotifier;
@@ -36,16 +37,22 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private WebSocketAuthInterceptor webSocketAuthInterceptor;
 
     @Resource
+    private AdminWebSocketAuthInterceptor adminWebSocketAuthInterceptor;
+
+    @Resource
+    private WebSocketProperties webSocketProperties;
+
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(webSocketHandler, "/ws/connect")
                 .addInterceptors(webSocketAuthInterceptor)
-                // Dev only: restrict to known origins in production.
-                // Note: setAllowedOriginPatterns(String) requires Spring 5.3+; this project is on
-                // Spring 5.2.15 (Boot 2.3.12), so setAllowedOrigins(String...) is used instead.
-                .setAllowedOrigins("*");
+                .setAllowedOrigins(webSocketProperties.allowedOrigins());
+        registry.addHandler(webSocketHandler, "/ws/admin/connect")
+                .addInterceptors(adminWebSocketAuthInterceptor)
+                .setAllowedOrigins(webSocketProperties.allowedOrigins());
     }
 
     @Bean
@@ -71,7 +78,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         container.addMessageListener(
                 (message, pattern) -> {
                     String body = new String(message.getBody(), StandardCharsets.UTF_8);
-                    webSocketHandler.sendToAll(body);
+                    webSocketHandler.sendToAdmins(body);
                 },
                 new ChannelTopic(WebSocketNotifier.ADMIN_CHANNEL)
         );

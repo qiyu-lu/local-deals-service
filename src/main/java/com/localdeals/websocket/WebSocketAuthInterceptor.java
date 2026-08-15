@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
-import javax.annotation.Resource;
 import java.util.Map;
 
 import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
@@ -26,12 +25,29 @@ import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
 @Component
 public class WebSocketAuthInterceptor implements HandshakeInterceptor {
 
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
+    public static final String USER_ID_ATTRIBUTE = "userId";
+    public static final String TOKEN_ATTRIBUTE = "authToken";
+    public static final String CONNECTION_TYPE_ATTRIBUTE = "connectionType";
+    public static final String CONNECTION_TYPE_USER = "USER";
+    public static final String CONNECTION_TYPE_ADMIN = "ADMIN";
+
+    private final StringRedisTemplate stringRedisTemplate;
+
+    public WebSocketAuthInterceptor(StringRedisTemplate stringRedisTemplate) {
+        this.stringRedisTemplate = stringRedisTemplate;
+    }
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
             WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        if (!authenticate(request, attributes)) {
+            return false;
+        }
+        attributes.put(CONNECTION_TYPE_ATTRIBUTE, CONNECTION_TYPE_USER);
+        return true;
+    }
+
+    boolean authenticate(ServerHttpRequest request, Map<String, Object> attributes) {
         if (!(request instanceof ServletServerHttpRequest)) {
             return false;
         }
@@ -41,19 +57,42 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
             return false;
         }
 
-        Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(LOGIN_USER_KEY + token);
-        if (userMap.isEmpty()) {
+        Long userId = resolveUserId(token);
+        if (userId == null) {
             log.debug("WebSocket handshake rejected: invalid or expired token");
             return false;
         }
+        attributes.put(USER_ID_ATTRIBUTE, userId);
+        attributes.put(TOKEN_ATTRIBUTE, token);
+        return true;
+    }
 
-        UserDTO user = BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false);
-        if (user.getId() == null) {
-            log.debug("WebSocket handshake rejected: token resolved to no userId");
+    /**
+     * Revalidates a session-bound token without refreshing its TTL. Admin broadcasts use this
+     * check so logout and token expiry revoke an already-established privileged connection.
+     */
+    boolean isTokenValidForUser(String token, Long expectedUserId) {
+        if (expectedUserId == null || StrUtil.isBlank(token)) {
             return false;
         }
-        attributes.put("userId", user.getId());
-        return true;
+        return expectedUserId.equals(resolveUserId(token));
+    }
+
+    private Long resolveUserId(String token) {
+        if (StrUtil.isBlank(token)) {
+            return null;
+        }
+        try {
+            Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(LOGIN_USER_KEY + token);
+            if (userMap == null || userMap.isEmpty()) {
+                return null;
+            }
+            UserDTO user = BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false);
+            return user.getId();
+        } catch (RuntimeException e) {
+            log.warn("Failed to validate WebSocket token against Redis", e);
+            return null;
+        }
     }
 
     @Override

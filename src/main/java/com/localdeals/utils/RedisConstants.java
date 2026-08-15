@@ -3,6 +3,10 @@ package com.localdeals.utils;
 public class RedisConstants {
     public static final String LOGIN_CODE_KEY = "login:code:";
     public static final Long LOGIN_CODE_TTL = 2L;
+    public static final String LOGIN_CODE_RATE_LIMIT_KEY = "login:code:rate:";
+    public static final Long LOGIN_CODE_RATE_LIMIT_TTL = 60L;
+    public static final String LOGIN_CODE_FAILURE_KEY = "login:code:failure:";
+    public static final Long LOGIN_CODE_MAX_FAILURES = 5L;
     public static final String LOGIN_USER_KEY = "login:token:";
     public static final Long LOGIN_USER_TTL = 36000L;
 

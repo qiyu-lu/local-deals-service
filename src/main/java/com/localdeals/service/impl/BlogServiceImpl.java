@@ -16,6 +16,7 @@ import com.localdeals.service.IBlogService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.service.IFollowService;
 import com.localdeals.service.IUserService;
+import com.localdeals.service.UploadFileService;
 import com.localdeals.utils.SystemConstants;
 import com.localdeals.utils.UserHolder;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -29,6 +30,7 @@ import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilde
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
@@ -60,6 +62,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private IFollowService  followService;
+
+    @Resource
+    private UploadFileService uploadFileService;
 
     @Autowired
     private ElasticsearchRestTemplate esRestTemplate;
@@ -159,15 +164,23 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Result saveBlog(Blog blog) {
         // 获取登录用户
         UserDTO user = UserHolder.getUser();
+        List<String> imagePaths;
+        try {
+            imagePaths = uploadFileService.validateTemporaryImages(blog.getImages(), user.getId());
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
         blog.setUserId(user.getId());
         // 保存探店博文
         boolean success = save(blog);
         if(!success){
             return Result.fail("新增笔记失败!");
         }
+        uploadFileService.markPublished(imagePaths, user.getId(), blog.getId());
         //查询笔记作者的所有粉丝
         List<Follow> follows = followService.query().eq("follow_user_id", user.getId()).list();
         //推送笔记id给所有的粉丝

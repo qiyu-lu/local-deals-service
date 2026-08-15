@@ -14,7 +14,9 @@ import javax.annotation.Resource;
 import java.util.concurrent.TimeUnit;
 
 import static com.localdeals.utils.RedisConstants.LOGIN_CODE_KEY;
+import static com.localdeals.utils.RedisConstants.LOGIN_CODE_FAILURE_KEY;
 import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
+import static com.localdeals.utils.RedisConstants.LOGIN_CODE_RATE_LIMIT_KEY;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -41,6 +43,7 @@ class UserServiceIT {
     @BeforeEach
     void seedVerificationCode() {
         jdbcTemplate.update("DELETE FROM tb_user WHERE phone = ?", TEST_PHONE);
+        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TEST_PHONE);
         stringRedisTemplate.opsForValue().set(
                 LOGIN_CODE_KEY + TEST_PHONE, TEST_CODE, 5, TimeUnit.MINUTES);
     }
@@ -49,6 +52,8 @@ class UserServiceIT {
     void cleanup() {
         jdbcTemplate.update("DELETE FROM tb_user WHERE phone = ?", TEST_PHONE);
         stringRedisTemplate.delete(LOGIN_CODE_KEY + TEST_PHONE);
+        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TEST_PHONE);
+        stringRedisTemplate.delete(LOGIN_CODE_RATE_LIMIT_KEY + TEST_PHONE);
         if (issuedToken != null) {
             stringRedisTemplate.delete(LOGIN_USER_KEY + issuedToken);
             issuedToken = null;
@@ -71,5 +76,40 @@ class UserServiceIT {
         assertTrue(result.getSuccess(), "Login must succeed for a new user: " + result.getErrorMsg());
         assertNotNull(result.getData(), "Login must return a token");
         issuedToken = (String) result.getData();
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+    }
+
+    @Test
+    void fifthWrongCodeLocksOriginalCodeAndNewIssueResetsAttemptBudget() {
+        LoginFormDTO form = new LoginFormDTO();
+        form.setPhone(TEST_PHONE);
+        form.setCode("000000");
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            Result result = userService.login(form, null);
+            assertFalse(result.getSuccess());
+            assertEquals("验证码不正确", result.getErrorMsg());
+        }
+
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
+        assertEquals("5", stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+
+        Result issueResult = userService.sendCode(TEST_PHONE, null);
+        assertTrue(issueResult.getSuccess());
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+        assertNotNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
+    }
+
+    @Test
+    void malformedCodeDoesNotConsumeFailureBudget() {
+        LoginFormDTO form = new LoginFormDTO();
+        form.setPhone(TEST_PHONE);
+        form.setCode("ABC123");
+
+        Result result = userService.login(form, null);
+
+        assertFalse(result.getSuccess());
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
     }
 }

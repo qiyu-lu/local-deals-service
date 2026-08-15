@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
+import { useAdminWs } from '../composables/useAdminWs'
 
 const request = axios.create({
   baseURL: '/api',
@@ -28,6 +29,7 @@ request.interceptors.response.use(response => {
 }, error => {
   if (error.response && error.response.status === 401) {
     ElMessage.error('登录已过期，请重新登录')
+    useAdminWs().disconnect()
     localStorage.removeItem('token')
     router.push('/login')
   } else {
@@ -45,6 +47,11 @@ export function sendCode(phone) {
 // 用户登录
 export function login(data) {
   return request.post('/user/login', data)
+}
+
+// 注销当前登录态
+export function logout() {
+  return request.post('/user/logout')
 }
 
 // 按类型获取商铺

@@ -26,6 +26,10 @@ spring:
         time-between-eviction-runs: 10s
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
+  servlet:
+    multipart:
+      max-file-size: "${LOCAL_DEALS_MAX_IMAGE_SIZE:5MB}"
+      max-request-size: "${LOCAL_DEALS_MAX_UPLOAD_REQUEST_SIZE:6MB}"
   elasticsearch:
     rest:
       uris: http://localhost:9200
@@ -40,6 +44,17 @@ management:
       exposure:
         include: health,info,metrics,prometheus
 local-deals:
+  admin:
+    # Temporary fail-closed boundary until database-backed RBAC is introduced.
+    user-ids: "${LOCAL_DEALS_ADMIN_USER_IDS:}"
+  auth:
+    # Never enable this outside an isolated local development environment.
+    log-verification-code: "${LOCAL_DEALS_LOG_VERIFICATION_CODE:false}"
+  upload:
+    image-root: "${LOCAL_DEALS_IMAGE_UPLOAD_DIR:./frontend/user/imgs}"
+    max-image-size: "${LOCAL_DEALS_MAX_IMAGE_SIZE:5MB}"
+  websocket:
+    allowed-origins: "${LOCAL_DEALS_WEBSOCKET_ALLOWED_ORIGINS:http://localhost:8088,http://localhost:5173}"
   seckill:
     stream:
       key: "stream.orders"

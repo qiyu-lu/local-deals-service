@@ -134,7 +134,7 @@
           .catch(this.$message.error);
       },
       deletePic(i) {
-        axios.get("/upload/blog/delete?name=" + this.fileList[i])
+        axios.delete("/upload/blog?name=" + encodeURIComponent(this.fileList[i]))
           .then(() => this.fileList.splice(i, 1))
           .catch(this.$message.error)
       },
