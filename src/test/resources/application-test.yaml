@@ -11,3 +11,12 @@ rocketmq:
   name-server: localhost:9876
   producer:
     group: local-deals-producer-group
+  consumer:
+    # Most Spring integration tests call consumers directly. Keeping fixed-group listeners
+    # alive in every cached ApplicationContext makes those contexts compete for real broker
+    # messages and turns an otherwise deterministic suite into a cross-test race.
+    listeners:
+      seckill-consumer-group:
+        seckill-order-topic: false
+      es-sync-consumer-group:
+        mysql-sync-topic: false

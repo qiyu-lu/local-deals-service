@@ -132,12 +132,26 @@
       shop: {},
       vouchers: [],
       shopBlogs: [],
+      seckillSocket: null,
+      seckillSocketTimer: null,
+      seckillPollTimer: null,
+      seckillPollDeadlineTimer: null,
+      seckillPollAttempts: 0,
+      seckillPolling: false,
+      seckillPendingOrderId: null,
     },
     created() {
       let shopId = util.getUrlParam("id");
       this.queryShopById(shopId);
       this.queryVoucher(shopId);
       this.queryShopBlogs(shopId);
+    },
+    mounted() {
+      window.addEventListener('beforeunload', this.handlePageLeave);
+    },
+    beforeDestroy() {
+      window.removeEventListener('beforeunload', this.handlePageLeave);
+      this.stopSeckillWatcher();
     },
     methods: {
       goBack() {
@@ -206,30 +220,153 @@
       },
 
       listenSeckillResult(orderId) {
+        const expectedOrderId = String(orderId);
+        this.stopSeckillWatcher();
+        this.seckillPendingOrderId = expectedOrderId;
+
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${location.host}/api/ws/connect?token=${token}`);
-        const timer = setTimeout(() => ws.close(), 8000);
+        let ws;
+        try {
+          ws = new WebSocket(`${protocol}//${location.host}/api/ws/connect?token=${token}`);
+        } catch (e) {
+          this.startSeckillStatusPolling(expectedOrderId);
+          return;
+        }
+        this.seckillSocket = ws;
+        this.seckillSocketTimer = setTimeout(() => {
+          this.startSeckillStatusPolling(expectedOrderId);
+        }, 3000);
 
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'SECKILL_RESULT') {
-              clearTimeout(timer);
-              this.$notify({
-                title: msg.success ? '秒杀成功' : '秒杀失败',
-                message: msg.success
-                  ? ('订单已生成，订单号：' + msg.orderId)
-                  : (msg.message || '库存不足或重复下单'),
-                type: msg.success ? 'success' : 'error',
-                duration: 6000,
-                position: 'top-right'
-              });
-              ws.close();
-            }
+            if (msg.type !== 'SECKILL_RESULT' || String(msg.orderId) !== expectedOrderId) return;
+            this.finishSeckillWatcher(
+              expectedOrderId,
+              msg.success ? 'SUCCESS' : 'FAILED',
+              msg.message
+            );
           } catch (e) {}
         };
-        ws.onclose = () => clearTimeout(timer);
-        ws.onerror = () => clearTimeout(timer);
+        ws.onclose = () => this.startSeckillStatusPolling(expectedOrderId);
+        ws.onerror = () => this.startSeckillStatusPolling(expectedOrderId);
+      },
+
+      startSeckillStatusPolling(orderId) {
+        const expectedOrderId = String(orderId);
+        if (!this.isCurrentSeckillOrder(expectedOrderId) || this.seckillPolling) return;
+
+        this.closeSeckillSocket();
+        this.seckillPolling = true;
+        this.seckillPollAttempts = 0;
+        this.seckillPollDeadlineTimer = setTimeout(() => {
+          this.finishSeckillWatcher(expectedOrderId, 'TIMEOUT');
+        }, 10000);
+        this.pollSeckillStatus(expectedOrderId);
+      },
+
+      pollSeckillStatus(orderId) {
+        if (!this.isCurrentSeckillOrder(orderId)) return;
+        if (this.seckillPollAttempts >= 10) {
+          this.finishSeckillWatcher(orderId, 'TIMEOUT');
+          return;
+        }
+
+        this.seckillPollAttempts++;
+        axios.get('/voucher-order/status/' + encodeURIComponent(orderId))
+          .then(({ data }) => {
+            if (!this.isCurrentSeckillOrder(orderId)) return;
+            const result = data || {};
+            if (String(result.orderId) !== orderId) {
+              this.scheduleSeckillStatusPoll(orderId);
+              return;
+            }
+
+            const status = String(result.status || '').toUpperCase();
+            if (status === 'SUCCESS' || status === 'FAILED') {
+              this.finishSeckillWatcher(orderId, status, result.reason);
+              return;
+            }
+            if (status === 'PROCESSING') {
+              this.scheduleSeckillStatusPoll(orderId);
+              return;
+            }
+            this.scheduleSeckillStatusPoll(orderId);
+          })
+          .catch(() => this.scheduleSeckillStatusPoll(orderId));
+      },
+
+      scheduleSeckillStatusPoll(orderId) {
+        if (!this.isCurrentSeckillOrder(orderId)) return;
+        this.seckillPollTimer = setTimeout(() => this.pollSeckillStatus(orderId), 1000);
+      },
+
+      finishSeckillWatcher(orderId, status, reason) {
+        if (!this.isCurrentSeckillOrder(orderId)) return;
+        this.stopSeckillWatcher();
+
+        if (status === 'TIMEOUT') {
+          this.$notify({
+            title: '订单仍在处理中',
+            message: '暂未获取到最终结果，请稍后在订单中查看',
+            type: 'warning',
+            duration: 6000,
+            position: 'top-right'
+          });
+          return;
+        }
+
+        const success = status === 'SUCCESS';
+        this.$notify({
+          title: success ? '秒杀成功' : '秒杀失败',
+          message: success
+            ? ('订单已生成，订单号：' + orderId)
+            : (reason || '库存不足或重复下单'),
+          type: success ? 'success' : 'error',
+          duration: 6000,
+          position: 'top-right'
+        });
+      },
+
+      isCurrentSeckillOrder(orderId) {
+        return this.seckillPendingOrderId !== null
+          && this.seckillPendingOrderId === String(orderId);
+      },
+
+      closeSeckillSocket() {
+        if (this.seckillSocketTimer) {
+          clearTimeout(this.seckillSocketTimer);
+          this.seckillSocketTimer = null;
+        }
+        if (!this.seckillSocket) return;
+
+        const ws = this.seckillSocket;
+        this.seckillSocket = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      },
+
+      stopSeckillWatcher() {
+        this.closeSeckillSocket();
+        if (this.seckillPollTimer) {
+          clearTimeout(this.seckillPollTimer);
+          this.seckillPollTimer = null;
+        }
+        if (this.seckillPollDeadlineTimer) {
+          clearTimeout(this.seckillPollDeadlineTimer);
+          this.seckillPollDeadlineTimer = null;
+        }
+        this.seckillPolling = false;
+        this.seckillPollAttempts = 0;
+        this.seckillPendingOrderId = null;
+      },
+
+      handlePageLeave() {
+        this.stopSeckillWatcher();
       }
     }
   })

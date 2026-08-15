@@ -27,9 +27,10 @@ public class WebSocketNotifier {
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", "SECKILL_RESULT");
         payload.put("success", success);
-        payload.put("orderId", orderId);
+        // Redis-generated ids exceed JavaScript's safe integer range; keep the wire contract exact.
+        payload.put("orderId", orderId.toString());
         payload.put("voucherId", voucherId);
-        payload.put("message", success ? "秒杀成功，订单已生成" : "库存不足");
+        payload.put("message", success ? "秒杀成功，订单已生成" : "下单失败，预占已释放");
         String json = JSONUtil.toJsonStr(payload);
         // 推送给下单用户
         stringRedisTemplate.convertAndSend(CHANNEL_PREFIX + userId, json);

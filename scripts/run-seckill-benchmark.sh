@@ -7,8 +7,8 @@ OUTPUT_ROOT="$SCRIPT_ROOT"
 
 DATE="$(date +%F)"
 MODULE="seckill"
-IMPL="reliable-stream-v1"
-SCENARIO="seckill-reliable-v1"
+IMPL="rocketmq-reservation-v2"
+SCENARIO="seckill-rocketmq-v2"
 THREADS=100
 LOOPS=1
 RAMP_UP=5
@@ -31,9 +31,6 @@ MYSQL_USER="${MYSQL_USER:-${LOCAL_DEALS_DATASOURCE_USERNAME:-root}}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-${LOCAL_DEALS_DATASOURCE_PASSWORD:-}}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-local_deals}"
 REDIS_PASSWORD="${REDIS_PASSWORD:-${LOCAL_DEALS_REDIS_PASSWORD:-}}"
-STREAM_KEY="stream.orders"
-STREAM_GROUP="g1"
-DEAD_LETTER_KEY="stream.orders.dlq"
 JAVA_HOME="${JAVA_HOME:-/home/sd101t/.jdks/dragonwell-ex-1.8.0_472}"
 MAVEN_CMD="${MAVEN_CMD:-}"
 SKIP_PREPARE=0
@@ -58,13 +55,10 @@ Options:
   --port PORT             Target port for JMeter. Default: 8083
   --tokens-file PATH      Token CSV path. Default: benchmark/tokens.csv
   --jmeter-plan PATH      JMeter plan path. Default: docs/Summary Report.jmx in project-dir.
-  --scenario NAME         Output folder under docs/JmeterTestSummary. Default: seckill-reliable-v1
-  --impl NAME             File-name implementation label. Default: reliable-stream-v1
+  --scenario NAME         Output folder under docs/JmeterTestSummary. Default: seckill-rocketmq-v2
+  --impl NAME             File-name implementation label. Default: rocketmq-reservation-v2
   --project-dir PATH      Project checkout to run Maven/JMeter from. Default: this repo.
   --output-root PATH      Repo root where benchmark artifacts are written. Default: this repo.
-  --stream-key KEY        Redis Stream key. Default: stream.orders
-  --stream-group GROUP    Redis Stream consumer group. Default: g1
-  --dead-letter-key KEY   Redis dead-letter Stream key. Default: stream.orders.dlq
   --mysql-host HOST       MySQL host. Default: localhost (override via MYSQL_HOST or LOCAL_DEALS_MYSQL_HOST in .env)
   --mysql-port PORT       MySQL port. Default: 3306
   --redis-host HOST       Redis host. Default: localhost (override via REDIS_HOST or LOCAL_DEALS_REDIS_HOST in .env)
@@ -108,9 +102,6 @@ while [[ $# -gt 0 ]]; do
     --impl) IMPL="$2"; shift 2 ;;
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
     --output-root) OUTPUT_ROOT="$2"; shift 2 ;;
-    --stream-key) STREAM_KEY="$2"; shift 2 ;;
-    --stream-group) STREAM_GROUP="$2"; shift 2 ;;
-    --dead-letter-key) DEAD_LETTER_KEY="$2"; shift 2 ;;
     --mysql-host) MYSQL_HOST="$2"; shift 2 ;;
     --mysql-port) MYSQL_PORT="$2"; shift 2 ;;
     --redis-host) REDIS_HOST="$2"; shift 2 ;;
@@ -278,14 +269,6 @@ redis_cmd() {
   redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --no-auth-warning "$@" 2>/dev/null
 }
 
-redis_cmd DEL "$DEAD_LETTER_KEY" >/dev/null || true
-retry_keys="$(redis_cmd --raw KEYS 'seckill:stream:retry:*' || true)"
-if [[ -n "$retry_keys" ]]; then
-  while IFS= read -r key; do
-    [[ -n "$key" ]] && redis_cmd DEL "$key" >/dev/null || true
-  done <<< "$retry_keys"
-fi
-
 rm -f "$JTL_FILE" "$SUMMARY_CSV" "$AGGREGATE_CSV"
 if [[ "$SKIP_HTML" -eq 0 ]]; then
   rm -rf "$HTML_REPORT_DIR"
@@ -322,24 +305,47 @@ redis_scalar() {
   redis_cmd --raw "$@" | sed -n '1p'
 }
 
+reservation_status_counts() {
+  local success_count=0
+  local non_success_count=0
+  local reservation_order_ids
+  local reserved_order_id
+  local reserved_status
+  reservation_order_ids="$(redis_cmd --raw HVALS "seckill:reservation:${VOUCHER_ID}" || true)"
+  if [[ -n "$reservation_order_ids" ]]; then
+    while IFS= read -r reserved_order_id; do
+      [[ -z "$reserved_order_id" ]] && continue
+      reserved_status="$(redis_scalar HGET "seckill:order:status:${reserved_order_id}" status)"
+      if [[ "$reserved_status" == "SUCCESS" ]]; then
+        success_count=$((success_count + 1))
+      else
+        non_success_count=$((non_success_count + 1))
+      fi
+    done <<< "$reservation_order_ids"
+  fi
+  printf '%s %s\n' "$success_count" "$non_success_count"
+}
+
 drain_start_ms="$(date +%s%3N)"
 deadline_ms=$((drain_start_ms + DRAIN_TIMEOUT_MS))
 orders=0
-pending=0
+redis_success_count=0
+redis_non_success_count=0
 
 while true; do
   orders="$(mysql_scalar "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID};")"
-  pending="$(redis_scalar XPENDING "$STREAM_KEY" "$STREAM_GROUP")"
   orders="${orders:-0}"
-  pending="${pending:-0}"
 
-  if [[ "$orders" -ge "$EXPECTED_ORDERS" && "$pending" == "0" ]]; then
-    break
+  if [[ "$orders" -ge "$EXPECTED_ORDERS" ]]; then
+    read -r redis_success_count redis_non_success_count <<< "$(reservation_status_counts)"
+    if [[ "$redis_success_count" == "$EXPECTED_ORDERS" && "$redis_non_success_count" == "0" ]]; then
+      break
+    fi
   fi
 
   now_ms="$(date +%s%3N)"
   if (( now_ms >= deadline_ms )); then
-    echo "Timed out waiting for drain: orders=${orders}, expected=${EXPECTED_ORDERS}, pending=${pending}" >&2
+    echo "Timed out waiting for RocketMQ consumers: orders=${orders}, expected=${EXPECTED_ORDERS}, redis_success=${redis_success_count}, redis_non_success=${redis_non_success_count}" >&2
     break
   fi
 
@@ -356,8 +362,9 @@ db_stock="$(mysql_scalar "SELECT stock FROM tb_seckill_voucher WHERE voucher_id 
 duplicate_orders="$(mysql_scalar "SELECT COUNT(*) FROM (SELECT user_id, COUNT(*) AS cnt FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID} GROUP BY user_id HAVING cnt > 1) t;")"
 redis_stock="$(redis_scalar GET "seckill:stock:${VOUCHER_ID}")"
 redis_order_count="$(redis_scalar SCARD "seckill:order:${VOUCHER_ID}")"
-stream_len="$(redis_scalar XLEN "$STREAM_KEY")"
-dead_letter_len="$(redis_scalar XLEN "$DEAD_LETTER_KEY")"
+redis_reservation_count="$(redis_scalar HLEN "seckill:reservation:${VOUCHER_ID}")"
+redis_activity_status="$(redis_scalar HGET "seckill:meta:${VOUCHER_ID}" status)"
+read -r redis_success_count redis_non_success_count <<< "$(reservation_status_counts)"
 RUN_SUMMARY_LINK="${RUN_SUMMARY_REL#docs/}"
 
 python3 - "$JTL_FILE" "$SUMMARY_CSV" "$AGGREGATE_CSV" <<'PY'
@@ -464,18 +471,21 @@ PY
 )"
 
 expected_redis_stock=$((STOCK - EXPECTED_ORDERS))
+expected_db_stock=$((STOCK - EXPECTED_ORDERS))
 correctness="pass"
+if (( samples != TOTAL_REQUESTS )); then correctness="fail"; fi
 if (( orders != EXPECTED_ORDERS )); then correctness="fail"; fi
 if (( duplicate_orders != 0 )); then correctness="fail"; fi
-if (( db_stock < 0 )); then correctness="fail"; fi
-if [[ "$pending" != "0" ]]; then correctness="fail"; fi
-if [[ "${dead_letter_len:-0}" != "0" ]]; then correctness="fail"; fi
+if (( db_stock != expected_db_stock )); then correctness="fail"; fi
 if [[ "$redis_order_count" != "$EXPECTED_ORDERS" ]]; then correctness="fail"; fi
+if [[ "$redis_reservation_count" != "$EXPECTED_ORDERS" ]]; then correctness="fail"; fi
+if [[ "$redis_activity_status" != "ACTIVE" ]]; then correctness="fail"; fi
+if [[ "$redis_success_count" != "$EXPECTED_ORDERS" ]]; then correctness="fail"; fi
+if [[ "$redis_non_success_count" != "0" ]]; then correctness="fail"; fi
 if [[ "$redis_stock" != "$expected_redis_stock" ]]; then correctness="fail"; fi
 
 export DATE RUN_ID SCENARIO THREADS LOOPS STOCK USER_COUNT EXPECTED_ORDERS VOUCHER_ID ROUND
 export IMPLEMENTATION="$IMPL"
-export STREAM_KEY STREAM_GROUP DEAD_LETTER_KEY
 export RAMP_UP_SECONDS="$RAMP_UP"
 export TOTAL_REQUESTS="$TOTAL_REQUESTS"
 export SAMPLES="$samples"
@@ -496,9 +506,10 @@ export MYSQL_STOCK="$db_stock"
 export DUPLICATE_ORDERS="$duplicate_orders"
 export REDIS_STOCK="$redis_stock"
 export REDIS_ORDER_COUNT="$redis_order_count"
-export STREAM_LEN="$stream_len"
-export STREAM_PENDING="$pending"
-export STREAM_DEAD_LETTERS="${dead_letter_len:-0}"
+export REDIS_RESERVATION_COUNT="$redis_reservation_count"
+export REDIS_ACTIVITY_STATUS="$redis_activity_status"
+export REDIS_SUCCESS_COUNT="$redis_success_count"
+export REDIS_NON_SUCCESS_COUNT="$redis_non_success_count"
 export CORRECTNESS="$correctness"
 export METRIC_RUN_SUMMARY="$RUN_SUMMARY_REL"
 export METRIC_JTL_FILE="$JTL_FILE_REL"
@@ -519,8 +530,8 @@ fields = [
     "avg_ms", "median_ms", "p90_ms", "p95_ms", "p99_ms", "min_ms",
     "max_ms", "error_pct", "jmeter_elapsed_ms", "drain_ms",
     "poll_interval_ms", "mysql_orders", "mysql_stock", "duplicate_orders",
-    "redis_stock", "redis_order_count", "stream_key", "stream_group",
-    "stream_len", "stream_pending", "dead_letter_key", "stream_dead_letters",
+    "redis_stock", "redis_order_count", "redis_reservation_count",
+    "redis_activity_status", "redis_success_count", "redis_non_success_count",
     "correctness", "run_summary", "jtl_file", "summary_csv",
     "aggregate_csv", "html_report",
 ]
@@ -550,9 +561,7 @@ cat > "$RUN_SUMMARY" <<EOF
 - scenario: ${SCENARIO}
 - implementation: ${IMPL}
 - voucher_id: ${VOUCHER_ID}
-- stream_key: ${STREAM_KEY}
-- stream_group: ${STREAM_GROUP}
-- dead_letter_key: ${DEAD_LETTER_KEY}
+- message_transport: RocketMQ transaction message
 - stock: ${STOCK}
 - expected_orders: ${EXPECTED_ORDERS}
 - threads: ${THREADS}
@@ -583,9 +592,10 @@ cat > "$RUN_SUMMARY" <<EOF
 - duplicate_orders: ${duplicate_orders}
 - redis_stock: ${redis_stock}
 - redis_order_count: ${redis_order_count}
-- stream_len: ${stream_len}
-- stream_pending: ${pending}
-- stream_dead_letters: ${dead_letter_len:-0}
+- redis_reservation_count: ${redis_reservation_count}
+- redis_activity_status: ${redis_activity_status}
+- redis_success_count: ${redis_success_count}
+- redis_non_success_count: ${redis_non_success_count}
 - correctness: ${correctness}
 - metrics_csv: ${METRICS_CSV_REL}
 - jtl_file: ${JTL_FILE_REL}
@@ -595,7 +605,7 @@ cat > "$RUN_SUMMARY" <<EOF
 
 ## Markdown Row
 
-| ${DATE} | ${IMPL} | ${SCENARIO} | ${THREADS} 线程 / ${LOOPS} 次循环 | ${STOCK} | ${TOTAL_REQUESTS} | ${throughput} | ${p95_ms} / ${p99_ms} | ${drain_ms} | ${orders} / ${EXPECTED_ORDERS} | ${pending} | ${dead_letter_len:-0} | ${correctness} | [run-summary](${RUN_SUMMARY_LINK}) |
+| ${DATE} | ${IMPL} | ${SCENARIO} | ${THREADS} 线程 / ${LOOPS} 次循环 | ${STOCK} | ${TOTAL_REQUESTS} | ${throughput} | ${p95_ms} / ${p99_ms} | ${drain_ms} | ${orders} / ${EXPECTED_ORDERS} | n/a | n/a | ${correctness} | [run-summary](${RUN_SUMMARY_LINK}) |
 EOF
 
 if [[ "$SKIP_HTML" -eq 0 ]]; then
@@ -605,3 +615,8 @@ if [[ "$SKIP_HTML" -eq 0 ]]; then
 fi
 
 cat "$RUN_SUMMARY"
+
+if [[ "$correctness" != "pass" ]]; then
+  echo "Seckill benchmark correctness gate failed; evidence was preserved in ${RUN_SUMMARY}" >&2
+  exit 1
+fi

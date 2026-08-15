@@ -2,13 +2,16 @@ package com.localdeals.mq;
 
 import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.service.IVoucherOrderService;
+import com.localdeals.service.SeckillOrderStateService;
 import com.localdeals.websocket.WebSocketNotifier;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.annotation.DirtiesContext;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -19,11 +22,12 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * End-to-end verification against a REAL RocketMQ broker that the seckill consumer's
  * failure-classification actually drives broker-level redelivery — not just the in-memory
- * decision covered by {@link SeckillOrderConsumerIT}.
+ * decision covered by {@link SeckillOrderConsumerTest}.
  *
  * <ul>
  *   <li><b>Transient failure</b> (generic exception rethrown) → RocketMQ redelivers the
@@ -38,8 +42,10 @@ import static org.mockito.Mockito.verify;
  * message were ever redelivered to the real consumer after this test, it would throw
  * StockExhaustedException (no stock row) and be ACKed — no orphan data.
  */
-@SpringBootTest
+@SpringBootTest(properties =
+        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true")
 @ActiveProfiles("test")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SeckillOrderRetryIT {
 
     @Autowired
@@ -51,7 +57,19 @@ class SeckillOrderRetryIT {
     @MockBean
     private WebSocketNotifier webSocketNotifier;
 
+    @MockBean
+    private SeckillOrderStateService seckillOrderStateService;
+
     private static final String TOPIC = "seckill-order-topic";
+    private static final long RUN_SUFFIX = System.currentTimeMillis() % 1_000_000L;
+    private static final Long TRANSIENT_VOUCHER_ID = 77_000_000L + RUN_SUFFIX;
+    private static final Long PERMANENT_VOUCHER_ID = TRANSIENT_VOUCHER_ID + 1L;
+
+    @BeforeEach
+    void allowExactProcessingReservation() {
+        when(seckillOrderStateService.validateForConsumption(any()))
+                .thenReturn(SeckillOrderStateService.ReservationDecision.PROCESS);
+    }
 
     @Test
     void transientFailure_isRedeliveredByBroker() {
@@ -59,13 +77,15 @@ class SeckillOrderRetryIT {
         doThrow(new RuntimeException("simulated DB timeout"))
                 .when(voucherOrderService).createVoucherOrder(any());
 
-        SeckillOrderMessage msg = new SeckillOrderMessage(77771L, 770001L, 990001L);
+        SeckillOrderMessage msg = new SeckillOrderMessage(
+                TRANSIENT_VOUCHER_ID, 770001L + RUN_SUFFIX, 990001L + RUN_SUFFIX);
         rocketMQTemplate.convertAndSend(TOPIC, msg);
 
         // The real broker must invoke the consumer at least twice (original + >=1 retry)
         // for THIS voucher. First consumer-retry delay is ~10s, so allow 40s.
         verify(voucherOrderService, timeout(40_000).atLeast(2))
-                .createVoucherOrder(argThat(o -> o != null && o.getVoucherId().equals(77771L)));
+                .createVoucherOrder(argThat(o -> o != null &&
+                        o.getVoucherId().equals(TRANSIENT_VOUCHER_ID)));
     }
 
     @Test
@@ -75,13 +95,17 @@ class SeckillOrderRetryIT {
                 .when(voucherOrderService).createVoucherOrder(any());
         doNothing().when(webSocketNotifier).notify(any(), org.mockito.ArgumentMatchers.anyBoolean(), any(), any());
 
-        SeckillOrderMessage msg = new SeckillOrderMessage(77772L, 770002L, 990002L);
+        SeckillOrderMessage msg = new SeckillOrderMessage(
+                PERMANENT_VOUCHER_ID, 770002L + RUN_SUFFIX, 990002L + RUN_SUFFIX);
+        org.mockito.Mockito.when(seckillOrderStateService.compensate(msg, "DB_STOCK_EXHAUSTED"))
+                .thenReturn(true);
         rocketMQTemplate.convertAndSend(TOPIC, msg);
 
         // Wait past the first retry window (~10s) and assert THIS voucher's message was
         // consumed exactly once (matching by voucherId isolates it from any leftover
         // background retry of an unrelated message).
         verify(voucherOrderService, after(15_000).times(1))
-                .createVoucherOrder(argThat(o -> o != null && o.getVoucherId().equals(77772L)));
+                .createVoucherOrder(argThat(o -> o != null &&
+                        o.getVoucherId().equals(PERMANENT_VOUCHER_ID)));
     }
 }

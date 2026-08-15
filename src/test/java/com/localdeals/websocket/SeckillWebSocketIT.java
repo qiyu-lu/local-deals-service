@@ -108,7 +108,7 @@ class SeckillWebSocketIT {
             Mockito.verify(userSession).sendMessage(captor.capture());
             String payload = captor.getValue().getPayload();
             assertThat(payload).contains("\"success\":true");
-            assertThat(payload).contains("\"orderId\":99");
+            assertThat(payload).contains("\"orderId\":\"99\"");
             assertThat(payload).contains("\"voucherId\":10");
             assertThat(payload).contains("SECKILL_RESULT");
         } finally {

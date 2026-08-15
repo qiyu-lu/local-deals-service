@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -29,7 +30,10 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 
 /**
@@ -113,6 +117,7 @@ public class BenchmarkDataTool {
         int stock = stock();
         long voucherId = resolveVoucherId(stock);
 
+        List<Long> previousOrderIds = benchmarkOrderIds(voucherId);
         int deletedOrders = deleteBenchmarkOrders(voucherId);
         jdbcTemplate.update(
                 "UPDATE tb_seckill_voucher " +
@@ -124,7 +129,24 @@ public class BenchmarkDataTool {
         );
 
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucherId, String.valueOf(stock));
-        stringRedisTemplate.delete(Arrays.asList(SECKILL_ORDER_KEY + voucherId, STREAM_KEY, DEAD_LETTER_KEY));
+        stringRedisTemplate.delete(Arrays.asList(
+                SECKILL_ORDER_KEY + voucherId,
+                SECKILL_RESERVATION_KEY + voucherId,
+                SECKILL_META_KEY + voucherId,
+                STREAM_KEY,
+                DEAD_LETTER_KEY));
+        long now = Instant.now().getEpochSecond();
+        Map<String, String> metadata = new LinkedHashMap<>();
+        metadata.put("status", "ACTIVE");
+        metadata.put("beginAt", Long.toString(now - TimeUnit.DAYS.toSeconds(1)));
+        metadata.put("endAt", Long.toString(now + TimeUnit.DAYS.toSeconds(1)));
+        stringRedisTemplate.opsForHash().putAll(SECKILL_META_KEY + voucherId, metadata);
+        if (!previousOrderIds.isEmpty()) {
+            java.util.List<String> statusKeys = previousOrderIds.stream()
+                    .map(id -> SECKILL_ORDER_STATUS_KEY + id)
+                    .collect(java.util.stream.Collectors.toList());
+            stringRedisTemplate.delete(statusKeys);
+        }
         Set<String> retryKeys = stringRedisTemplate.keys(RETRY_KEY_PATTERN);
         if (retryKeys != null && !retryKeys.isEmpty()) {
             stringRedisTemplate.delete(retryKeys);
@@ -215,6 +237,17 @@ public class BenchmarkDataTool {
                 "DELETE vo FROM tb_voucher_order vo " +
                         "INNER JOIN tb_user u ON vo.user_id = u.id " +
                         "WHERE vo.voucher_id = ? AND u.phone LIKE ?",
+                voucherId,
+                phonePrefix() + "%"
+        );
+    }
+
+    private List<Long> benchmarkOrderIds(long voucherId) {
+        return jdbcTemplate.queryForList(
+                "SELECT vo.id FROM tb_voucher_order vo " +
+                        "INNER JOIN tb_user u ON vo.user_id = u.id " +
+                        "WHERE vo.voucher_id = ? AND u.phone LIKE ?",
+                Long.class,
                 voucherId,
                 phonePrefix() + "%"
         );

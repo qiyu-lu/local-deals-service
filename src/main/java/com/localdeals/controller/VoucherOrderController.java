@@ -4,6 +4,7 @@ package com.localdeals.controller;
 import com.localdeals.dto.Result;
 import com.localdeals.service.IVoucherOrderService;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,5 +29,10 @@ public class VoucherOrderController {
     public Result seckillVoucher(@PathVariable("id") Long voucherId) {
         return voucherOrderService.seckillVoucher(voucherId);
         //return Result.fail("功能未完成");
+    }
+
+    @GetMapping("/status/{orderId}")
+    public Result querySeckillOrderStatus(@PathVariable("orderId") Long orderId) {
+        return voucherOrderService.querySeckillOrderStatus(orderId);
     }
 }

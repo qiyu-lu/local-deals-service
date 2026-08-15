@@ -2,13 +2,13 @@
 
 > GitHub repo: `local-deals-service` | 基于黑马点评教程改造，涵盖秒杀可靠性增强、Elasticsearch 搜索、RocketMQ 事务消息、Canal 数据同步、WebSocket 实时推送
 
-基于黑马点评教程原型改造的高并发优惠券秒杀后端系统。在教程原型基础上分两阶段演进：第一阶段对 Redis Stream 异步下单链路做可靠性增强，补齐 DB 层一人一单兜底、pending 消息重试上限和 dead-letter Stream，并搭建 JMeter 自动化压测与故障注入验证体系；第二阶段引入 ES + RocketMQ + Canal + WebSocket，升级搜索能力、消息中间件和实时推送。
+基于黑马点评教程原型改造的高并发本地生活平台。项目先用 Redis Stream 完成可靠性对比实验，随后迁移到 Elasticsearch + RocketMQ + Canal + WebSocket；当前阶段继续补齐访问边界、秒杀精确预约、失败补偿和可查询回执。历史 Stream 实验与结果仍保留为演进证据，但当前正式下单链路使用 RocketMQ 事务消息。
 
 ## 相比教程原型的核心优势
 
-本项目不是把秒杀链路包装成“吞吐性能大幅提升”，而是将原始 Redis Stream 异步下单链路改造成更接近生产场景的可靠消费链路。当前证据显示：正常压测下业务正确性不退化，异步落库追平耗时保持同量级；异常消息场景下，原始版本会留下 pending 残留，当前版本可以有限重试后进入 dead-letter Stream 并清空 pending。
+本项目不把秒杀改造包装成未经验证的“吞吐性能大幅提升”。2026-05-20 的历史对比只证明 Stream 可靠性增强没有破坏正常链路，并能闭环异常 pending；当前 RocketMQ 版本则重点解决预约与消息的精确对应、Redis/MySQL 失败补偿、状态可恢复查询和安全边界。两组证据分开记录，避免把旧基准误当成当前架构的性能结论。
 
-| 对比项 | 教程原型 / baseline | 当前版本 `reliable-stream-v1` | 优势结论 |
+| 对比项 | 教程原型 / baseline | 阶段一 `reliable-stream-v1`（历史实验） | 优势结论 |
 | --- | --- | --- | --- |
 | 正常秒杀压测 | 1000/5000 并发请求下订单正确、pending 清空 | 同样订单正确、pending 清空，`drain_ms` 与 baseline 同量级 | 增加可靠性机制后，正常链路正确性不退化 |
 | 异常 Stream 消息 | 缺少 `orderId` 的消息残留 pending，DLQ 为空 | 重试 3 次后写入 `stream.orders.dlq`，pending 清空 | 补齐异常消费闭环，问题可追踪、可恢复 |
@@ -21,16 +21,18 @@
 | 教程原型中的边界 | 当前改造 | 证据 |
 | --- | --- | --- |
 | 搜索只有 MySQL LIKE%，不支持分词和地理位置组合查询 | Elasticsearch 7.17.18 + IK 分词器；`GET /shop/search?keyword=火锅&x=120.15&y=30.33&radius=5000` 单次请求同时做 IK 分词、geo 过滤、相关性排序 | `ShopSearchBeforeIT`（基线）vs `ShopSearchAfterIT`（ES 验证）；`docs/improvement-comparison.md` |
-| 秒杀异步消息用 Redis Stream，Lua 操作与 XADD 不是原子的，丢消息无法保证 | RocketMQ 事务消息：半消息 → executeLocalTransaction 运行 Lua → COMMIT/ROLLBACK，Lua 操作与消息发送原子绑定；磁盘持久化，Broker 重启不丢 | `SeckillWithRocketMQIT`（500 并发 / 100 库存 / 0 超卖验证） |
+| 秒杀异步消息用 Redis Stream，库存预占与消息投递缺少事务绑定 | RocketMQ 事务消息：半消息 → 本地 Lua 预占 → COMMIT/ROLLBACK；Broker 回查必须同时匹配 `userId → orderId` 精确预约和订单状态所有权，避免仅凭“用户买过”误提交另一条半消息 | `SeckillOrderProducerTest`、`SeckillLuaScriptContractTest`、`SeckillWithRocketMQIT` |
+| Redis 预扣成功但 DB 永久失败时直接 ACK，库存和一人一单状态无法恢复 | 消费者写 MySQL 前先用只读 Lua 校验 exact `PROCESSING` 预约；缺失、错属或畸形消息不落库并重试至 DLQ。消费成功后原子标记 `SUCCESS`；DB 库存耗尽或订单冲突时先暂停活动，再按 orderId 精确、幂等补偿库存并标记 `FAILED` | `SeckillOrderStateIT`、`SeckillOrderConsumerTest`、`VoucherOrderReliabilityIT` |
+| 新活动才写 Redis 元数据，升级后存量活动会被 fail-closed 拒绝 | 启动时从 MySQL 幂等回填存量券；库存只在 key 不存在时初始化，活动字段只补缺失值，不覆盖实时预扣或 `SUSPENDED` | `SeckillVoucherRedisInitializerTest`、`SeckillVoucherRedisInitializerIT` |
 | MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
-| 秒杀结果无实时通知，用户只能轮询 | WebSocket + Redis pub/sub：落库后毫秒级推送，多实例部署下 Redis 广播保证消息路由到持有连接的实例 | `SeckillWebSocketIT`（Awaitility 3s 内断言 WebSocket sendMessage 被调用） |
+| 秒杀结果只依赖单次实时通知，断线或跨实例异常后用户无法确认结果 | WebSocket + Redis pub/sub 作为快速通知，`GET /voucher-order/status/{orderId}` 作为用户隔离的持久兜底；前端超时后有限轮询，64 位订单 ID 全链路按字符串传输 | `WebSocketNotifierTest`、`SeckillWebSocketIT`、`VoucherOrderServiceImplTest` |
 | 商铺、优惠券写接口匿名可调用，管理广播对普通用户可见 | 写接口改为“登录 + 临时管理员白名单”双重校验；用户回执与管理广播使用独立 WebSocket 端点和会话池；发送前复核 token，退出或过期立即失去推送权限 | `LoginInterceptorTest`、`AdminAccessInterceptorTest`、`WebSocketSessionIsolationTest` |
 | 验证码可重复使用、可在有效期内无限猜测 | Redis Lua 原子完成 60 秒发送冷却、一次性消费和每个验证码最多 5 次失败尝试；日志默认不输出验证码 | `UserServiceImplTest`、`UserServiceIT` |
 | 上传目录硬编码，删除接口可路径穿越或跨用户删除 | 上传根目录与 5 MB 上限配置化，校验扩展名/MIME/文件头；`tb_upload_file` 记录归属及 TEMP/DELETING/PUBLISHED 状态，只允许上传者删除未发布图片 | `UploadControllerTest`、`UploadFileServiceIT`、Flyway V3/V4 |
 | 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
 | Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream（第一阶段可靠性增强，已由 RocketMQ 内置 DLQ 取代） | `stream.orders.dlq`、`docs/reliability-results.md` |
-| 压测容易只看 HTTP Error%，无法证明业务正确性 | 自动化脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、Stream pending 和 dead-letter | `scripts/run-seckill-benchmark.sh`、`docs/benchmark-results.md` |
-| 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露请求、消费、重试、死信、pending、DB 幂等等指标 | `/actuator/prometheus` |
+| 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态和活动状态；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
+| 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露秒杀请求分流、MQ 消费结果、DB 幂等与库存回滚等指标 | `/actuator/prometheus` |
 
 
 ## 前端
@@ -76,7 +78,7 @@
 
 ### 测试理念
 
-集成测试直连真实 MySQL 和 Redis，不使用 Mock，确保测试行为与生产路径完全一致。所有 Bug 修复均遵循 TDD 顺序：先写能复现问题的失败测试，确认失败后再修复，修复后测试变绿。测试本身即是对修复正确性的活文档。
+测试按风险分层：纯单元测试验证分支和协议契约；真实 Redis/MySQL 测试验证 Lua 原子状态与数据库事务；真实 RocketMQ 测试验证事务消息和重投递。只在隔离非目标外部副作用时使用 Mock，并明确测试边界，不把 Mock 测试描述成完整端到端证据。
 
 ### Bug → 测试 → 修复 对照表
 
@@ -99,11 +101,15 @@
 | `ShopServiceIT` | Service 层 | 缓存缺失→查 DB→写缓存；布隆过滤器拦截无效 ID；updateShop 清除缓存 key |
 | `ShopSearchBeforeIT` | 搜索基线 | MySQL LIKE% 搜索结果数和耗时（before 对比数据） |
 | `ShopSearchAfterIT` | ES 搜索 | IK 分词 + geo-distance 组合查询；结果与 before 对比 |
-| `SeckillWithRocketMQIT` | MQ 秒杀 | 500 并发 / 100 库存：RocketMQ 事务消息无超卖，恰好 100 单 |
+| `SeckillWithRocketMQIT` | MQ 秒杀 | 500 并发 / 100 库存：恰好 100 个预约经真实 RocketMQ 收敛为 `SUCCESS`；DB 写入在本测试中隔离为 Mock |
+| `SeckillOrderStateIT` | Redis 状态机 | 精确预约成功、失败补偿及重复补偿幂等 |
+| `VoucherOrderReliabilityIT` | MySQL 事务 | 库存不足回滚、同订单重放幂等、不同订单号冲突 |
+| `SeckillVoucherRedisInitializerIT` | 升级兼容 | 存量活动回填且不覆盖实时库存、暂停状态和已有时间 |
 | `CanalSyncIT` | Canal 同步 | 直接调用 `EsSyncConsumer.onMessage(json)`；验证 INSERT/UPDATE/DELETE 三种操作同步到 ES |
 | `SeckillWebSocketIT` | WebSocket | Awaitility 3s 内断言 mock session.sendMessage() 被调用，消息含 `"success":true` |
 
-运行所有集成测试（需要 MySQL、Redis、Elasticsearch 在本地运行）：
+运行所有集成测试（需要 MySQL、Redis、Elasticsearch、RocketMQ NameServer/Broker
+在本地运行，并预先创建 `seckill-order-topic`）：
 
 ```bash
 set -a && source .env && set +a
@@ -137,7 +143,11 @@ set -a && source .env && set +a
 
 当前管理员 ID 白名单是数据库 RBAC 上线前的过渡边界：它同时保护商铺/优惠券管理写接口和管理端 WebSocket，并在配置为空时默认拒绝。图片上传记录由 Flyway 创建的 `tb_upload_file` 管理；笔记发布会在同一数据库事务中把图片从 `TEMP` 转为 `PUBLISHED`，已发布图片不能再通过临时删除接口移除。
 
+应用启动时会校验并回填所有存量秒杀券的 Redis 活动元数据。回填不会覆盖已经存在的 Redis 库存或暂停状态；若数据库记录非法、数据库不可读或 Redis 回填失败，应用会拒绝启动，修复依赖或数据后可安全重试。
+
 **启动 MySQL 和 Redis**（二选一）：
+
+当前秒杀 Lua 会同时访问库存、活动、预约和订单状态多个 Key，部署契约是单机 Redis 或 Sentinel（共享同一主节点）；尚未支持 Redis Cluster。若迁移到 Cluster，需要先把同一秒杀活动的相关 Key 统一为相同 hash-tag，并迁移旧数据，不能直接切换。
 
 ```bash
 # 方式 A：Docker Compose（推荐，开箱即用）
@@ -161,13 +171,43 @@ scripts/run-seckill-benchmark.sh \
   --stock 100 \
   --user-count 1000
 # MySQL/Redis 连接参数从 .env 中的 LOCAL_DEALS_* 自动读取，无需额外指定容器名
-# 压测结束后自动校验 MySQL 订单数、Redis 库存、Stream pending，并输出 P95/P99
+# 压测结束后自动校验 MySQL 订单、Redis 库存/预约/活动状态，并输出 P95/P99
 
-# 4. （可选）故障注入验证——向 Redis Stream 注入缺少 orderId 的畸形消息
-# 额外需要：redis-cli 在 PATH 中
-scripts/run-seckill-reliability-check.sh --expect current
-# 预期结果：消息经 3 次重试后写入死信 Stream，pending 清空
+# 4. （可选）当前 RocketMQ 重投递验证；需要本地 NameServer 与 Broker
+mvn -Dtest=SeckillOrderRetryIT test
+# 历史 Redis Stream 故障注入结果保留在 docs/reliability-results.md，不作为当前链路验收命令
 ```
+
+生产和联调环境应在应用启动前通过 Dashboard 或 `mqadmin updateTopic` 预创建
+`seckill-order-topic`，不要依赖首个下单请求自动建 Topic。消费者在尚无 offset 时从
+Topic 起点消费，避免空 Broker 冷启动期间已经提交的首批事务消息被跳过；已有消费组
+offset 不受影响。
+
+### 从旧版秒杀消息契约升级
+
+本阶段把旧版的“库存 + 用户 Set”预占升级为带 `orderId` 的精确 reservation/status。
+旧消息无法反推出可信的 orderId，因此**禁止旧版与本版滚动混跑，也禁止让本版消费者
+直接接管尚未排空的旧消息**。发布必须执行以下门禁：
+
+1. 在网关或上游关闭 `POST /voucher-order/seckill/**`，确认不再产生新秒杀请求。
+2. 保持旧版实例运行，用 Dashboard 或下列命令确认旧消费者组 `diffTotal=0`：
+
+   ```bash
+   "$ROCKETMQ_HOME/bin/mqadmin" consumerProgress \
+     -n "$ROCKETMQ_NAMESRV_ADDR" \
+     -g seckill-consumer-group
+   ```
+
+3. 继续保留旧版事务生产者的回查能力，按当前 Broker 的事务检查配置等待并确认没有待决
+   half message；这一项必须从 Dashboard/Broker 配置核实，不能只用 consumer lag 代替。
+4. 按活动逐一核对旧 Redis `seckill:order:{voucherId}` 人数与 MySQL 已落订单，异常先人工
+   对账，不能靠新版 initializer 猜测缺失的 orderId。
+5. 停止全部旧实例后再部署本版；启动回填成功后做一笔冒烟下单，必须同时看到精确
+   reservation、`SUCCESS` 状态、MySQL 订单和两侧库存一致，才恢复入口流量。
+
+如果业务不允许停写，应先实现并预创建独立的 v2 Topic、消费者组和事务生产者组，让旧
+链路完全排空后再下线。当前代码没有提供这条双轨发布能力，因此不能把普通滚动发布当成
+安全方案。
 
 ## 技术栈
 
@@ -177,7 +217,7 @@ scripts/run-seckill-reliability-check.sh --expect current
 - Redis 6 / Redis Stream / Redis GEO / Bitmap / Redis pub/sub
 - Redisson（分布式锁）
 - Elasticsearch 7.17.18 + IK 分词器（`ik_max_word` 索引 / `ik_smart` 搜索）+ geo_point
-- RocketMQ 4.x client（事务消息、`@RocketMQTransactionListener`）
+- RocketMQ client 5.0.0 / Broker 5.2.0（事务消息、`@RocketMQTransactionListener`）
 - Canal Server 1.1.7（binlog 解析，FlatMessage → RocketMQ）
 - WebSocket（`TextWebSocketHandler`，Redis pub/sub 多实例路由）
 - Actuator / Micrometer / Prometheus
@@ -192,10 +232,29 @@ scripts/run-seckill-reliability-check.sh --expect current
 
 - 登录态：验证码登录后将用户信息写入 Redis Hash，拦截器从 `authorization` 请求头恢复 `UserHolder`。
 - 商铺缓存：商铺详情查询结合 Redis 缓存、空值缓存和布隆过滤器，降低无效请求对数据库的压力。
-- 优惠券秒杀：Lua 脚本在 Redis 中原子完成库存判断、一人一单判断和订单消息入队，后台消费者批量消费 Redis Stream 后落库。
-- 可靠性增强：Flyway 管理表结构迁移，`tb_voucher_order(user_id, voucher_id)` 唯一索引作为一人一单最终兜底；pending 消息有重试上限和死信 Stream。
-- 可观测性：暴露秒杀请求、Stream 消费、pending、死信、落库幂等等 Prometheus 指标。
+- 优惠券秒杀：RocketMQ 事务消息把半消息与 Redis Lua 原子预占绑定；Lua 使用 Redis 服务端时间校验活动窗口，并记录精确 reservation 与 `PROCESSING` 状态。
+- 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
+- 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
+- 可观测性：暴露秒杀请求分流、MQ 消费结果、DB 重复与库存回滚等 Prometheus 指标。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
+
+### 已知限制：超龄 PROCESSING
+
+当前版本还没有自动处理“Redis 已预占、消息最终进入 DLQ、MySQL 从未落单”的复合故障。
+`PROCESSING` 状态保留 7 天，但库存、用户 Set 和 reservation 不随它过期；如果不处置，状态
+过期后仍会占住库存并阻止该用户重试。因此当前不能把这一分支宣称为自动闭环。
+
+上线后必须同时告警 `%DLQ%seckill-consumer-group`、MQ 消费失败指标和超龄
+`PROCESSING`（建议在远小于 7 天的阈值开始告警）。处置时先按 orderId 核对 MySQL：
+
+- 已存在完全匹配的订单：修复故障后重投原消息，依靠 DB 幂等路径把 Redis 收敛为
+  `SUCCESS`。
+- 不存在订单：只有在确认事务 half message、普通重投和 DLQ 消息均不会再并发投递后，
+  才能执行 exact compensation；禁止直接删除 Set/Hash 或手工加库存。
+- 所有权字段错属或无法证明消息归属：保持隔离并人工对账，不得绕过消费前校验强行落库。
+
+后续阶段应增加持久的 PROCESSING 索引与定时 reconciler（DB 有单转 `SUCCESS`；DB 无单且
+确认消息生命周期结束后精确补偿），再移除这项运维限制。
 
 ## 文档
 

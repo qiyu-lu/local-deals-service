@@ -1,39 +1,87 @@
 --[[
-秒杀下单检查 Lua 脚本（RocketMQ 事务消息版）
+Atomic seckill admission used by the RocketMQ local transaction.
 
-功能：
-1. 判断库存是否充足
-2. 判断用户是否已抢过
-3. 扣减库存并记录用户
-（不再发送 Stream 消息，订单消息改由 RocketMQ 事务消息承载）
+KEYS[1] stock String                    seckill:stock:{voucherId}
+KEYS[2] legacy purchased-user Set       seckill:order:{voucherId}
+KEYS[3] activity metadata Hash          seckill:meta:{voucherId}
+KEYS[4] exact reservation Hash          seckill:reservation:{voucherId}
+KEYS[5] order status Hash               seckill:order:status:{orderId}
 
-参数说明：
-KEYS[1] - 库存 key，例如：seckill:stock:17
-KEYS[2] - 订单用户集合 key，例如：seckill:order:17
+ARGV[1] userId
+ARGV[2] voucherId
+ARGV[3] orderId (kept as a string; never convert a 64-bit ID to a Lua number)
+ARGV[4] order-status TTL in seconds
 
-ARGV[1] - 用户 ID
-ARGV[2] - 优惠券 ID
-ARGV[3] - 订单 ID
-
-返回值：
-0 - 秒杀成功
-1 - 库存不足
-2 - 用户已抢过
+Return codes (0/1/2 retain the original public contract):
+0 accepted
+1 out of stock
+2 duplicate purchase
+3 activity has not started
+4 activity ended or is not ACTIVE
+5 activity metadata is absent or invalid
 ]]
 
 local stockKey = KEYS[1]
-local orderKey = KEYS[2]
-local userId = ARGV[1]
+local legacyOrderKey = KEYS[2]
+local metaKey = KEYS[3]
+local reservationKey = KEYS[4]
+local orderStatusKey = KEYS[5]
 
-local stock = tonumber(redis.call('get', stockKey))
+local userId = ARGV[1]
+local voucherId = ARGV[2]
+local orderId = ARGV[3]
+local statusTtlSeconds = tonumber(ARGV[4])
+
+local meta = redis.call('HMGET', metaKey, 'status', 'beginAt', 'endAt')
+local activityStatus = meta[1]
+local beginAt = tonumber(meta[2])
+local endAt = tonumber(meta[3])
+if not activityStatus or not beginAt or not endAt or beginAt > endAt then
+    return 5
+end
+
+if activityStatus ~= 'ACTIVE' then
+    return 4
+end
+
+-- Redis server time is shared by every application instance.
+local redisTime = redis.call('TIME')
+local now = tonumber(redisTime[1])
+if now < beginAt then
+    return 3
+end
+if now > endAt then
+    return 4
+end
+
+local stock = tonumber(redis.call('GET', stockKey))
 if not stock or stock <= 0 then
     return 1
 end
 
-if redis.call('sismember', orderKey, userId) == 1 then
+-- The old Set remains authoritative for pre-migration purchases. New admissions also
+-- write an exact userId -> orderId reservation so transaction checks cannot commit a
+-- different half-message merely because the user bought this voucher before.
+if redis.call('SISMEMBER', legacyOrderKey, userId) == 1 then
+    return 2
+end
+if redis.call('HEXISTS', reservationKey, userId) == 1 then
     return 2
 end
 
-redis.call('decr', stockKey)
-redis.call('sadd', orderKey, userId)
+redis.call('DECR', stockKey)
+redis.call('SADD', legacyOrderKey, userId)
+redis.call('HSET', reservationKey, userId, orderId)
+redis.call('HSET', orderStatusKey,
+        'status', 'PROCESSING',
+        'orderId', orderId,
+        'userId', userId,
+        'voucherId', voucherId,
+        'reason', '',
+        'createdAt', tostring(now),
+        'updatedAt', tostring(now))
+if statusTtlSeconds and statusTtlSeconds > 0 then
+    redis.call('EXPIRE', orderStatusKey, statusTtlSeconds)
+end
+
 return 0

@@ -2,6 +2,7 @@ package com.localdeals.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.localdeals.entity.VoucherOrder;
+import com.localdeals.exception.OrderReservationConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,8 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <ul>
  *   <li>Stock exhaustion → StockExhaustedException AND the order insert is rolled back
  *       by {@code @Transactional} (no orphan order row survives).</li>
- *   <li>Duplicate (user, voucher) → unique-index violation is swallowed (idempotent),
- *       no exception propagates and stock is NOT decremented.</li>
+ *   <li>Same-order replay is idempotent, while a different Redis order id for an existing
+ *       (user, voucher) purchase is a permanent reservation conflict.</li>
  * </ul>
  * Uses seckill voucher id=10 whose DB stock is kept at 0 for this test.
  */
@@ -39,9 +40,12 @@ class VoucherOrderReliabilityIT {
     private static final Long ORDER_ID = 999000001L;
     private static final Long DUP_ORDER_ID_1 = 999000002L;
     private static final Long DUP_ORDER_ID_2 = 999000003L;
+    private Integer originalStock;
 
     @BeforeEach
     void setup() {
+        originalStock = seckillVoucherService.query()
+                .eq("voucher_id", VOUCHER_ID).one().getStock();
         // Force DB stock to 0 so the stock-guard update matches 0 rows.
         seckillVoucherService.update().setSql("stock = 0").eq("voucher_id", VOUCHER_ID).update();
         clearTestOrders();
@@ -50,6 +54,12 @@ class VoucherOrderReliabilityIT {
     @AfterEach
     void cleanup() {
         clearTestOrders();
+        if (originalStock != null) {
+            seckillVoucherService.update()
+                    .set("stock", originalStock)
+                    .eq("voucher_id", VOUCHER_ID)
+                    .update();
+        }
     }
 
     private void clearTestOrders() {
@@ -73,7 +83,7 @@ class VoucherOrderReliabilityIT {
     }
 
     @Test
-    void createVoucherOrder_duplicateUserVoucher_swallowedAndStockUnchanged() {
+    void createVoucherOrder_replayIsIdempotentButDifferentOrderIdIsRejected() {
         // Seed one order for (USER_ID, VOUCHER_ID).
         VoucherOrder first = new VoucherOrder();
         first.setId(DUP_ORDER_ID_1);
@@ -84,16 +94,19 @@ class VoucherOrderReliabilityIT {
         long stockBefore = seckillVoucherService.query()
                 .eq("voucher_id", VOUCHER_ID).one().getStock();
 
-        // Second insert with same (user, voucher) hits the unique index.
+        // Replaying the exact same message is idempotent and does not decrement stock again.
+        assertThatCode(() -> voucherOrderService.createVoucherOrder(first))
+                .doesNotThrowAnyException();
+
+        // A different Redis order id for the same purchase is not the same operation.
         VoucherOrder duplicate = new VoucherOrder();
         duplicate.setId(DUP_ORDER_ID_2);
         duplicate.setUserId(USER_ID);
         duplicate.setVoucherId(VOUCHER_ID);
 
-        // DuplicateKeyException is caught inside createVoucherOrder → no exception propagates,
-        // and the method returns BEFORE the stock decrement.
-        assertThatCode(() -> voucherOrderService.createVoucherOrder(duplicate))
-                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> voucherOrderService.createVoucherOrder(duplicate))
+                .isInstanceOf(OrderReservationConflictException.class)
+                .hasMessageContaining("persistedOrderId=" + DUP_ORDER_ID_1);
 
         // The duplicate must not have been persisted.
         assertThat(voucherOrderService.getById(DUP_ORDER_ID_2)).isNull();

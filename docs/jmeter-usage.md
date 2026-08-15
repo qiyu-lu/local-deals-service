@@ -191,7 +191,7 @@ Add -> Listener -> Aggregate Report
 mvn -Dtest=BenchmarkDataTool#prepareBenchmarkUsersAndTokens test
 ```
 
-2. 重置秒杀库存、订单、Redis key 和 Stream：
+2. 重置秒杀库存、订单、活动元数据、精确预约与订单状态 key：
 
 ```bash
 mvn -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData test
@@ -206,13 +206,13 @@ mvn -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData test
 Summary Report 导出文件建议命名：
 
 ```text
-docs/JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-100t-1l-summary-r1.csv
+docs/JmeterTestSummary/seckill-rocketmq-v2/2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-summary-r1.csv
 ```
 
 Aggregate Report 导出文件建议命名：
 
 ```text
-docs/JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-100t-1l-aggregate-r1.csv
+docs/JmeterTestSummary/seckill-rocketmq-v2/2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-aggregate-r1.csv
 ```
 
 命名规则：
@@ -224,9 +224,9 @@ YYYY-MM-DD-模块-实现版本-并发数t-循环数l-报告类型-r轮次.csv
 例如：
 
 ```text
-2026-05-19-seckill-reliable-stream-v1-100t-1l-summary-r1.csv
-2026-05-19-seckill-reliable-stream-v1-100t-1l-aggregate-r1.csv
-2026-05-19-seckill-reliable-stream-v1-5000t-5l-aggregate-r1.csv
+2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-summary-r1.csv
+2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-aggregate-r1.csv
+2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-aggregate-r1.csv
 ```
 
 其中：
@@ -256,7 +256,10 @@ scripts/run-seckill-benchmark.sh \
   --user-count 1000
 ```
 
-运行前需要保证后端服务、MySQL 和 Redis 已经启动，并在 `.env` 中配置好 `LOCAL_DEALS_*` 连接参数。脚本会自动从环境变量读取主机和端口，无需传入容器名。
+运行前需要保证 MySQL、Redis、RocketMQ NameServer 与 Broker 已经启动，
+`seckill-order-topic` 已通过 Dashboard 或 `mqadmin updateTopic` 预创建，然后再启动后端服务；
+不要把首个压测请求当作建 Topic 的手段。还需在 `.env` 中配置好 `LOCAL_DEALS_*`
+连接参数。脚本会自动从环境变量读取数据库与 Redis 主机和端口，无需传入容器名。
 
 脚本默认会使用 `/home/sd101t/.jdks/dragonwell-ex-1.8.0_472` 作为 `JAVA_HOME`。如果终端找不到 `mvn`，脚本会自动尝试 IDEA 内置 Maven：`/opt/idea/plugins/maven/lib/maven3/bin/mvn`。也可以显式指定：
 
@@ -273,10 +276,10 @@ scripts/run-seckill-benchmark.sh \
 脚本会自动完成：
 
 - 使用 `BenchmarkDataTool` 生成测试用户和 Redis token。
-- 重置秒杀券库存、订单、Redis 库存 key、已购集合、Stream、dead-letter 和重试计数。
+- 重置秒杀券库存、订单、Redis 库存、活动元数据、兼容 Set、精确 reservation Hash 与旧订单状态。
 - 通过命令行 JMeter 运行 `docs/Summary Report.jmx`。
 - 生成 JTL 原始文件、HTML Dashboard、Summary CSV 和 Aggregate CSV。
-- JMeter 结束后立即轮询 Docker 中的 MySQL 和 Redis，记录异步落库追平耗时 `drain_ms`。
+- JMeter 结束后轮询 MySQL 订单与 Redis `SUCCESS` 终态，记录异步落库和状态收敛耗时 `drain_ms`。
 - 输出机器可读总表：`docs/JmeterTestSummary/<场景名>/metrics.csv`。
 - 输出单轮证据快照：`docs/JmeterTestSummary/<场景名>/<run_id>-run-summary.md`。
 
@@ -291,9 +294,6 @@ scripts/run-seckill-benchmark.sh \
 | `--expected-orders` | 预期最终订单数；不传时默认取 `stock`、请求数、用户数的最小值 | `1000` |
 | `--voucher-id` | 指定秒杀券 id；不传时自动创建或复用 benchmark 秒杀券 | `10` |
 | `--round` | 同一场景的轮次；不传时自动使用当天同场景下一个可用轮次 | `1` |
-| `--stream-key` | Redis Stream key | `stream.orders` |
-| `--stream-group` | Redis Stream consumer group | `g1` |
-| `--dead-letter-key` | Redis dead-letter Stream key | `stream.orders.dlq` |
 | `--mysql-host` | MySQL 主机名（默认读取 `LOCAL_DEALS_DATASOURCE_URL`） | `localhost` |
 | `--mysql-port` | MySQL 端口 | `3306` |
 | `--redis-host` | Redis 主机名（默认读取 `LOCAL_DEALS_REDIS_HOST`） | `localhost` |
@@ -307,15 +307,15 @@ scripts/run-seckill-benchmark.sh \
 输出文件命名示例：
 
 ```text
-benchmark/2026-05-19-seckill-reliable-stream-v1-5000t-5l-r1.jtl
-benchmark/report-2026-05-19-seckill-reliable-stream-v1-5000t-5l-r1/
-docs/JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-5000t-5l-summary-r1.csv
-docs/JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-5000t-5l-aggregate-r1.csv
-docs/JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-5000t-5l-r1-run-summary.md
-docs/JmeterTestSummary/seckill-reliable-v1/metrics.csv
+benchmark/2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-r1.jtl
+benchmark/report-2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-r1/
+docs/JmeterTestSummary/seckill-rocketmq-v2/2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-summary-r1.csv
+docs/JmeterTestSummary/seckill-rocketmq-v2/2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-aggregate-r1.csv
+docs/JmeterTestSummary/seckill-rocketmq-v2/2026-08-15-seckill-rocketmq-reservation-v2-5000t-5l-r1-run-summary.md
+docs/JmeterTestSummary/seckill-rocketmq-v2/metrics.csv
 ```
 
-`drain_ms` 的含义是：JMeter 进程结束后，到 MySQL 订单数达到预期值且 Redis Stream pending-list 清空之间的耗时。它不等同于接口响应时间，而是衡量异步消费者追平消息积压的指标。改造版还会校验 `stream.orders.dlq` 长度，dead-letter 非 0 时本轮结果判定为失败。
+`drain_ms` 的含义是：JMeter 进程结束后，到 MySQL 订单数达到预期且对应 Redis 订单状态全部收敛为 `SUCCESS` 之间的耗时。它不等同于接口响应时间。脚本还会校验 DB 无超卖/重复订单，以及 Redis 库存、兼容 Set、精确 reservation Hash 和活动状态；RocketMQ 消费堆积与 DLQ 需要通过 Dashboard 或运维指标单独观察。
 
 `summary.csv` 和 `aggregate.csv` 是 JMeter 派生结果，保留作原始证据；日常阅读优先看 `metrics.csv`、`run-summary.md` 和 `docs/benchmark-results.md` 的总表。
 
@@ -331,12 +331,12 @@ jmeter -n -t "docs/Summary Report.jmx" -l benchmark/seckill-smoke.jtl
 生成 HTML Dashboard：
 
 ```bash
-rm -rf benchmark/report-2026-05-19-seckill-reliable-stream-v1-100t-1l-r1
+rm -rf benchmark/report-2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-r1
 jmeter -n \
   -t "docs/Summary Report.jmx" \
-  -l benchmark/2026-05-19-seckill-reliable-stream-v1-100t-1l-r1.jtl \
+  -l benchmark/2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-r1.jtl \
   -e \
-  -o benchmark/report-2026-05-19-seckill-reliable-stream-v1-100t-1l-r1
+  -o benchmark/report-2026-08-15-seckill-rocketmq-reservation-v2-100t-1l-r1
 ```
 
 HTML 报告中 `Statistics` 区域的字段：
@@ -385,19 +385,19 @@ Redis：
 ```bash
 redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" GET seckill:stock:${voucherId}
 redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" SCARD seckill:order:${voucherId}
-redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" XLEN stream.orders
-redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" XPENDING stream.orders g1
-redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" XLEN stream.orders.dlq
+redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" HLEN seckill:reservation:${voucherId}
+redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" HGETALL seckill:meta:${voucherId}
+# 从 reservation Hash 取一个 orderId 后检查其终态
+redis-cli -a "$LOCAL_DEALS_REDIS_PASSWORD" HGETALL seckill:order:status:${orderId}
 ```
 
 有效基线至少需要满足：
 
 - DB 订单数不超过初始库存。
 - 重复下单 SQL 结果为空。
-- DB 库存不小于 0。
-- Redis 库存与已购集合数量符合预期。
-- Stream pending-list 为 0。
-- Dead-letter Stream 长度为 0。
+- DB 库存必须精确等于“初始库存 - 预期成功订单数”，不能只检查非负。
+- Redis 库存、兼容 Set 与精确 reservation Hash 数量符合预期，活动元数据保持 `ACTIVE`，所有预约订单状态均为 `SUCCESS`。
+- RocketMQ 消费完成后，MySQL 订单数达到本轮预期；若未达到，应结合 Broker 消费进度、重试和 DLQ 排查。
 
 ## 结果记录
 
