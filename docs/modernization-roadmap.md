@@ -8,13 +8,15 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新阶段证据：`4bbc2ba test(observability): capture isolated M5A baseline evidence`
+> 最新已完成阶段收口：`5617826 docs: mark M5A complete and prioritize M5B`
 >
-> 当前阶段：M5A 已完成；M5B/M5C 尚未实施，M6 未开始
+> 当前阶段：M5A 已完成；M5B 详细计划已形成但尚未实施，M5C/M5D/M6 未开始
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
-“点赞持久化与热榜”已在 M4 完成。M5A 也已完成指标契约、隔离基线和故障行为盘点；下一会话只进入 M5B 有界缓存，并继续遵守单阶段门禁，不得同时实施 M5C、M6 或技术栈升级。
+“点赞持久化与热榜”已在 M4 完成。M5A 也已完成指标契约、隔离基线和故障行为盘点；M5B
+任务级契约见 `docs/m5b-bounded-cache-plan.md`。下一实施会话只进入 M5B 有界缓存，并继续遵守
+单阶段门禁，不得同时实施 M5C、M5D、M6 或技术栈升级。
 
 `docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
 
@@ -80,6 +82,7 @@
 | M3.1 超龄预约对账 | `dd36b4b` | 已提交 | PROCESSING 索引、消费者共享锁、每订单调度仲裁、DB 精确分类、quarantine、可审批补偿、回填和运行手册 |
 | M4 点赞持久化与热榜 | `710ad61` | 已完成 | MySQL 点赞关系、事务 outbox、停写导入与 cutover、generation-fenced Redis top-K、DB 安全回退 |
 | M5A 可观测基线与故障盘点 | `4bbc2ba` | 已完成（1 项 BLOCKED） | 低基数指标目录、management 网络边界、B0-B4、F1-F4、MySQL/Redis 只读 backlog 采样；Broker 故障下新秒杀准入未形成有效隔离证据 |
+| M5B 有界缓存 | `docs/m5b-bounded-cache-plan.md` | 已规划、未实施 | 只覆盖商铺详情/类型字典的 Redis 有界等待、DB 安全回退、per-key singleflight、短空值和 after-commit 失效 |
 
 “已提交”只表示形成了可追踪节点，不表示未来任何环境下都无需复验。发布或演示前仍应按照本文件的证据门禁运行当前版本测试。
 
@@ -355,7 +358,8 @@ M5A 已实施，M5B/M5C/M5D 尚未实施。后续仍按以下顺序逐个形成�
    补测因隔离停止线记为 BLOCKED，不得据此声称 producer 故障语义已验证。
 2. **M5-B 有界缓存**：只处理商铺详情和小字典的 cache-aside、短空值、singleflight、
    超时及后台写后失效；为缓存击穿、坏值、Redis 延迟/断连和 DB 回退增加测试。若基线没有
-   证明布隆过滤器必要，则不实现。
+   证明布隆过滤器必要，则不实现。任务级配置、语义矩阵、测试阈值、停止线和新会话提示词见
+   `docs/m5b-bounded-cache-plan.md`；该文件是计划，不是完成证据。
 3. **M5-C 资源级流控**：复用已有验证码/后台登录门禁，新增秒杀 activity+user+IP 和
    读接口本地并发上限；验证 429、依赖故障 503、秒杀 fail closed，以及已接受订单消费和
    对账不被新流量限流误伤。
@@ -549,10 +553,12 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 新会话只执行 M5B，完成后再回来更新路线状态：
 
-1. 阅读本文件的第 4、8、11 节和 `docs/blog-like-hot-rank.md` 的现有证据边界；
-2. 核对 branch、HEAD、status，预期最新阶段证据为 `4bbc2ba`，不得覆盖用户改动；
+1. 阅读本文件的第 3、4、8、11、12 节、`docs/m5b-bounded-cache-plan.md` 全文和
+   `docs/blog-like-hot-rank.md` 的现有证据边界；
+2. 核对 branch、HEAD、status；M5A 收口链末端应包含 `5617826`，其后只能有经审查的 M5B
+   计划提交，不得覆盖用户改动；
 3. 阅读 `docs/m5a-observability-results.md` 的负面基线和停止线，不重新执行已完成的 M5A；
-4. 只执行 M5-B 有界缓存；M5-C/M5-D 留待后续独立会话；
+4. 严格按 `docs/m5b-bounded-cache-plan.md` 的任务 0→7 执行；M5-C/M5-D 留待后续独立会话；
 5. 使用 Java 8；所有真实 MySQL/Redis/MQ/ES 测试必须隔离测试数据与正式 key/topic；
 6. 同时核对业务正确性、拒绝语义、积压、最老年龄和恢复时间，不只看 HTTP 成功率；
 7. 不实现标签、每日任务、统一发券账本、Spring Boot 3、分片或 Redis Cluster；
@@ -566,13 +572,16 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 并严格只执行“阶段 M5-B：有界缓存”。
 
 当前预期分支是 codex/platform-hardening，M5A 证据提交是
-4bbc2ba test(observability): capture isolated M5A baseline evidence。先用
+4bbc2ba test(observability): capture isolated M5A baseline evidence，M5A 收口链末端是
+5617826 docs: mark M5A complete and prioritize M5B。先用
 git branch/log/status/diff 核对真实现场；禁止 reset、clean、切分支覆盖或丢弃用户改动。
 不要开始标签、每日任务、统一发券账本、Spring Boot 3、Redis Cluster 或分库分表。
 
-先阅读 docs/m5a-observability-results.md，直接复用已保存的吞吐、P95/P99、DB QPS、cache
-hit/fallback 和错误语义。只实施 M5-B 有界缓存：优先处理 Redis 操作有界超时和商铺详情
-singleflight；当前没有布隆过滤器必要性证据，因此不要实现。不要同时开始 M5-C/M5-D。
+先完整阅读 docs/m5b-bounded-cache-plan.md 和 docs/m5a-observability-results.md，直接复用已保存的
+吞吐、P95/P99、DB QPS、cache hit/fallback 和错误语义。只实施 M5-B 有界缓存：处理 Boot 2.3
+实际支持的 Redis command/pool 等待上界、商铺详情/类型字典 DB 安全回退、per-key singleflight、
+短空值、坏值和 after-commit 失效。当前没有布隆过滤器必要性证据，因此不要实现；也不要启用
+教学版逻辑过期、自旋锁或额外本地缓存。不要同时开始 M5-C/M5-D。
 
 每个节点使用 Java 8，真实依赖测试使用隔离数据；通过相关测试、git diff --check 和 staged
 diff 审查后再创建独立本地提交。不要 push。M5 未全部闭合前不得开始 M6；最后报告测试
