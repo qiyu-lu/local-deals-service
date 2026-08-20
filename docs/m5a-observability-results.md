@@ -135,4 +135,4 @@ F1/F2 的“无 HTTP 响应”是 curl 在 2 秒超时后的 transport error，�
 - baseline/fault/stack 三个脚本通过 `bash -n`；机器可读 CSV 为 19 列、30 行且所有行列数一致；`git diff --check` 通过。
 - public nginx boundary、management split port 和未暴露端点同时由源码契约测试及 full-context 测试验证。
 
-测试阶段只访问 `m5a_20260820m5a`、本轮专用 Redis/ES/Broker 和随机 loopback Web 端口。原始 artifacts 不提交；隔离容器在结果审查后精确清理。
+正式测试阶段只访问 `m5a_20260820m5a`、本轮专用 Redis/ES/Broker 和随机 loopback Web 端口；补测误连事故已在第 4 节单列。原始 artifacts 不提交。结果审查后已删除且仅删除本轮 5 个带标签容器和专用网络，容器数据不可恢复；残留容器/网络检查均为空，其他运行容器保持存在。

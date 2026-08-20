@@ -36,6 +36,7 @@
 | Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream（第一阶段可靠性增强，已由 RocketMQ 内置 DLQ 取代） | `stream.orders.dlq`、`docs/reliability-results.md` |
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态、活动状态和本券 processing index 归零；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露秒杀请求分流、MQ 消费结果、DB 幂等与库存回滚等指标 | `/actuator/prometheus` |
+| 关键依赖故障只能靠日志猜测，Actuator 与业务入口同面暴露 | M5A 建立固定枚举指标目录，补齐点赞/Outbox、热榜、商铺缓存、认证、ES consumer 和秒杀 backlog 观测；management 仅绑定 loopback 独立端口，nginx 明确拒绝 `/api/actuator` | `docs/m5a-metric-catalog.md`、`docs/m5a-observability-results.md` |
 
 
 ## 前端
@@ -273,7 +274,7 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - 优惠券秒杀：RocketMQ 事务消息把半消息与 Redis Lua 原子预占绑定；Lua 使用 Redis 服务端时间校验活动窗口，并记录精确 reservation 与 `PROCESSING` 状态。
 - 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
 - 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
-- 可观测性：暴露秒杀请求分流、MQ 消费结果、DB 重复与库存回滚等 Prometheus 指标。
+- 可观测性：M5A 已补齐秒杀、点赞 Outbox、热榜、商铺缓存、认证和 ES consumer 的低基数 Prometheus 指标；management 独立绑定 loopback 端口。M5B 缓存改造与 M5C 限流/降级尚未实施。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
 
 ### 管理端本阶段边界
@@ -291,6 +292,8 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - [商户后台、RBAC 与发布门禁](docs/admin-rbac.md)
 - [秒杀 PROCESSING 自动对账与升级门禁](docs/seckill-reconciliation.md)
 - [点赞持久化、Outbox 聚合与热榜发布门禁](docs/blog-like-hot-rank.md)
+- [M5A 指标目录](docs/m5a-metric-catalog.md)
+- [M5A 基线与故障行为结果](docs/m5a-observability-results.md)
 - [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)

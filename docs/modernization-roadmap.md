@@ -8,13 +8,13 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新功能里程碑：`710ad61 feat(blog): make likes durable and hot rank rebuildable`
+> 最新阶段证据：`4bbc2ba test(observability): capture isolated M5A baseline evidence`
 >
-> 当前阶段：M4 已完成；M5 已规划但尚未实施
+> 当前阶段：M5A 已完成；M5B/M5C 尚未实施，M6 未开始
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
-“点赞持久化与热榜”已在 M4 完成审计、隔离集成验证和本地提交。下一会话可以进入 M5，但仍需遵守单阶段门禁，不得同时实施 M6 或技术栈升级。
+“点赞持久化与热榜”已在 M4 完成。M5A 也已完成指标契约、隔离基线和故障行为盘点；下一会话只进入 M5B 有界缓存，并继续遵守单阶段门禁，不得同时实施 M5C、M6 或技术栈升级。
 
 `docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
 
@@ -79,6 +79,7 @@
 | M3 商户后台与 RBAC | `91362e8` | 已提交 | 独立后台账号、BCrypt、固定角色权限、merchant scope、一次性 WS ticket、平台/商户频道、V5/V6 迁移 |
 | M3.1 超龄预约对账 | `dd36b4b` | 已提交 | PROCESSING 索引、消费者共享锁、每订单调度仲裁、DB 精确分类、quarantine、可审批补偿、回填和运行手册 |
 | M4 点赞持久化与热榜 | `710ad61` | 已完成 | MySQL 点赞关系、事务 outbox、停写导入与 cutover、generation-fenced Redis top-K、DB 安全回退 |
+| M5A 可观测基线与故障盘点 | `4bbc2ba` | 已完成（1 项 BLOCKED） | 低基数指标目录、management 网络边界、B0-B4、F1-F4、MySQL/Redis 只读 backlog 采样；Broker 故障下新秒杀准入未形成有效隔离证据 |
 
 “已提交”只表示形成了可追踪节点，不表示未来任何环境下都无需复验。发布或演示前仍应按照本文件的证据门禁运行当前版本测试。
 
@@ -140,7 +141,7 @@ schema 与专用 Redis 中的 M4 集成测试 11 个全绿。Flyway 的 V1->V8�
 | 顺序 | 阶段 | 优先级 | 前置条件 | 主要产物 |
 | --- | --- | --- | --- | --- |
 | 1 | M4 收口点赞持久化与热榜 WIP（已完成） | P0 | 当前中断现场 | `710ad61` 可验证、可回滚的独立提交 |
-| 2 | M5 缓存语义、流控、降级与可观测 | P1 | M4 完成且工作区干净 | 资源级限流、降级矩阵、指标和故障测试 |
+| 2 | M5 缓存语义、流控、降级与可观测（M5A 已完成） | P1 | M4 完成且工作区干净 | 资源级限流、降级矩阵、指标和故障测试 |
 | 3 | M6 活动资格、标签、任务与统一发券账本 | P1 | M5 的幂等/流控基础可用 | 一条真实的新业务闭环，而非零散 CRUD |
 | 4 | M7 故障演练、压测对比和项目展示收口 | P1 | 核心功能冻结 | 可重复证据、运行手册、架构图和面试材料 |
 | 5 | M8 技术栈升级或分片研究 | 可选 | 前述阶段全绿且有测量理由 | 独立维护分支或明确“不需要”的结论 |
@@ -343,13 +344,15 @@ feat(traffic): add resource-level limiting and degradation
 feat(observability): expose reliability and backlog metrics
 ```
 
-### 8.7 下一会话的具体执行顺序
+### 8.7 M5 分解与当前执行顺序
 
-M5 尚未实施。下一会话只执行 M5，并按以下顺序逐个形成可独立回滚的绿灯节点：
+M5A 已实施，M5B/M5C/M5D 尚未实施。后续仍按以下顺序逐个形成可独立回滚的绿灯节点：
 
-1. **M5-A 基线与契约**：核对干净工作区；固定商铺详情、热榜、搜索、验证码、后台登录和
+1. **M5-A 基线与契约（已完成）**：核对干净工作区；固定商铺详情、热榜、搜索、验证码、后台登录和
    秒杀提交的正常/突发流量；记录现有吞吐、P95/P99、DB QPS、缓存命中/回退和拒绝语义；
    先定义 429/503 与有限 reason 标签，禁止 userId/orderId 进入指标标签。
+   结果见 `docs/m5a-observability-results.md`；该阶段未实现 429/503 策略，F3 Broker 新准入
+   补测因隔离停止线记为 BLOCKED，不得据此声称 producer 故障语义已验证。
 2. **M5-B 有界缓存**：只处理商铺详情和小字典的 cache-aside、短空值、singleflight、
    超时及后台写后失效；为缓存击穿、坏值、Redis 延迟/断连和 DB 回退增加测试。若基线没有
    证明布隆过滤器必要，则不实现。
@@ -544,12 +547,12 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-新会话只执行 M5，完成后再回来更新路线状态：
+新会话只执行 M5B，完成后再回来更新路线状态：
 
 1. 阅读本文件的第 4、8、11 节和 `docs/blog-like-hot-rank.md` 的现有证据边界；
-2. 核对 branch、HEAD、status，预期最新功能里程碑为 `710ad61`，不得覆盖用户改动；
-3. 先执行第 8.7 节 M5-A，保存改造前基线和错误语义，不直接堆限流组件；
-4. 按 M5-B、M5-C、M5-D 顺序工作，每个节点独立测试、审查和提交；
+2. 核对 branch、HEAD、status，预期最新阶段证据为 `4bbc2ba`，不得覆盖用户改动；
+3. 阅读 `docs/m5a-observability-results.md` 的负面基线和停止线，不重新执行已完成的 M5A；
+4. 只执行 M5-B 有界缓存；M5-C/M5-D 留待后续独立会话；
 5. 使用 Java 8；所有真实 MySQL/Redis/MQ/ES 测试必须隔离测试数据与正式 key/topic；
 6. 同时核对业务正确性、拒绝语义、积压、最老年龄和恢复时间，不只看 HTTP 成功率；
 7. 不实现标签、每日任务、统一发券账本、Spring Boot 3、分片或 Redis Cluster；
@@ -560,16 +563,16 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ```text
 请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md，
-并严格只执行“阶段 M5：缓存语义、限流、降级与可观测”。
+并严格只执行“阶段 M5-B：有界缓存”。
 
-当前预期分支是 codex/platform-hardening，M4 功能提交是
-710ad61 feat(blog): make likes durable and hot rank rebuildable。先用
+当前预期分支是 codex/platform-hardening，M5A 证据提交是
+4bbc2ba test(observability): capture isolated M5A baseline evidence。先用
 git branch/log/status/diff 核对真实现场；禁止 reset、clean、切分支覆盖或丢弃用户改动。
 不要开始标签、每日任务、统一发券账本、Spring Boot 3、Redis Cluster 或分库分表。
 
-先执行第 8.7 节 M5-A，固定流量模型并保存现有吞吐、P95/P99、DB QPS、cache
-hit/fallback 和错误语义。随后严格按 M5-B 有界缓存、M5-C 资源级流控、M5-D 指标与故障
-收口推进；每一步都要同时验证正确性、429/503、backlog oldest age 和恢复时间。
+先阅读 docs/m5a-observability-results.md，直接复用已保存的吞吐、P95/P99、DB QPS、cache
+hit/fallback 和错误语义。只实施 M5-B 有界缓存：优先处理 Redis 操作有界超时和商铺详情
+singleflight；当前没有布隆过滤器必要性证据，因此不要实现。不要同时开始 M5-C/M5-D。
 
 每个节点使用 Java 8，真实依赖测试使用隔离数据；通过相关测试、git diff --check 和 staged
 diff 审查后再创建独立本地提交。不要 push。M5 未全部闭合前不得开始 M6；最后报告测试

@@ -1,6 +1,6 @@
 # M5A 指标基线与故障行为盘点实施清单
 
-> 文档状态：待实施
+> 文档状态：已实施；F3 Broker 新准入补测按停止线记为 BLOCKED
 >
 > 记录日期：2026-08-20
 >
@@ -11,6 +11,8 @@
 > 起始 HEAD：`f79a738 docs: mark M4 complete and plan M5`
 
 本文是 `docs/modernization-roadmap.md` 中 M5A 的任务级执行手册。M5A 只建立可观测契约、采集当前基线并记录故障行为，不实施 M5B 的缓存改造、M5C 的限流策略，也不开始 M6 的标签和发券功能。
+
+实施结果已形成 `4bbc2ba test(observability): capture isolated M5A baseline evidence`。完整环境、三轮基线、故障矩阵、负面结果、隔离事故和后续优先级见 `docs/m5a-observability-results.md`，小型机器可读数据见 `docs/m5a-observability-summary.csv`。本文以下 checkbox 保留为执行前契约，不以批量勾选覆盖实际证据；最终状态以结果文档逐项说明为准。
 
 ## 1. 阶段目标
 
