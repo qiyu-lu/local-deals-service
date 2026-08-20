@@ -18,11 +18,13 @@ spring:
     host: "${LOCAL_DEALS_REDIS_HOST:localhost}"
     port: "${LOCAL_DEALS_REDIS_PORT:6379}"
     password: "${LOCAL_DEALS_REDIS_PASSWORD}"
+    timeout: "${LOCAL_DEALS_REDIS_COMMAND_TIMEOUT:500ms}"
     lettuce:
       pool:
         max-active: 10
         max-idle: 10
         min-idle: 1
+        max-wait: "${LOCAL_DEALS_REDIS_POOL_MAX_WAIT:500ms}"
         time-between-eviction-runs: 10s
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
@@ -58,6 +60,11 @@ management:
         readiness:
           include: db,redis
 local-deals:
+  cache:
+    shop-detail-ttl: "${LOCAL_DEALS_CACHE_SHOP_DETAIL_TTL:30s}"
+    shop-detail-empty-ttl: "${LOCAL_DEALS_CACHE_SHOP_DETAIL_EMPTY_TTL:30s}"
+    shop-type-ttl: "${LOCAL_DEALS_CACHE_SHOP_TYPE_TTL:100m}"
+    shop-type-empty-ttl: "${LOCAL_DEALS_CACHE_SHOP_TYPE_EMPTY_TTL:30s}"
   observability:
     sampling-enabled: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_ENABLED:false}"
     initial-delay: "${LOCAL_DEALS_OBSERVABILITY_INITIAL_DELAY:10s}"

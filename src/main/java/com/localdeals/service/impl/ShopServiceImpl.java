@@ -17,7 +17,6 @@ import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
 import org.springframework.data.elasticsearch.core.SearchHit;
@@ -31,8 +30,6 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
-
-import javax.annotation.Resource;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -51,14 +48,17 @@ import static com.localdeals.utils.RedisConstants.*;
  */
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final CacheClient cacheClient;
+    private final ElasticsearchRestTemplate esRestTemplate;
 
-    @Autowired
-    private CacheClient cacheClient;
-
-    @Autowired
-    private ElasticsearchRestTemplate esRestTemplate;
+    public ShopServiceImpl(StringRedisTemplate stringRedisTemplate,
+                           CacheClient cacheClient,
+                           ElasticsearchRestTemplate esRestTemplate) {
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.cacheClient = cacheClient;
+        this.esRestTemplate = esRestTemplate;
+    }
 
     @Override
     public Result queryShopById(Long id) {
@@ -69,8 +69,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 id,
                 Shop.class,
                 this::getById,
-                CACHE_SHOP_TTL,
-                TimeUnit.SECONDS);
+                (requestedId, cachedShop) -> requestedId.equals(cachedShop.getId()));
 
 
         // 其他策略（教学用，已注释）：

@@ -27,7 +27,12 @@ public class LocalDealsMetrics {
     public enum LikeResult { CHANGED, UNCHANGED, NOT_FOUND, FAILURE }
     public enum OutboxResult { SUCCESS, EMPTY, LOCK_BUSY, DB_ERROR, REDIS_LOCK_ERROR }
     public enum CacheResource { SHOP_DETAIL, SHOP_TYPE }
-    public enum CacheResult { HIT, EMPTY_HIT, MISS, REDIS_ERROR, DB_SUCCESS, DB_EMPTY, DB_ERROR }
+    public enum CacheResult {
+        HIT, EMPTY_HIT, MISS, BAD_VALUE, REDIS_ERROR, DB_SUCCESS, DB_EMPTY, DB_ERROR
+    }
+    public enum CacheSingleFlightResult { LEADER, SHARED }
+    public enum CacheMaintenanceOperation { WRITE, EVICT }
+    public enum CacheMaintenanceResult { SUCCESS, FAILURE, SKIPPED }
     public enum AuthFlow { OTP_SEND, USER_LOGIN, ADMIN_LOGIN }
     public enum AuthResult { SUCCESS, INVALID_INPUT, REJECTED, LOCKED, UNAVAILABLE, FAILURE }
     public enum EsTable { SHOP, BLOG, IGNORED }
@@ -61,6 +66,8 @@ public class LocalDealsMetrics {
     private final Timer hotRankDbFallback;
     private final Map<String, Counter> cacheAccess = new HashMap<>();
     private final Map<CacheResource, Timer> cacheDbFallback = new EnumMap<>(CacheResource.class);
+    private final Map<String, Counter> cacheSingleFlight = new HashMap<>();
+    private final Map<String, Counter> cacheMaintenance = new HashMap<>();
     private final Map<String, Counter> authRequests = new HashMap<>();
     private final Map<String, Counter> esMessages = new HashMap<>();
     private final Map<String, Counter> esRows = new HashMap<>();
@@ -133,6 +140,25 @@ public class LocalDealsMetrics {
                     .tag("resource", metricValue(resource))
                     .publishPercentileHistogram()
                     .register(registry));
+            for (CacheSingleFlightResult result : CacheSingleFlightResult.values()) {
+                cacheSingleFlight.put(key(resource, result),
+                        Counter.builder("local_deals.cache.singleflight")
+                                .description("Per-JVM cache fallback coalescing outcomes")
+                                .tag("resource", metricValue(resource))
+                                .tag("result", metricValue(result))
+                                .register(registry));
+            }
+            for (CacheMaintenanceOperation operation : CacheMaintenanceOperation.values()) {
+                for (CacheMaintenanceResult result : CacheMaintenanceResult.values()) {
+                    cacheMaintenance.put(key(resource, operation, result),
+                            Counter.builder("local_deals.cache.maintenance")
+                                    .description("Best-effort cache write and eviction outcomes")
+                                    .tags("resource", metricValue(resource),
+                                            "operation", metricValue(operation),
+                                            "result", metricValue(result))
+                                    .register(registry));
+                }
+            }
         }
 
         for (AuthFlow flow : AuthFlow.values()) {
@@ -243,6 +269,16 @@ public class LocalDealsMetrics {
 
     public void recordCacheDbFallback(CacheResource resource, long nanos) {
         safeRecord(cacheDbFallback.get(resource), nanos);
+    }
+
+    public void recordCacheSingleFlight(CacheResource resource, CacheSingleFlightResult result) {
+        safeIncrement(cacheSingleFlight.get(key(resource, result)));
+    }
+
+    public void recordCacheMaintenance(CacheResource resource,
+                                       CacheMaintenanceOperation operation,
+                                       CacheMaintenanceResult result) {
+        safeIncrement(cacheMaintenance.get(key(resource, operation, result)));
     }
 
     public void recordAuth(AuthFlow flow, AuthResult result) {

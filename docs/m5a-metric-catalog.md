@@ -1,6 +1,6 @@
 # M5A 低基数指标目录与管理面契约
 
-> 状态：M5A 实施契约
+> 状态：M5A 实施契约；商铺缓存条目含 M5B 有限扩展
 >
 > 基线提交：`a36e379`
 >
@@ -62,11 +62,13 @@ Outbox SQL 先用 `(processed_time,id)` 找 count 与最早 id，再按主键读
 
 | Micrometer / Prometheus | 类型/单位 | 标签和值域 | 记录点与解释 |
 | --- | --- | --- | --- |
-| `local_deals.cache.access` / `local_deals_cache_access_total` | Counter | `resource=shop_detail|shop_type`; `result=hit|empty_hit|miss|redis_error|db_success|db_empty|db_error` | Redis 阶段记录 hit/empty_hit/miss/redis_error；发生 fallback 时再记录一个 DB outcome。因此冷请求会有一个 `miss` 和一个 DB outcome，不能把所有 result 相加当请求总数。M5A 不改变 pass-through 算法。 |
-| `local_deals.cache.db_fallback` / `local_deals_cache_db_fallback_seconds_*` | Timer/seconds | `resource=shop_detail|shop_type` | 只包缓存 miss 后的 DB 查询；发布 histogram。 |
+| `local_deals.cache.access` / `local_deals_cache_access_total` | Counter | `resource=shop_detail|shop_type`; `result=hit|empty_hit|miss|bad_value|redis_error|db_success|db_empty|db_error` | Redis 阶段记录 hit/empty_hit/miss/bad_value/redis_error；发生 fallback 时再记录一个 DB outcome。因此冷请求会有一个 read outcome 和一个 DB outcome，不能把所有 result 相加当请求总数。`bad_value` 是 M5B 新增的坏 payload 分类。 |
+| `local_deals.cache.singleflight` / `local_deals_cache_singleflight_total` | Counter | `resource=shop_detail|shop_type`; `result=leader|shared` | M5B 中每个进入进程内 DB load 合并边界的请求一次；只说明当前 JVM、当前 key 的角色，不能推导跨实例全局调用数。 |
+| `local_deals.cache.maintenance` / `local_deals_cache_maintenance_total` | Counter | `resource=shop_detail|shop_type`; `operation=write|evict`; `result=success|failure|skipped` | M5B DB fallback 后的 best-effort 写入与事务提交后的精确失效。Redis read 已失败时本次 write 为 `skipped`；写入/失效失败不能改变 DB 结果。 |
+| `local_deals.cache.db_fallback` / `local_deals_cache_db_fallback_seconds_*` | Timer/seconds | `resource=shop_detail|shop_type` | M5B 只包 miss、bad_value 或 redis_error 后实际发生的 DB 查询；followers 不重复记录；发布 histogram。 |
 
-Redis 异常按当前业务行为继续抛出；M5A 只记录 `redis_error`，不顺手增加 fail-open 或
-singleflight。指标不额外读取缓存。
+M5A 基线期 Redis 异常仍抛出；M5B 实现将其改为有界 DB fallback，并增加上述有限指标。
+指标本身不额外读取缓存，也不携带 cache key、shop ID、异常文本等动态标签。
 
 ### 3.4 认证入口
 

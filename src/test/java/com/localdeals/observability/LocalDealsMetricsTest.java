@@ -26,6 +26,13 @@ class LocalDealsMetricsTest {
                 .tag("result", "bad_metadata").counter()).isNotNull();
         assertThat(registry.find("local_deals.auth.request")
                 .tags("flow", "admin_login", "result", "unavailable").counter()).isNotNull();
+        assertThat(registry.find("local_deals.cache.access")
+                .tags("resource", "shop_detail", "result", "bad_value").counter()).isNotNull();
+        assertThat(registry.find("local_deals.cache.singleflight")
+                .tags("resource", "shop_type", "result", "shared").counter()).isNotNull();
+        assertThat(registry.find("local_deals.cache.maintenance")
+                .tags("resource", "shop_detail", "operation", "write", "result", "skipped")
+                .counter()).isNotNull();
 
         metrics.updateOutboxBacklog(7L, 3.5D);
         assertThat(registry.get("local_deals.blog.like.outbox.pending").gauge().value())
@@ -96,5 +103,34 @@ class LocalDealsMetricsTest {
         assertThat(registry.get("local_deals.cache.access")
                 .tags("resource", "shop_detail", "result", "hit")
                 .counter().count()).isEqualTo(1_000D);
+    }
+
+    @Test
+    void cacheMetersHaveOnlyTheFiniteM5bTagVocabulary() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        LocalDealsMetrics metrics = new LocalDealsMetrics(registry);
+
+        metrics.recordCacheSingleFlight(LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                LocalDealsMetrics.CacheSingleFlightResult.LEADER);
+        metrics.recordCacheMaintenance(LocalDealsMetrics.CacheResource.SHOP_TYPE,
+                LocalDealsMetrics.CacheMaintenanceOperation.EVICT,
+                LocalDealsMetrics.CacheMaintenanceResult.FAILURE);
+
+        assertThat(registry.get("local_deals.cache.access").counters())
+                .hasSize(LocalDealsMetrics.CacheResource.values().length
+                        * LocalDealsMetrics.CacheResult.values().length);
+        assertThat(registry.get("local_deals.cache.singleflight").counters())
+                .hasSize(LocalDealsMetrics.CacheResource.values().length
+                        * LocalDealsMetrics.CacheSingleFlightResult.values().length);
+        assertThat(registry.get("local_deals.cache.maintenance").counters())
+                .hasSize(LocalDealsMetrics.CacheResource.values().length
+                        * LocalDealsMetrics.CacheMaintenanceOperation.values().length
+                        * LocalDealsMetrics.CacheMaintenanceResult.values().length);
+        assertThat(registry.get("local_deals.cache.singleflight")
+                .tags("resource", "shop_detail", "result", "leader")
+                .counter().count()).isEqualTo(1D);
+        assertThat(registry.get("local_deals.cache.maintenance")
+                .tags("resource", "shop_type", "operation", "evict", "result", "failure")
+                .counter().count()).isEqualTo(1D);
     }
 }

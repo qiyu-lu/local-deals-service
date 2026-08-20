@@ -14,6 +14,7 @@ import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.MerchantMapper;
 import com.localdeals.mapper.ShopMapper;
 import com.localdeals.mapper.VoucherMapper;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.utils.AdminPrincipalHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.geo.Point;
@@ -40,17 +41,20 @@ public class AdminCatalogService {
     private final VoucherMapper voucherMapper;
     private final IVoucherService voucherService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final LocalDealsMetrics metrics;
 
     public AdminCatalogService(ShopMapper shopMapper,
             MerchantMapper merchantMapper,
             VoucherMapper voucherMapper,
             IVoucherService voucherService,
-            StringRedisTemplate stringRedisTemplate) {
+            StringRedisTemplate stringRedisTemplate,
+            LocalDealsMetrics metrics) {
         this.shopMapper = shopMapper;
         this.merchantMapper = merchantMapper;
         this.voucherMapper = voucherMapper;
         this.voucherService = voucherService;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.metrics = metrics;
     }
 
     public Page<Shop> listShops(int current, int size, String keyword) {
@@ -302,20 +306,12 @@ public class AdminCatalogService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                try {
-                    stringRedisTemplate.delete(CACHE_SHOP_KEY + current.getId());
-                    if (previousTypeId != null) {
-                        stringRedisTemplate.opsForGeo().remove(
-                                SHOP_GEO_KEY + previousTypeId, current.getId().toString());
-                    }
-                    if (current.getTypeId() != null && current.getX() != null && current.getY() != null) {
-                        stringRedisTemplate.opsForGeo().add(
-                                SHOP_GEO_KEY + current.getTypeId(),
-                                new Point(current.getX(), current.getY()),
-                                current.getId().toString());
-                    }
-                } catch (RuntimeException e) {
-                    log.error("Failed to refresh shop caches after commit. shopId={}", current.getId(), e);
+                evictShopDetail(current.getId());
+                if (previousTypeId != null) {
+                    removeShopFromGeo(previousTypeId, current.getId());
+                }
+                if (current.getTypeId() != null && current.getX() != null && current.getY() != null) {
+                    addShopToGeo(current);
                 }
             }
         });
@@ -328,13 +324,45 @@ public class AdminCatalogService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                try {
-                    stringRedisTemplate.delete(CACHE_SHOP_KEY + shopId);
-                } catch (RuntimeException e) {
-                    log.error("Failed to evict shop cache after ownership assignment. shopId={}", shopId, e);
-                }
+                evictShopDetail(shopId);
             }
         });
+    }
+
+    private void evictShopDetail(Long shopId) {
+        try {
+            stringRedisTemplate.delete(CACHE_SHOP_KEY + shopId);
+            metrics.recordCacheMaintenance(LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                    LocalDealsMetrics.CacheMaintenanceOperation.EVICT,
+                    LocalDealsMetrics.CacheMaintenanceResult.SUCCESS);
+        } catch (RuntimeException evictionFailure) {
+            metrics.recordCacheMaintenance(LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                    LocalDealsMetrics.CacheMaintenanceOperation.EVICT,
+                    LocalDealsMetrics.CacheMaintenanceResult.FAILURE);
+            log.error("Failed to evict shop cache after commit. shopId={}", shopId, evictionFailure);
+        }
+    }
+
+    private void removeShopFromGeo(Long typeId, Long shopId) {
+        try {
+            stringRedisTemplate.opsForGeo().remove(
+                    SHOP_GEO_KEY + typeId, shopId.toString());
+        } catch (RuntimeException geoFailure) {
+            log.error("Failed to remove shop from GEO after commit. shopId={}, typeId={}",
+                    shopId, typeId, geoFailure);
+        }
+    }
+
+    private void addShopToGeo(Shop shop) {
+        try {
+            stringRedisTemplate.opsForGeo().add(
+                    SHOP_GEO_KEY + shop.getTypeId(),
+                    new Point(shop.getX(), shop.getY()),
+                    shop.getId().toString());
+        } catch (RuntimeException geoFailure) {
+            log.error("Failed to add shop to GEO after commit. shopId={}, typeId={}",
+                    shop.getId(), shop.getTypeId(), geoFailure);
+        }
     }
 
     private void validateCoordinate(Double x, Double y) {
