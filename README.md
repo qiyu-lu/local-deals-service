@@ -270,11 +270,11 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 
 - 登录态：验证码登录后将用户信息写入 Redis Hash，拦截器从 `authorization` 请求头恢复 `UserHolder`。
 - 管理边界：独立后台账号、固定角色 RBAC、每请求数据库复核与商户范围 SQL；密码或账号安全状态变化通过 `auth_version` 使旧令牌立即失效。
-- 商铺缓存：商铺详情使用 Redis cache-through 与短期空值缓存。进程内布隆过滤器会在多实例新增商铺时产生错误否定，已从权威查询链移除。
+- 商铺缓存：详情和类型字典使用兼容 key/payload 的 cache-aside；Redis 命令和连接池等待均限制为 500ms，miss、坏值或 Redis 不可用时经单 JVM per-key singleflight 回 MySQL，正值/空值分别使用有界 TTL。进程内布隆过滤器会在多实例新增商铺时产生错误否定，未进入权威查询链。
 - 优惠券秒杀：RocketMQ 事务消息把半消息与 Redis Lua 原子预占绑定；Lua 使用 Redis 服务端时间校验活动窗口，并记录精确 reservation 与 `PROCESSING` 状态。
 - 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
 - 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
-- 可观测性：M5A 已补齐秒杀、点赞 Outbox、热榜、商铺缓存、认证和 ES consumer 的低基数 Prometheus 指标；management 独立绑定 loopback 端口。M5B 缓存改造与 M5C 限流/降级尚未实施。
+- 可观测性：M5A 已补齐秒杀、点赞 Outbox、热榜、商铺缓存、认证和 ES consumer 的低基数 Prometheus 指标；management 独立绑定 loopback 端口。M5B 有界缓存已完成并保留隔离故障证据；M5C 限流/统一降级语义尚未实施。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
 
 ### 管理端本阶段边界
@@ -294,6 +294,8 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - [点赞持久化、Outbox 聚合与热榜发布门禁](docs/blog-like-hot-rank.md)
 - [M5A 指标目录](docs/m5a-metric-catalog.md)
 - [M5A 基线与故障行为结果](docs/m5a-observability-results.md)
+- [M5B 有界缓存实施计划](docs/m5b-bounded-cache-plan.md)
+- [M5B 有界缓存实施与验证结果](docs/m5b-bounded-cache-results.md)
 - [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)

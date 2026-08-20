@@ -4,7 +4,7 @@
 >
 > 基线提交：`a36e379`
 >
-> 约束：本目录定义指标语义，不表示 M5B 缓存优化或 M5C 限流已经实现。
+> 约束：本目录定义指标语义；M5B 有界缓存已实现，M5C 限流仍未实现。
 
 ## 1. 全局规则
 
@@ -67,7 +67,7 @@ Outbox SQL 先用 `(processed_time,id)` 找 count 与最早 id，再按主键读
 | `local_deals.cache.maintenance` / `local_deals_cache_maintenance_total` | Counter | `resource=shop_detail|shop_type`; `operation=write|evict`; `result=success|failure|skipped` | M5B DB fallback 后的 best-effort 写入与事务提交后的精确失效。Redis read 已失败时本次 write 为 `skipped`；写入/失效失败不能改变 DB 结果。 |
 | `local_deals.cache.db_fallback` / `local_deals_cache_db_fallback_seconds_*` | Timer/seconds | `resource=shop_detail|shop_type` | M5B 只包 miss、bad_value 或 redis_error 后实际发生的 DB 查询；followers 不重复记录；发布 histogram。 |
 
-M5A 基线期 Redis 异常仍抛出；M5B 实现将其改为有界 DB fallback，并增加上述有限指标。
+M5A 基线期 Redis 异常仍抛出；M5B 已将其改为有界 DB fallback，并增加上述有限指标。
 指标本身不额外读取缓存，也不携带 cache key、shop ID、异常文本等动态标签。
 
 ### 3.4 认证入口

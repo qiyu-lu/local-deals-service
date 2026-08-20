@@ -1,0 +1,20 @@
+scenario,phase,samples,correct,transport_errors,p95_ms,p99_ms,max_ms,throughput_rps,db_fallback,recovery_ms,status,note
+C1,round-1-cold,1000,1000,0,0.745,2.647,7.583,1278.557,1,NA,PASS,exact-key cold
+C1,round-1-warm,1000,1000,0,0.574,0.866,1.104,1288.711,0,NA,PASS,warm hit
+C1,round-2-cold,1000,1000,0,0.632,1.350,5.707,1260.964,1,NA,PASS,exact-key cold
+C1,round-2-warm,1000,1000,0,0.495,0.877,1.441,1267.465,0,NA,PASS,warm hit
+C1,round-3-cold,1000,1000,0,0.559,0.992,3.176,1266.224,1,NA,PASS,exact-key cold
+C1,round-3-warm,1000,1000,0,0.518,0.826,3.599,1281.272,0,NA,PASS,warm hit
+C2,cold,20,20,0,0.637,2.238,2.238,860.922,1,NA,PASS,negative cache cold
+C2,warm,100,100,0,0.439,0.543,0.988,1146.545,0,NA,PASS,placeholder hit
+C3,cold,20,20,0,31.632,31.678,31.678,453.317,1,NA,PASS,type list cold
+C3,warm,100,100,0,4.659,8.250,8.349,1153.161,0,NA,PASS,type list hit
+C3,empty,1,1,0,2.967,2.967,2.967,68.664,1,NA,PASS,empty list short TTL
+C4,malformed,2,2,0,2.743,2.743,2.743,92.876,1,NA,PASS,bad JSON repaired
+C4,wrong-id,2,2,0,2.778,2.778,2.778,100.034,1,NA,PASS,wrong shop ID repaired
+C4,invalid-list,2,2,0,3.754,3.754,3.754,95.616,1,NA,PASS,invalid list repaired
+F1a,redis-pause,20,20,0,502.297,503.687,503.687,38.020,11,NA,PASS,all requests below 2s
+F1b,redis-stop,20,20,0,502.498,502.557,502.557,38.175,9,51,PASS,recovered to hit within 5s
+F2a,warm-shop,20,20,0,0.650,0.971,0.971,825.153,0,NA,PASS,MySQL stopped warm value
+F2a,warm-types,20,20,0,0.775,1.061,1.061,817.607,0,NA,PASS,MySQL stopped warm value
+R1,redis-pause,1,1,0,533.630,533.630,533.630,1.841,NA,NA,PASS,nonempty DB hot-rank

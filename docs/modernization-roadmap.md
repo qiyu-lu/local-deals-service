@@ -8,15 +8,15 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新已完成阶段收口：`5617826 docs: mark M5A complete and prioritize M5B`
+> 最新已完成实现节点：`8125e4b fix(cache): clarify bounded fallback metric`
 >
-> 当前阶段：M5A 已完成；M5B 详细计划已形成但尚未实施，M5C/M5D/M6 未开始
+> 当前阶段：M5A、M5B 已完成；M5C/M5D/M6 未开始
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
-“点赞持久化与热榜”已在 M4 完成。M5A 也已完成指标契约、隔离基线和故障行为盘点；M5B
-任务级契约见 `docs/m5b-bounded-cache-plan.md`。下一实施会话只进入 M5B 有界缓存，并继续遵守
-单阶段门禁，不得同时实施 M5C、M5D、M6 或技术栈升级。
+“点赞持久化与热榜”已在 M4 完成。M5A 已完成指标契约、隔离基线和故障行为盘点；M5B 已按
+`docs/m5b-bounded-cache-plan.md` 完成有界缓存，证据见 `docs/m5b-bounded-cache-results.md`。
+下一实施会话只进入 M5C 资源级流控，并继续遵守单阶段门禁，不得同时实施 M5D、M6 或技术栈升级。
 
 `docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
 
@@ -82,7 +82,7 @@
 | M3.1 超龄预约对账 | `dd36b4b` | 已提交 | PROCESSING 索引、消费者共享锁、每订单调度仲裁、DB 精确分类、quarantine、可审批补偿、回填和运行手册 |
 | M4 点赞持久化与热榜 | `710ad61` | 已完成 | MySQL 点赞关系、事务 outbox、停写导入与 cutover、generation-fenced Redis top-K、DB 安全回退 |
 | M5A 可观测基线与故障盘点 | `4bbc2ba` | 已完成（1 项 BLOCKED） | 低基数指标目录、management 网络边界、B0-B4、F1-F4、MySQL/Redis 只读 backlog 采样；Broker 故障下新秒杀准入未形成有效隔离证据 |
-| M5B 有界缓存 | `docs/m5b-bounded-cache-plan.md` | 已规划、未实施 | 只覆盖商铺详情/类型字典的 Redis 有界等待、DB 安全回退、per-key singleflight、短空值和 after-commit 失效 |
+| M5B 有界缓存 | `3ac79f3` / `e21ce4f` | 已完成 | 商铺详情/类型字典的 Redis 500ms 有界等待、DB 安全回退、per-key singleflight、坏值修复、短空值和 after-commit 失效；结果见 `docs/m5b-bounded-cache-results.md` |
 
 “已提交”只表示形成了可追踪节点，不表示未来任何环境下都无需复验。发布或演示前仍应按照本文件的证据门禁运行当前版本测试。
 
@@ -349,17 +349,17 @@ feat(observability): expose reliability and backlog metrics
 
 ### 8.7 M5 分解与当前执行顺序
 
-M5A 已实施，M5B/M5C/M5D 尚未实施。后续仍按以下顺序逐个形成可独立回滚的绿灯节点：
+M5A、M5B 已实施，M5C/M5D 尚未实施。后续仍按以下顺序逐个形成可独立回滚的绿灯节点：
 
 1. **M5-A 基线与契约（已完成）**：核对干净工作区；固定商铺详情、热榜、搜索、验证码、后台登录和
    秒杀提交的正常/突发流量；记录现有吞吐、P95/P99、DB QPS、缓存命中/回退和拒绝语义；
    先定义 429/503 与有限 reason 标签，禁止 userId/orderId 进入指标标签。
    结果见 `docs/m5a-observability-results.md`；该阶段未实现 429/503 策略，F3 Broker 新准入
    补测因隔离停止线记为 BLOCKED，不得据此声称 producer 故障语义已验证。
-2. **M5-B 有界缓存**：只处理商铺详情和小字典的 cache-aside、短空值、singleflight、
-   超时及后台写后失效；为缓存击穿、坏值、Redis 延迟/断连和 DB 回退增加测试。若基线没有
-   证明布隆过滤器必要，则不实现。任务级配置、语义矩阵、测试阈值、停止线和新会话提示词见
-   `docs/m5b-bounded-cache-plan.md`；该文件是计划，不是完成证据。
+2. **M5-B 有界缓存（已完成）**：商铺详情和类型字典已实现 Redis `500ms` 有界等待、
+   miss/坏值/不可用后的 DB 安全回退、per-key singleflight、短空值和后台 commit 后精确失效；
+   未引入布隆过滤器或额外缓存层。任务契约见 `docs/m5b-bounded-cache-plan.md`，正式与负面证据见
+   `docs/m5b-bounded-cache-results.md`。
 3. **M5-C 资源级流控**：复用已有验证码/后台登录门禁，新增秒杀 activity+user+IP 和
    读接口本地并发上限；验证 429、依赖故障 503、秒杀 fail closed，以及已接受订单消费和
    对账不被新流量限流误伤。
@@ -551,41 +551,39 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-新会话只执行 M5B，完成后再回来更新路线状态：
+新会话只进入 M5C 资源级流控，先形成任务级契约再实施：
 
-1. 阅读本文件的第 3、4、8、11、12 节、`docs/m5b-bounded-cache-plan.md` 全文和
-   `docs/blog-like-hot-rank.md` 的现有证据边界；
-2. 核对 branch、HEAD、status；M5A 收口链末端应包含 `5617826`，其后只能有经审查的 M5B
-   计划提交，不得覆盖用户改动；
-3. 阅读 `docs/m5a-observability-results.md` 的负面基线和停止线，不重新执行已完成的 M5A；
-4. 严格按 `docs/m5b-bounded-cache-plan.md` 的任务 0→7 执行；M5-C/M5-D 留待后续独立会话；
-5. 使用 Java 8；所有真实 MySQL/Redis/MQ/ES 测试必须隔离测试数据与正式 key/topic；
-6. 同时核对业务正确性、拒绝语义、积压、最老年龄和恢复时间，不只看 HTTP 成功率；
-7. 不实现标签、每日任务、统一发券账本、Spring Boot 3、分片或 Redis Cluster；
-8. 不 push；最后报告命令、计数、环境、commit、遗留边界和工作区状态；
-9. 只有 M5 全部门禁闭合，才把 M5 状态改为“已完成”并进入 M6 规划。
+1. 阅读本文件第 3、4、8、11、12 节，以及 `docs/m5a-observability-results.md`、
+   `docs/m5b-bounded-cache-results.md` 的负面证据和遗留边界；
+2. 核对 branch、HEAD、status；提交链应包含 M5B 的计划、实现、测试和证据节点，不得覆盖用户改动；
+3. 只处理秒杀 activity+user+IP、读接口本地并发上限、429 和依赖故障 503 语义；先写资源、
+   维度、优先级、失败语义、指标和停止线，不顺手进入 M5D 或 M6；
+4. 保证秒杀 Redis 不可用时继续 fail closed，且已接受订单消费、对账和 Outbox 不被入口流控误伤；
+5. M5B 的 key/payload、TTL、singleflight 和 after-commit 失效是已验证基线；除非出现独立失败证据，
+   不在 M5C 重写缓存协议或调整 Redisson/Hikari；
+6. M5A Broker 不可用时的新秒杀准入仍为 `BLOCKED`，没有有效隔离证据前不得改写该结论；
+7. 使用 Java 8；真实依赖测试必须以 run-id、专用 schema/key/topic 和 loopback 端口证明隔离；
+8. 不实现标签、每日任务、统一发券账本、Spring Boot 3、分片或 Redis Cluster；
+9. 不 push；最后报告命令、计数、环境、commit、负面证据、遗留边界和工作区状态。
 
 ### 可复制到新会话的提示词
 
 ```text
-请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md，
-并严格只执行“阶段 M5-B：有界缓存”。
+请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md、
+docs/m5a-observability-results.md 和 docs/m5b-bounded-cache-results.md，严格只进入 M5C 资源级流控。
 
-当前预期分支是 codex/platform-hardening，M5A 证据提交是
-4bbc2ba test(observability): capture isolated M5A baseline evidence，M5A 收口链末端是
-5617826 docs: mark M5A complete and prioritize M5B。先用
-git branch/log/status/diff 核对真实现场；禁止 reset、clean、切分支覆盖或丢弃用户改动。
-不要开始标签、每日任务、统一发券账本、Spring Boot 3、Redis Cluster 或分库分表。
+当前预期分支是 codex/platform-hardening。先用 git branch/log/status/diff 核对真实现场和 M5B
+提交链；禁止 reset、clean、切分支覆盖或丢弃用户改动。M5B 的 Redis 500ms 上界、商铺详情/
+类型字典 fallback、per-JVM per-key singleflight、短空值、坏值修复和 after-commit 失效已经通过
+隔离测试，不在本阶段无证据重写。
 
-先完整阅读 docs/m5b-bounded-cache-plan.md 和 docs/m5a-observability-results.md，直接复用已保存的
-吞吐、P95/P99、DB QPS、cache hit/fallback 和错误语义。只实施 M5-B 有界缓存：处理 Boot 2.3
-实际支持的 Redis command/pool 等待上界、商铺详情/类型字典 DB 安全回退、per-key singleflight、
-短空值、坏值和 after-commit 失效。当前没有布隆过滤器必要性证据，因此不要实现；也不要启用
-教学版逻辑过期、自旋锁或额外本地缓存。不要同时开始 M5-C/M5-D。
+先形成 M5C 任务级计划，明确资源、维度、并发上限、429/503/业务码、有限指标、正常与故障
+场景和停止线，再按单阶段门禁实施。确保秒杀在 Redis 不可用时 fail closed，入口限流不能误伤
+已接受订单消费、对账和 Outbox。M5A Broker unavailable 新准入仍为 BLOCKED，不得伪报闭合。
 
-每个节点使用 Java 8，真实依赖测试使用隔离数据；通过相关测试、git diff --check 和 staged
-diff 审查后再创建独立本地提交。不要 push。M5 未全部闭合前不得开始 M6；最后报告测试
-命令和数量、隔离环境、commit、尚存边界及 git status。
+使用 Java 8，真实依赖使用独立 run-id/schema/key/topic；不要开始 M5D、M6、标签、每日任务、
+统一发券账本、Spring Boot 3、Redis Cluster 或分库分表。分小提交、不 push，最后报告精确测试
+计数、故障行为、负面证据、提交链、清理范围和 git status。
 ```
 
 ## 16. 路线完成的判定
