@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import cn.hutool.json.JSONUtil;
+import com.localdeals.config.SeckillProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
@@ -20,7 +21,8 @@ import java.util.Arrays;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 
@@ -55,6 +57,9 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private SeckillProperties seckillProperties;
 
     private static final DefaultRedisScript<Long> SECKILL_CHECK_SCRIPT;
 
@@ -110,11 +115,12 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
                             SECKILL_ORDER_KEY + voucherId,
                             SECKILL_META_KEY + voucherId,
                             SECKILL_RESERVATION_KEY + voucherId,
-                            SECKILL_ORDER_STATUS_KEY + orderId),
+                            SECKILL_ORDER_STATUS_KEY + orderId,
+                            SECKILL_PROCESSING_INDEX_KEY),
                     userId.toString(),
                     voucherId.toString(),
                     orderId.toString(),
-                    SECKILL_ORDER_STATUS_TTL_SECONDS.toString()
+                    Long.toString(seckillProperties.getReconciliation().getStaleAfter().getSeconds())
             );
         } catch (Exception e) {
             context.setAdmissionResult(ADMISSION_SYSTEM_ERROR);
@@ -155,6 +161,12 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
         }
 
         try {
+            Double quarantineScore = stringRedisTemplate.opsForZSet().score(
+                    SECKILL_PROCESSING_QUARANTINE_KEY, payload.getOrderId().toString());
+            if (quarantineScore != null) {
+                log.error("Rolling back quarantined seckill transaction. orderId={}", payload.getOrderId());
+                return RocketMQLocalTransactionState.ROLLBACK;
+            }
             Object reservedOrderId = stringRedisTemplate.opsForHash().get(
                     SECKILL_RESERVATION_KEY + payload.getVoucherId(),
                     payload.getUserId().toString());

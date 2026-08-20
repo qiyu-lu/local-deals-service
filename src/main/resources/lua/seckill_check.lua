@@ -6,11 +6,12 @@ KEYS[2] legacy purchased-user Set       seckill:order:{voucherId}
 KEYS[3] activity metadata Hash          seckill:meta:{voucherId}
 KEYS[4] exact reservation Hash          seckill:reservation:{voucherId}
 KEYS[5] order status Hash               seckill:order:status:{orderId}
+KEYS[6] global PROCESSING due-time ZSET  seckill:order:processing
 
 ARGV[1] userId
 ARGV[2] voucherId
 ARGV[3] orderId (kept as a string; never convert a 64-bit ID to a Lua number)
-ARGV[4] order-status TTL in seconds
+ARGV[4] stale-after interval in seconds
 
 Return codes (0/1/2 retain the original public contract):
 0 accepted
@@ -26,11 +27,16 @@ local legacyOrderKey = KEYS[2]
 local metaKey = KEYS[3]
 local reservationKey = KEYS[4]
 local orderStatusKey = KEYS[5]
+local processingIndexKey = KEYS[6]
 
 local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
-local statusTtlSeconds = tonumber(ARGV[4])
+local staleAfterSeconds = tonumber(ARGV[4])
+
+if not staleAfterSeconds or staleAfterSeconds <= 0 then
+    return 5
+end
 
 local meta = redis.call('HMGET', metaKey, 'status', 'beginAt', 'endAt')
 local activityStatus = meta[1]
@@ -79,9 +85,11 @@ redis.call('HSET', orderStatusKey,
         'voucherId', voucherId,
         'reason', '',
         'createdAt', tostring(now),
-        'updatedAt', tostring(now))
-if statusTtlSeconds and statusTtlSeconds > 0 then
-    redis.call('EXPIRE', orderStatusKey, statusTtlSeconds)
-end
+        'updatedAt', tostring(now),
+        'reconcileAttempts', '0')
+-- A PROCESSING state must not disappear while its stock/reservation remain durable. Terminal
+-- transitions apply the bounded seven-day TTL after removing this order from the due index.
+redis.call('PERSIST', orderStatusKey)
+redis.call('ZADD', processingIndexKey, now + staleAfterSeconds, orderId)
 
 return 0

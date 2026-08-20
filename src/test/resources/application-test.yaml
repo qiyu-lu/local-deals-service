@@ -20,3 +20,10 @@ rocketmq:
         seckill-order-topic: false
       es-sync-consumer-group:
         mysql-sync-topic: false
+local-deals:
+  seckill:
+    reconciliation:
+      # Tests opt in explicitly when exercising the worker or one-time backfill.
+      enabled: false
+      compensation-enabled: false
+      backfill-on-startup: false

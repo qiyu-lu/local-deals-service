@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import com.localdeals.exception.OrderReservationConflictException;
+import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.service.SeckillOrderStateService;
@@ -19,6 +20,8 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
+
+import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_LOCK_KEY;
 
 /**
  * Consumes seckill order messages produced after a successful Redis Lua admission check and
@@ -72,7 +75,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             log.error("Rejecting malformed seckill message without touching MySQL. message={}", msg);
             throw new IllegalArgumentException("Malformed seckill message, will retry and eventually enter DLQ.");
         }
-        RLock lock = redissonClient.getLock("lock:order:" + msg.getUserId());
+        RLock lock = redissonClient.getLock(SECKILL_ORDER_LOCK_KEY + msg.getUserId());
         boolean locked = lock.tryLock();
         if (!locked) {
             log.warn("Seckill order lock busy. userId={}, orderId={}", msg.getUserId(), msg.getOrderId());
@@ -113,6 +116,8 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             notifyBestEffort(msg, true);
         } catch (StockExhaustedException e) {
             handlePermanentFailure(msg, "DB_STOCK_EXHAUSTED", e);
+        } catch (OrderIdConflictException e) {
+            handleOrderIdConflict(msg, e);
         } catch (OrderReservationConflictException e) {
             handlePermanentFailure(msg, "DB_ORDER_CONFLICT", e);
         } catch (Exception e) {
@@ -145,6 +150,28 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
         log.warn("Permanent seckill failure compensated. voucherId={} orderId={} reason={}",
                 msg.getVoucherId(), msg.getOrderId(), reason);
         notifyBestEffort(msg, false);
+    }
+
+    private void handleOrderIdConflict(SeckillOrderMessage msg, OrderIdConflictException cause) {
+        try {
+            seckillOrderStateService.suspendVoucher(msg.getVoucherId(), "DB_ORDER_ID_CONFLICT");
+            if (!seckillOrderStateService.quarantineProcessingOrder(
+                    msg.getOrderId(), "DB_ORDER_ID_CONFLICT")) {
+                throw new IllegalStateException(
+                        "Order-id conflict could not be quarantined. orderId=" + msg.getOrderId(), cause);
+            }
+        } catch (RuntimeException quarantineFailure) {
+            consumeFailureCounter.increment();
+            log.error("Order-id conflict could not be isolated; MQ will retry. orderId={}",
+                    msg.getOrderId(), quarantineFailure);
+            throw quarantineFailure;
+        }
+
+        consumeFailureCounter.increment();
+        log.error("Order-id conflict was quarantined without Redis compensation; MQ will retain " +
+                        "the poison message through retry/DLQ. voucherId={} orderId={}",
+                msg.getVoucherId(), msg.getOrderId(), cause);
+        throw cause;
     }
 
     private void notifyBestEffort(SeckillOrderMessage msg, boolean success) {

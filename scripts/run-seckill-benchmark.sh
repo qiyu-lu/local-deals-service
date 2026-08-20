@@ -308,10 +308,14 @@ redis_scalar() {
 reservation_status_counts() {
   local success_count=0
   local non_success_count=0
+  local indexed_count=0
   local reservation_order_ids
   local reserved_order_id
   local reserved_status
-  reservation_order_ids="$(redis_cmd --raw HVALS "seckill:reservation:${VOUCHER_ID}" || true)"
+  local indexed_score
+  if ! reservation_order_ids="$(scan_reservation_order_ids)"; then
+    return 1
+  fi
   if [[ -n "$reservation_order_ids" ]]; then
     while IFS= read -r reserved_order_id; do
       [[ -z "$reserved_order_id" ]] && continue
@@ -321,9 +325,66 @@ reservation_status_counts() {
       else
         non_success_count=$((non_success_count + 1))
       fi
+      indexed_score="$(redis_scalar ZSCORE "seckill:order:processing" "$reserved_order_id")"
+      if [[ -n "$indexed_score" ]]; then
+        indexed_count=$((indexed_count + 1))
+      fi
     done <<< "$reservation_order_ids"
   fi
-  printf '%s %s\n' "$success_count" "$non_success_count"
+  printf '%s %s %s\n' "$success_count" "$non_success_count" "$indexed_count"
+}
+
+scan_reservation_order_ids() {
+  local cursor=0
+  local scan_output
+  local i
+  local -a scan_rows
+
+  while true; do
+    scan_output="$(redis_cmd --raw HSCAN "seckill:reservation:${VOUCHER_ID}" "$cursor" COUNT 500)"
+    mapfile -t scan_rows <<< "$scan_output"
+    if (( ${#scan_rows[@]} == 0 )); then
+      echo "Redis HSCAN returned no cursor for seckill:reservation:${VOUCHER_ID}" >&2
+      return 1
+    fi
+    cursor="${scan_rows[0]}"
+    # HSCAN rows are cursor, then alternating field/value pairs. Only values are order ids.
+    for ((i = 2; i < ${#scan_rows[@]}; i += 2)); do
+      printf '%s\n' "${scan_rows[$i]}"
+    done
+    [[ "$cursor" == "0" ]] && break
+  done
+}
+
+# ZSCAN keeps this correctness check bounded per Redis round trip; never ZRANGE the entire
+# global PROCESSING index merely to inspect one benchmark voucher.
+processing_index_count_for_voucher() {
+  local cursor=0
+  local count=0
+  local scan_output
+  local indexed_order_id
+  local indexed_voucher_id
+  local i
+  local -a scan_rows
+
+  while true; do
+    scan_output="$(redis_cmd --raw ZSCAN "seckill:order:processing" "$cursor" COUNT 500)"
+    mapfile -t scan_rows <<< "$scan_output"
+    if (( ${#scan_rows[@]} == 0 )); then
+      echo "Redis ZSCAN returned no cursor for seckill:order:processing" >&2
+      return 1
+    fi
+    cursor="${scan_rows[0]}"
+    for ((i = 1; i + 1 < ${#scan_rows[@]}; i += 2)); do
+      indexed_order_id="${scan_rows[$i]}"
+      indexed_voucher_id="$(redis_scalar HGET "seckill:order:status:${indexed_order_id}" voucherId)"
+      if [[ "$indexed_voucher_id" == "$VOUCHER_ID" ]]; then
+        count=$((count + 1))
+      fi
+    done
+    [[ "$cursor" == "0" ]] && break
+  done
+  printf '%s\n' "$count"
 }
 
 drain_start_ms="$(date +%s%3N)"
@@ -331,21 +392,27 @@ deadline_ms=$((drain_start_ms + DRAIN_TIMEOUT_MS))
 orders=0
 redis_success_count=0
 redis_non_success_count=0
+redis_processing_index_count=0
+reservation_counts=""
 
 while true; do
   orders="$(mysql_scalar "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = ${VOUCHER_ID};")"
   orders="${orders:-0}"
 
   if [[ "$orders" -ge "$EXPECTED_ORDERS" ]]; then
-    read -r redis_success_count redis_non_success_count <<< "$(reservation_status_counts)"
-    if [[ "$redis_success_count" == "$EXPECTED_ORDERS" && "$redis_non_success_count" == "0" ]]; then
+    reservation_counts="$(reservation_status_counts)"
+    read -r redis_success_count redis_non_success_count redis_processing_index_count \
+      <<< "$reservation_counts"
+    if [[ "$redis_success_count" == "$EXPECTED_ORDERS" \
+      && "$redis_non_success_count" == "0" \
+      && "$redis_processing_index_count" == "0" ]]; then
       break
     fi
   fi
 
   now_ms="$(date +%s%3N)"
   if (( now_ms >= deadline_ms )); then
-    echo "Timed out waiting for RocketMQ consumers: orders=${orders}, expected=${EXPECTED_ORDERS}, redis_success=${redis_success_count}, redis_non_success=${redis_non_success_count}" >&2
+    echo "Timed out waiting for RocketMQ consumers: orders=${orders}, expected=${EXPECTED_ORDERS}, redis_success=${redis_success_count}, redis_non_success=${redis_non_success_count}, processing_index=${redis_processing_index_count}" >&2
     break
   fi
 
@@ -364,7 +431,10 @@ redis_stock="$(redis_scalar GET "seckill:stock:${VOUCHER_ID}")"
 redis_order_count="$(redis_scalar SCARD "seckill:order:${VOUCHER_ID}")"
 redis_reservation_count="$(redis_scalar HLEN "seckill:reservation:${VOUCHER_ID}")"
 redis_activity_status="$(redis_scalar HGET "seckill:meta:${VOUCHER_ID}" status)"
-read -r redis_success_count redis_non_success_count <<< "$(reservation_status_counts)"
+reservation_counts="$(reservation_status_counts)"
+read -r redis_success_count redis_non_success_count redis_processing_reservation_count \
+  <<< "$reservation_counts"
+redis_processing_index_count="$(processing_index_count_for_voucher)"
 RUN_SUMMARY_LINK="${RUN_SUMMARY_REL#docs/}"
 
 python3 - "$JTL_FILE" "$SUMMARY_CSV" "$AGGREGATE_CSV" <<'PY'
@@ -482,6 +552,8 @@ if [[ "$redis_reservation_count" != "$EXPECTED_ORDERS" ]]; then correctness="fai
 if [[ "$redis_activity_status" != "ACTIVE" ]]; then correctness="fail"; fi
 if [[ "$redis_success_count" != "$EXPECTED_ORDERS" ]]; then correctness="fail"; fi
 if [[ "$redis_non_success_count" != "0" ]]; then correctness="fail"; fi
+if [[ "$redis_processing_reservation_count" != "0" ]]; then correctness="fail"; fi
+if [[ "$redis_processing_index_count" != "0" ]]; then correctness="fail"; fi
 if [[ "$redis_stock" != "$expected_redis_stock" ]]; then correctness="fail"; fi
 
 export DATE RUN_ID SCENARIO THREADS LOOPS STOCK USER_COUNT EXPECTED_ORDERS VOUCHER_ID ROUND
@@ -510,6 +582,7 @@ export REDIS_RESERVATION_COUNT="$redis_reservation_count"
 export REDIS_ACTIVITY_STATUS="$redis_activity_status"
 export REDIS_SUCCESS_COUNT="$redis_success_count"
 export REDIS_NON_SUCCESS_COUNT="$redis_non_success_count"
+export REDIS_PROCESSING_INDEX_COUNT="$redis_processing_index_count"
 export CORRECTNESS="$correctness"
 export METRIC_RUN_SUMMARY="$RUN_SUMMARY_REL"
 export METRIC_JTL_FILE="$JTL_FILE_REL"
@@ -532,6 +605,7 @@ fields = [
     "poll_interval_ms", "mysql_orders", "mysql_stock", "duplicate_orders",
     "redis_stock", "redis_order_count", "redis_reservation_count",
     "redis_activity_status", "redis_success_count", "redis_non_success_count",
+    "redis_processing_index_count",
     "correctness", "run_summary", "jtl_file", "summary_csv",
     "aggregate_csv", "html_report",
 ]
@@ -596,6 +670,7 @@ cat > "$RUN_SUMMARY" <<EOF
 - redis_activity_status: ${redis_activity_status}
 - redis_success_count: ${redis_success_count}
 - redis_non_success_count: ${redis_non_success_count}
+- redis_processing_index_count: ${redis_processing_index_count}
 - correctness: ${correctness}
 - metrics_csv: ${METRICS_CSV_REL}
 - jtl_file: ${JTL_FILE_REL}

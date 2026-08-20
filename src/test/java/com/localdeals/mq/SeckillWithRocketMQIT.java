@@ -27,6 +27,9 @@ import static org.awaitility.Awaitility.await;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,6 +91,13 @@ class SeckillWithRocketMQIT {
                     .map(id -> SECKILL_ORDER_STATUS_KEY + id)
                     .collect(java.util.stream.Collectors.toList());
             stringRedisTemplate.delete(statusKeys);
+            String[] orderIds = issuedOrderIds.stream()
+                    .map(String::valueOf)
+                    .toArray(String[]::new);
+            stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, (Object[]) orderIds);
+            stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_QUARANTINE_KEY, (Object[]) orderIds);
+            stringRedisTemplate.opsForHash().delete(
+                    SECKILL_PROCESSING_QUARANTINE_REASON_KEY, (Object[]) orderIds);
         }
     }
 
@@ -136,6 +146,16 @@ class SeckillWithRocketMQIT {
                         assertThat(stringRedisTemplate.opsForHash().get(
                                 SECKILL_ORDER_STATUS_KEY + orderId, "status"))
                                 .isEqualTo("SUCCESS")));
+
+        // SUCCESS and removal from the due index are one Lua transition. A status-only
+        // assertion would miss stale index members that the reconciler scans forever.
+        acceptedOrderIds.forEach(orderId -> {
+            String member = String.valueOf(orderId);
+            assertThat(stringRedisTemplate.opsForZSet().score(
+                    SECKILL_PROCESSING_INDEX_KEY, member)).isNull();
+            assertThat(stringRedisTemplate.opsForZSet().score(
+                    SECKILL_PROCESSING_QUARANTINE_KEY, member)).isNull();
+        });
 
         System.out.println("Accepted orders: " + acceptedOrderIds.size() + "/" + TOTAL_USERS);
     }

@@ -7,8 +7,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.RedisSystemException;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -22,6 +25,7 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -33,6 +37,7 @@ import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 
@@ -117,7 +122,9 @@ public class BenchmarkDataTool {
         int stock = stock();
         long voucherId = resolveVoucherId(stock);
 
-        List<Long> previousOrderIds = benchmarkOrderIds(voucherId);
+        Set<Long> previousOrderIds = new LinkedHashSet<>(benchmarkOrderIds(voucherId));
+        previousOrderIds.addAll(reservationOrderIds(voucherId));
+        previousOrderIds.addAll(indexedProcessingOrderIds(voucherId));
         int deletedOrders = deleteBenchmarkOrders(voucherId);
         jdbcTemplate.update(
                 "UPDATE tb_seckill_voucher " +
@@ -141,10 +148,14 @@ public class BenchmarkDataTool {
         metadata.put("beginAt", Long.toString(now - TimeUnit.DAYS.toSeconds(1)));
         metadata.put("endAt", Long.toString(now + TimeUnit.DAYS.toSeconds(1)));
         stringRedisTemplate.opsForHash().putAll(SECKILL_META_KEY + voucherId, metadata);
+        Long removedProcessingEntries = 0L;
         if (!previousOrderIds.isEmpty()) {
             java.util.List<String> statusKeys = previousOrderIds.stream()
                     .map(id -> SECKILL_ORDER_STATUS_KEY + id)
                     .collect(java.util.stream.Collectors.toList());
+            removedProcessingEntries = stringRedisTemplate.opsForZSet().remove(
+                    SECKILL_PROCESSING_INDEX_KEY,
+                    previousOrderIds.stream().map(String::valueOf).toArray());
             stringRedisTemplate.delete(statusKeys);
         }
         Set<String> retryKeys = stringRedisTemplate.keys(RETRY_KEY_PATTERN);
@@ -154,10 +165,12 @@ public class BenchmarkDataTool {
         recreateStreamGroup();
 
         log.info(
-                "Reset seckill benchmark data. voucherId={}, stock={}, deletedOrders={}",
+                "Reset seckill benchmark data. voucherId={}, stock={}, deletedOrders={}, " +
+                        "removedProcessingEntries={}",
                 voucherId,
                 stock,
-                deletedOrders
+                deletedOrders,
+                removedProcessingEntries == null ? 0L : removedProcessingEntries
         );
     }
 
@@ -251,6 +264,60 @@ public class BenchmarkDataTool {
                 voucherId,
                 phonePrefix() + "%"
         );
+    }
+
+    /**
+     * Lazily scans reservation values so reset can remove status/index state even when the
+     * asynchronous order never reached MySQL. Never materialize the potentially large Hash
+     * through HGETALL/HVALS in this helper.
+     */
+    private Set<Long> reservationOrderIds(long voucherId) {
+        Set<Long> orderIds = new LinkedHashSet<>();
+        ScanOptions options = ScanOptions.scanOptions().count(500).build();
+        try (Cursor<Map.Entry<Object, Object>> cursor = stringRedisTemplate.opsForHash()
+                .scan(SECKILL_RESERVATION_KEY + voucherId, options)) {
+            while (cursor.hasNext()) {
+                Map.Entry<Object, Object> entry = cursor.next();
+                Long orderId = parseLong(entry.getValue());
+                if (orderId != null) {
+                    orderIds.add(orderId);
+                }
+            }
+        }
+        return orderIds;
+    }
+
+    /** Finds orphan due-index members for this voucher without loading the global ZSET. */
+    private Set<Long> indexedProcessingOrderIds(long voucherId) {
+        Set<Long> orderIds = new LinkedHashSet<>();
+        ScanOptions options = ScanOptions.scanOptions().count(500).build();
+        try (Cursor<ZSetOperations.TypedTuple<String>> cursor = stringRedisTemplate.opsForZSet()
+                .scan(SECKILL_PROCESSING_INDEX_KEY, options)) {
+            while (cursor.hasNext()) {
+                String member = cursor.next().getValue();
+                Long orderId = parseLong(member);
+                if (orderId == null) {
+                    continue;
+                }
+                Object storedVoucherId = stringRedisTemplate.opsForHash().get(
+                        SECKILL_ORDER_STATUS_KEY + orderId, "voucherId");
+                if (storedVoucherId != null && Long.toString(voucherId).equals(storedVoucherId.toString())) {
+                    orderIds.add(orderId);
+                }
+            }
+        }
+        return orderIds;
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private long resolveVoucherId(int stock) {

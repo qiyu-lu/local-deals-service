@@ -191,7 +191,7 @@ Add -> Listener -> Aggregate Report
 mvn -Dtest=BenchmarkDataTool#prepareBenchmarkUsersAndTokens test
 ```
 
-2. 重置秒杀库存、订单、活动元数据、精确预约与订单状态 key：
+2. 重置秒杀库存、订单、活动元数据、精确预约、订单状态及本券 processing-index member：
 
 ```bash
 mvn -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData test
@@ -200,6 +200,8 @@ mvn -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData test
 3. 确认 JMeter 中的 `voucherId` 与重置工具日志中的 voucherId 一致。
 
 4. 先用 1 线程冒烟测试，再改成 100/300/500 并发。
+
+重置工具通过 Redis HSCAN/ZSCAN 清理本券历史数据，不对大 reservation Hash 执行 `HGETALL`。自动压测脚本的正确性门禁还要求本券 `redis_processing_index_count=0`；订单数正确但仍有 ZSET 残留会直接判定失败。
 
 ## 报告导出
 

@@ -1,6 +1,7 @@
 package com.localdeals.service;
 
 import com.localdeals.dto.Result;
+import com.localdeals.dto.SeckillOrderPersistenceResult;
 import com.localdeals.entity.VoucherOrder;
 import com.baomidou.mybatisplus.extension.service.IService;
 
@@ -17,6 +18,8 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
     Result seckillVoucher(Long voucherId);
 
     Result querySeckillOrderStatus(Long orderId);
+
+    SeckillOrderPersistenceResult classifyPersistence(Long orderId, Long userId, Long voucherId);
 
     void createVoucherOrder(VoucherOrder voucherOrder);
 }

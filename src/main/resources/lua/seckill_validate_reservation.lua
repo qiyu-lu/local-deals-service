@@ -4,6 +4,7 @@ the consumer is allowed to mutate MySQL. This script is deliberately read-only.
 
 KEYS[1] order status Hash
 KEYS[2] per-voucher reservation Hash
+KEYS[3] reconciliation quarantine ZSET
 
 ARGV[1] userId
 ARGV[2] voucherId
@@ -14,14 +15,22 @@ Return codes:
 1 exact PROCESSING status and exact reservation (safe to persist)
 2 exact SUCCESS status (idempotent ACK)
 3 exact FAILED status (compensated terminal ACK)
-4 ownership mismatch or PROCESSING without the exact reservation (poison ACK)
+4 quarantined, ownership mismatch, or PROCESSING without the exact reservation
+  (poison retry; RocketMQ eventually routes it to DLQ)
 ]]
 
 local statusKey = KEYS[1]
 local reservationKey = KEYS[2]
+local quarantineKey = KEYS[3]
 local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
+
+-- Quarantine is an operator safety boundary, not merely a scheduler hint. A late broker
+-- delivery must never mutate MySQL until the evidence is explicitly cleared.
+if redis.call('ZSCORE', quarantineKey, orderId) then
+    return 4
+end
 
 local state = redis.call('HMGET', statusKey, 'status', 'orderId', 'userId', 'voucherId')
 if not state[1] or not state[2] or not state[3] or not state[4] then

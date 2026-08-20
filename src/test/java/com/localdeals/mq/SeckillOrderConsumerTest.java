@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import com.localdeals.exception.OrderReservationConflictException;
+import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.service.SeckillOrderStateService;
@@ -98,6 +99,28 @@ class SeckillOrderConsumerTest {
         verify(seckillOrderStateService).suspendVoucher(88888L, "DB_ORDER_CONFLICT");
         verify(seckillOrderStateService).compensate(msg, "DB_ORDER_CONFLICT");
         verify(webSocketNotifier).notify(5L, false, 995L, 88888L);
+    }
+
+    @Test
+    void onMessage_orderIdCollisionSuspendsAndQuarantinesWithoutCompensation() {
+        doThrow(new OrderIdConflictException("id belongs to another order"))
+                .when(voucherOrderService).createVoucherOrder(any());
+        SeckillOrderMessage msg = new SeckillOrderMessage(88888L, 15L, 985L);
+        when(seckillOrderStateService.quarantineProcessingOrder(
+                985L, "DB_ORDER_ID_CONFLICT")).thenReturn(true);
+
+        assertThatCode(() -> consumer.onMessage(msg))
+                .isInstanceOf(OrderIdConflictException.class)
+                .hasMessageContaining("another order");
+
+        InOrder order = inOrder(seckillOrderStateService);
+        order.verify(seckillOrderStateService)
+                .suspendVoucher(88888L, "DB_ORDER_ID_CONFLICT");
+        order.verify(seckillOrderStateService)
+                .quarantineProcessingOrder(985L, "DB_ORDER_ID_CONFLICT");
+        verify(seckillOrderStateService, never()).compensate(any(), anyString());
+        verify(seckillOrderStateService, never()).markSuccess(any());
+        verifyNoInteractions(webSocketNotifier);
     }
 
     @Test

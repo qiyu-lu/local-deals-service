@@ -2,8 +2,10 @@ package com.localdeals.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.dto.Result;
+import com.localdeals.dto.SeckillOrderPersistenceResult;
 import com.localdeals.dto.SeckillOrderStatusDTO;
 import com.localdeals.exception.OrderReservationConflictException;
+import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.entity.VoucherOrder;
 import com.localdeals.mapper.VoucherOrderMapper;
@@ -199,7 +201,45 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if ("DB_ORDER_CONFLICT".equals(reason)) {
             return "订单状态冲突，预占已释放";
         }
+        if ("PROCESSING_TIMEOUT".equals(reason)) {
+            return "订单处理超时，预占已释放";
+        }
         return reason == null ? null : "订单处理失败，预占已释放";
+    }
+
+    /**
+     * Reads the writer database and classifies whether an exact Redis reservation has already
+     * been durably persisted. Datasource routing for this method must never select a read replica.
+     * Database failures deliberately propagate to the reconciler: an unavailable database must
+     * never be interpreted as an absent order.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public SeckillOrderPersistenceResult classifyPersistence(Long orderId, Long userId, Long voucherId) {
+        if (orderId == null || userId == null || voucherId == null) {
+            throw new IllegalArgumentException("Seckill order ownership identifiers are required");
+        }
+
+        VoucherOrder byId = getById(orderId);
+        if (byId != null) {
+            if (userId.equals(byId.getUserId()) && voucherId.equals(byId.getVoucherId())) {
+                return SeckillOrderPersistenceResult.exact(
+                        byId.getId(), byId.getUserId(), byId.getVoucherId());
+            }
+            return SeckillOrderPersistenceResult.orderIdConflict(
+                    byId.getId(), byId.getUserId(), byId.getVoucherId());
+        }
+
+        VoucherOrder byUserAndVoucher = lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .one();
+        if (byUserAndVoucher != null) {
+            return SeckillOrderPersistenceResult.userVoucherConflict(
+                    byUserAndVoucher.getId(), byUserAndVoucher.getUserId(),
+                    byUserAndVoucher.getVoucherId());
+        }
+        return SeckillOrderPersistenceResult.absent();
     }
 
     @Override
@@ -211,14 +251,22 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             }
         } catch (DuplicateKeyException e) {
             duplicateOrderCounter.increment();
+            VoucherOrder persistedById = getById(voucherOrder.getId());
+            if (persistedById != null) {
+                if (voucherOrder.getUserId().equals(persistedById.getUserId()) &&
+                        voucherOrder.getVoucherId().equals(persistedById.getVoucherId())) {
+                    log.info("Idempotent seckill message replay. orderId={}", voucherOrder.getId());
+                    return;
+                }
+                throw new OrderIdConflictException(
+                        "Seckill order id belongs to another DB order. requestedOrderId=" +
+                                voucherOrder.getId() + ", persistedUserId=" + persistedById.getUserId() +
+                                ", persistedVoucherId=" + persistedById.getVoucherId());
+            }
             VoucherOrder persisted = lambdaQuery()
                     .eq(VoucherOrder::getUserId, voucherOrder.getUserId())
                     .eq(VoucherOrder::getVoucherId, voucherOrder.getVoucherId())
                     .one();
-            if (persisted != null && voucherOrder.getId().equals(persisted.getId())) {
-                log.info("Idempotent seckill message replay. orderId={}", voucherOrder.getId());
-                return;
-            }
             Long persistedOrderId = persisted == null ? null : persisted.getId();
             throw new OrderReservationConflictException(
                     "Redis reservation conflicts with DB order. requestedOrderId=" + voucherOrder.getId() +

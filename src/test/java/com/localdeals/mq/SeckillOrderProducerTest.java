@@ -1,6 +1,7 @@
 package com.localdeals.mq;
 
 import cn.hutool.json.JSONUtil;
+import com.localdeals.config.SeckillProperties;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
@@ -26,6 +28,8 @@ import static com.localdeals.mq.SeckillOrderProducer.ADMISSION_SYSTEM_ERROR;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
+import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +54,8 @@ class SeckillOrderProducerTest {
     private StringRedisTemplate stringRedisTemplate;
     @Mock
     private HashOperations<String, Object, Object> hashOperations;
+    @Mock
+    private ZSetOperations<String, String> zSetOperations;
 
     private SeckillOrderProducer producer;
 
@@ -58,6 +64,10 @@ class SeckillOrderProducerTest {
         producer = new SeckillOrderProducer();
         ReflectionTestUtils.setField(producer, "rocketMQTemplate", rocketMQTemplate);
         ReflectionTestUtils.setField(producer, "stringRedisTemplate", stringRedisTemplate);
+        ReflectionTestUtils.setField(producer, "seckillProperties", new SeckillProperties());
+        org.mockito.Mockito.lenient().when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        org.mockito.Mockito.lenient().when(zSetOperations.score(
+                SECKILL_PROCESSING_QUARANTINE_KEY, Long.toString(ORDER_ID))).thenReturn(null);
     }
 
     @Test
@@ -77,13 +87,14 @@ class SeckillOrderProducerTest {
         verify(stringRedisTemplate).execute(
                 any(RedisScript.class), keys.capture(),
                 eq(Long.toString(USER_ID)), eq(Long.toString(VOUCHER_ID)),
-                eq(Long.toString(ORDER_ID)), any());
+                eq(Long.toString(ORDER_ID)), eq("120"));
         assertThat(keys.getValue()).containsExactly(
                 SECKILL_STOCK_KEY + VOUCHER_ID,
                 SECKILL_ORDER_KEY + VOUCHER_ID,
                 SECKILL_META_KEY + VOUCHER_ID,
                 SECKILL_RESERVATION_KEY + VOUCHER_ID,
-                SECKILL_ORDER_STATUS_KEY + ORDER_ID);
+                SECKILL_ORDER_STATUS_KEY + ORDER_ID,
+                SECKILL_PROCESSING_INDEX_KEY);
     }
 
     @Test
@@ -128,6 +139,17 @@ class SeckillOrderProducerTest {
 
         assertThat(producer.checkLocalTransaction(brokerMessage()))
                 .isEqualTo(RocketMQLocalTransactionState.COMMIT);
+    }
+
+    @Test
+    void checkLocalTransaction_quarantinedOrderRollsBackBeforeReservationRead() {
+        when(zSetOperations.score(SECKILL_PROCESSING_QUARANTINE_KEY, Long.toString(ORDER_ID)))
+                .thenReturn(1770000000D);
+
+        assertThat(producer.checkLocalTransaction(brokerMessage()))
+                .isEqualTo(RocketMQLocalTransactionState.ROLLBACK);
+
+        org.mockito.Mockito.verifyNoInteractions(hashOperations);
     }
 
     @Test

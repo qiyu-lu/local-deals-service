@@ -3,6 +3,7 @@ package com.localdeals.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.localdeals.entity.VoucherOrder;
 import com.localdeals.exception.OrderReservationConflictException;
+import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,8 @@ class VoucherOrderReliabilityIT {
     private static final Long ORDER_ID = 999000001L;
     private static final Long DUP_ORDER_ID_1 = 999000002L;
     private static final Long DUP_ORDER_ID_2 = 999000003L;
+    private static final Long PK_COLLISION_ORDER_ID = 999000004L;
+    private static final Long OTHER_USER_ID = 999002L;
     private Integer originalStock;
 
     @BeforeEach
@@ -64,7 +67,9 @@ class VoucherOrderReliabilityIT {
 
     private void clearTestOrders() {
         voucherOrderService.remove(new QueryWrapper<VoucherOrder>()
-                .eq("user_id", USER_ID).eq("voucher_id", VOUCHER_ID));
+                .eq("voucher_id", VOUCHER_ID)
+                .and(wrapper -> wrapper.eq("user_id", USER_ID)
+                        .or().eq("id", PK_COLLISION_ORDER_ID)));
     }
 
     @Test
@@ -115,5 +120,26 @@ class VoucherOrderReliabilityIT {
         long stockAfter = seckillVoucherService.query()
                 .eq("voucher_id", VOUCHER_ID).one().getStock();
         assertThat(stockAfter).isEqualTo(stockBefore);
+    }
+
+    @Test
+    void createVoucherOrder_primaryKeyOwnedByAnotherUserIsNotACompensablePairConflict() {
+        VoucherOrder existing = new VoucherOrder();
+        existing.setId(PK_COLLISION_ORDER_ID);
+        existing.setUserId(OTHER_USER_ID);
+        existing.setVoucherId(VOUCHER_ID);
+        assertThat(voucherOrderService.save(existing)).isTrue();
+
+        VoucherOrder collision = new VoucherOrder();
+        collision.setId(PK_COLLISION_ORDER_ID);
+        collision.setUserId(USER_ID);
+        collision.setVoucherId(VOUCHER_ID);
+
+        assertThatThrownBy(() -> voucherOrderService.createVoucherOrder(collision))
+                .isInstanceOf(OrderIdConflictException.class)
+                .hasMessageContaining("persistedUserId=" + OTHER_USER_ID);
+
+        VoucherOrder persisted = voucherOrderService.getById(PK_COLLISION_ORDER_ID);
+        assertThat(persisted.getUserId()).isEqualTo(OTHER_USER_ID);
     }
 }

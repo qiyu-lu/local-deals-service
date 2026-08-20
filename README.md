@@ -22,7 +22,8 @@
 | --- | --- | --- |
 | 搜索只有 MySQL LIKE%，不支持分词和地理位置组合查询 | Elasticsearch 7.17.18 + IK 分词器；`GET /shop/search?keyword=火锅&x=120.15&y=30.33&radius=5000` 单次请求同时做 IK 分词、geo 过滤、相关性排序 | `ShopSearchBeforeIT`（基线）vs `ShopSearchAfterIT`（ES 验证）；`docs/improvement-comparison.md` |
 | 秒杀异步消息用 Redis Stream，库存预占与消息投递缺少事务绑定 | RocketMQ 事务消息：半消息 → 本地 Lua 预占 → COMMIT/ROLLBACK；Broker 回查必须同时匹配 `userId → orderId` 精确预约和订单状态所有权，避免仅凭“用户买过”误提交另一条半消息 | `SeckillOrderProducerTest`、`SeckillLuaScriptContractTest`、`SeckillWithRocketMQIT` |
-| Redis 预扣成功但 DB 永久失败时直接 ACK，库存和一人一单状态无法恢复 | 消费者写 MySQL 前先用只读 Lua 校验 exact `PROCESSING` 预约；缺失、错属或畸形消息不落库并重试至 DLQ。消费成功后原子标记 `SUCCESS`；DB 库存耗尽或订单冲突时先暂停活动，再按 orderId 精确、幂等补偿库存并标记 `FAILED` | `SeckillOrderStateIT`、`SeckillOrderConsumerTest`、`VoucherOrderReliabilityIT` |
+| Redis 预扣成功但 DB 永久失败时直接 ACK，库存和一人一单状态无法恢复 | 消费者写 MySQL 前先用只读 Lua 校验 exact `PROCESSING` 预约；缺失、错属或畸形消息不落库并重试至 DLQ。消费成功后原子标记 `SUCCESS`；DB 库存耗尽或同用户/券冲突时先暂停再精确补偿；主键 orderId 已属其他订单时只暂停并 quarantine，绝不自动释放 | `SeckillOrderStateIT`、`SeckillOrderConsumerTest`、`VoucherOrderReliabilityIT` |
+| 预占消息在长期故障/DLQ 后留在 `PROCESSING`，库存和用户购买资格无法自动收敛 | Redis TIME 驱动的 ZSET 持久到期索引 + 与 MQ 消费者共用的用户锁 + MySQL exact 分类；有单修复 `SUCCESS`，无单达到业务截止时间后才可在独立开关下精确补偿，不安全归属进 quarantine | `SeckillOrderReconcilerTest`、`SeckillProcessingIndexBackfillRunnerTest`、`docs/seckill-reconciliation.md` |
 | 新活动才写 Redis 元数据，升级后存量活动会被 fail-closed 拒绝 | 启动时从 MySQL 幂等回填存量券；库存只在 key 不存在时初始化，活动字段只补缺失值，不覆盖实时预扣或 `SUSPENDED` | `SeckillVoucherRedisInitializerTest`、`SeckillVoucherRedisInitializerIT` |
 | MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
 | 秒杀结果只依赖单次实时通知，断线或跨实例异常后用户无法确认结果 | WebSocket + Redis pub/sub 作为快速通知，`GET /voucher-order/status/{orderId}` 作为用户隔离的持久兜底；前端超时后有限轮询，64 位订单 ID 全链路按字符串传输 | `WebSocketNotifierTest`、`SeckillWebSocketIT`、`VoucherOrderServiceImplTest` |
@@ -31,7 +32,7 @@
 | 上传目录硬编码，删除接口可路径穿越或跨用户删除 | 上传根目录与 5 MB 上限配置化，校验扩展名/MIME/文件头；`tb_upload_file` 记录归属及 TEMP/DELETING/PUBLISHED 状态，只允许上传者删除未发布图片 | `UploadControllerTest`、`UploadFileServiceIT`、Flyway V3/V4 |
 | 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
 | Redis Stream 消费失败后主要依赖 pending-list 重试，失败消息缺少明确归宿 | 增加 pending 重试计数、最大重试次数和 dead-letter Stream（第一阶段可靠性增强，已由 RocketMQ 内置 DLQ 取代） | `stream.orders.dlq`、`docs/reliability-results.md` |
-| 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态和活动状态；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
+| 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态、活动状态和本券 processing index 归零；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露秒杀请求分流、MQ 消费结果、DB 幂等与库存回滚等指标 | `/actuator/prometheus` |
 
 
@@ -103,7 +104,9 @@
 | `ShopSearchAfterIT` | ES 搜索 | IK 分词 + geo-distance 组合查询；结果与 before 对比 |
 | `SeckillWithRocketMQIT` | MQ 秒杀 | 500 并发 / 100 库存：恰好 100 个预约经真实 RocketMQ 收敛为 `SUCCESS`；DB 写入在本测试中隔离为 Mock |
 | `SeckillOrderStateIT` | Redis 状态机 | 精确预约成功、失败补偿及重复补偿幂等 |
-| `VoucherOrderReliabilityIT` | MySQL 事务 | 库存不足回滚、同订单重放幂等、不同订单号冲突 |
+| `SeckillProcessingIndexBackfillRunnerTest` | 升级回填 | lazy SCAN 精确回填；终态/已隔离跳过；canonical owner 不安全时拒绝启动，非规范 raw key 留存并隔离 |
+| `SeckillOrderReconcilerTest` | 超时对账 | DB exact 修复、无单延后/补偿、冲突隔离、补偿独立开关与共享锁 |
+| `VoucherOrderReliabilityIT` | MySQL 事务 | 库存不足回滚、同订单重放幂等、用户/券冲突与跨 owner 主键碰撞分类 |
 | `SeckillVoucherRedisInitializerIT` | 升级兼容 | 存量活动回填且不覆盖实时库存、暂停状态和已有时间 |
 | `CanalSyncIT` | Canal 同步 | 直接调用 `EsSyncConsumer.onMessage(json)`；验证 INSERT/UPDATE/DELETE 三种操作同步到 ES |
 | `SeckillWebSocketIT` | WebSocket | Awaitility 3s 内断言 mock session.sendMessage() 被调用，消息含 `"success":true` |
@@ -257,27 +260,16 @@ bootstrap 密码并恢复管理入口。无法安排该停机窗口时，应先�
 
 当前管理端采用固定的 `PLATFORM_ADMIN`、`MERCHANT_OWNER`、`MERCHANT_STAFF` 三角色；尚未实现自定义角色编辑、按单店授权、主/子供应商层级和历史订单查询 API。`order:read` 已预留为稳定权限码，管理端 SPA 目前只提供目录维护与实时订单页面；商户、员工账号的管理能力已由 API 提供，但还没有对应的可视化页面。
 
-### 已知限制：超龄 PROCESSING
+### 超龄 PROCESSING 恢复
 
-当前版本还没有自动处理“Redis 已预占、消息最终进入 DLQ、MySQL 从未落单”的复合故障。
-`PROCESSING` 状态保留 7 天，但库存、用户 Set 和 reservation 不随它过期；如果不处置，状态
-过期后仍会占住库存并阻止该用户重试。因此当前不能把这一分支宣称为自动闭环。
+当前版本已为未决 `PROCESSING` 建立无 TTL 的 status 证据和 Redis ZSET 到期索引。定时 reconciler 与 MQ 消费者共用 `lock:order:{userId}`，锁内以 writer MySQL 对 exact 三元组分类：DB 已有完全匹配订单时修复 `SUCCESS`；DB 明确无单且达到业务 `final-timeout` 时，只有独立的 compensation 开关已审批才 exact compensate。迟到 MQ 在 `FAILED` 门禁下 ACK 且不落库。DB 异常、orderId 错属和不可证明状态一律 fail-closed。
 
-上线后必须同时告警 `%DLQ%seckill-consumer-group`、MQ 消费失败指标和超龄
-`PROCESSING`（建议在远小于 7 天的阈值开始告警）。处置时先按 orderId 核对 MySQL：
-
-- 已存在完全匹配的订单：修复故障后重投原消息，依靠 DB 幂等路径把 Redis 收敛为
-  `SUCCESS`。
-- 不存在订单：只有在确认事务 half message、普通重投和 DLQ 消息均不会再并发投递后，
-  才能执行 exact compensation；禁止直接删除 Set/Hash 或手工加库存。
-- 所有权字段错属或无法证明消息归属：保持隔离并人工对账，不得绕过消费前校验强行落库。
-
-后续阶段应增加持久的 PROCESSING 索引与定时 reconciler（DB 有单转 `SUCCESS`；DB 无单且
-确认消息生命周期结束后精确补偿），再移除这项运维限制。
+为防止升级时把旧 status TTL 和缺失索引带入新 worker，reconciler、对账器超时自动补偿和一次性 backfill 是三个默认关闭的独立开关。发布必须执行“停写 → 停旧实例 → 单实例 lazy SCAN/exact Lua 回填 → 观察 quarantine → 先开无补偿对账 → 再审批补偿”门禁，禁止新旧消息契约滚动混跑。无补偿阶段仍会修复 DB exact 订单、暂停冲突活动和隔离不安全状态，并非只读扫描；该开关不关闭 MQ consumer 对已确认永久失败的即时精确补偿。详见 [秒杀 PROCESSING 自动对账与升级门禁](docs/seckill-reconciliation.md)。
 
 ## 文档
 
 - [商户后台、RBAC 与发布门禁](docs/admin-rbac.md)
+- [秒杀 PROCESSING 自动对账与升级门禁](docs/seckill-reconciliation.md)
 - [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)

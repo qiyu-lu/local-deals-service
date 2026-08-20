@@ -66,6 +66,19 @@ local-deals:
   websocket:
     allowed-origins: "${LOCAL_DEALS_WEBSOCKET_ALLOWED_ORIGINS:http://localhost:8088,http://localhost:5173}"
   seckill:
+    reconciliation:
+      # Three independent, fail-closed rollout gates. Keep all false until the
+      # stop-write/backfill/observe procedure in docs/seckill-reconciliation.md is complete.
+      enabled: "${LOCAL_DEALS_SECKILL_RECONCILIATION_ENABLED:false}"
+      compensation-enabled: "${LOCAL_DEALS_SECKILL_COMPENSATION_ENABLED:false}"
+      backfill-on-startup: "${LOCAL_DEALS_SECKILL_BACKFILL_ON_STARTUP:false}"
+      initial-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_INITIAL_DELAY:30s}"
+      fixed-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_FIXED_DELAY:10s}"
+      stale-after: "${LOCAL_DEALS_SECKILL_RECONCILIATION_STALE_AFTER:2m}"
+      retry-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_RETRY_DELAY:1m}"
+      final-timeout: "${LOCAL_DEALS_SECKILL_RECONCILIATION_FINAL_TIMEOUT:15m}"
+      batch-size: "${LOCAL_DEALS_SECKILL_RECONCILIATION_BATCH_SIZE:100}"
+      scan-count: "${LOCAL_DEALS_SECKILL_BACKFILL_SCAN_COUNT:500}"
     stream:
       key: "stream.orders"
       group: "g1"
