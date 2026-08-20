@@ -44,6 +44,7 @@ build/
 /es-data/
 
 ### benchmark generated files ###
+/benchmark/m5a/
 /benchmark/*.csv
 /benchmark/*.jtl
 /benchmark/*.log
