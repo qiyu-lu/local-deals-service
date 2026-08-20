@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(
+        named = "M5A_ISOLATED", matches = "true")
 class CanalSyncIT {
 
     private static final long TEST_SHOP_ID = 999901L;

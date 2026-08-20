@@ -5,6 +5,7 @@ import com.localdeals.dto.Result;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.entity.Blog;
 import com.localdeals.entity.Follow;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.mapper.BlogMapper;
 import com.localdeals.service.BlogHotRankService;
 import com.localdeals.service.IFollowService;
@@ -18,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
@@ -59,6 +61,8 @@ class BlogServiceAfterCommitTest {
     @BeforeEach
     void setUp() {
         service = new BlogServiceImpl();
+        ReflectionTestUtils.setField(service, "metrics",
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
         ReflectionTestUtils.setField(service, "baseMapper", blogMapper);
         ReflectionTestUtils.setField(service, "uploadFileService", uploadFileService);
         ReflectionTestUtils.setField(service, "followService", followService);

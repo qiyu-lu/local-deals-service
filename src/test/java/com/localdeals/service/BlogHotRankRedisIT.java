@@ -1,6 +1,9 @@
 package com.localdeals.service;
 
 import com.localdeals.config.BlogHotRankProperties;
+import com.localdeals.observability.LocalDealsMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -184,11 +187,23 @@ class BlogHotRankRedisIT {
         }
 
         @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+
+        @Bean
+        LocalDealsMetrics localDealsMetrics(MeterRegistry registry) {
+            return new LocalDealsMetrics(registry);
+        }
+
+        @Bean
         BlogHotRankService blogHotRankService(JdbcTemplate jdbcTemplate,
                                               StringRedisTemplate redisTemplate,
                                               RedissonClient redissonClient,
-                                              BlogHotRankProperties properties) {
-            return new BlogHotRankService(jdbcTemplate, redisTemplate, redissonClient, properties);
+                                              BlogHotRankProperties properties,
+                                              LocalDealsMetrics metrics) {
+            return new BlogHotRankService(
+                    jdbcTemplate, redisTemplate, redissonClient, properties, metrics);
         }
     }
 }

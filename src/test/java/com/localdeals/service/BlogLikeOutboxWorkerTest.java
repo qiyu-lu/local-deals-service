@@ -1,6 +1,8 @@
 package com.localdeals.service;
 
 import com.localdeals.config.BlogLikeProperties;
+import com.localdeals.observability.LocalDealsMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RLock;
@@ -31,7 +33,8 @@ class BlogLikeOutboxWorkerTest {
         redissonClient = mock(RedissonClient.class);
         lock = mock(RLock.class);
         when(redissonClient.getLock(BLOG_LIKE_OUTBOX_LOCK_KEY)).thenReturn(lock);
-        worker = new BlogLikeOutboxWorker(properties, batchService, redissonClient);
+        worker = new BlogLikeOutboxWorker(properties, batchService, redissonClient,
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
     }
 
     @Test

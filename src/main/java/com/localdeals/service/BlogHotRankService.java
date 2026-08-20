@@ -1,6 +1,7 @@
 package com.localdeals.service;
 
 import com.localdeals.config.BlogHotRankProperties;
+import com.localdeals.observability.LocalDealsMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -78,16 +79,19 @@ public class BlogHotRankService {
     private final StringRedisTemplate redisTemplate;
     private final RedissonClient redissonClient;
     private final BlogHotRankProperties properties;
+    private final LocalDealsMetrics metrics;
     private final AtomicLong nextRedisReadWarningAt = new AtomicLong(0L);
 
     public BlogHotRankService(JdbcTemplate jdbcTemplate,
                               StringRedisTemplate redisTemplate,
                               RedissonClient redissonClient,
-                              BlogHotRankProperties properties) {
+                              BlogHotRankProperties properties,
+                              LocalDealsMetrics metrics) {
         this.jdbcTemplate = jdbcTemplate;
         this.redisTemplate = redisTemplate;
         this.redissonClient = redissonClient;
         this.properties = properties;
+        this.metrics = metrics;
     }
 
     /**
@@ -95,16 +99,16 @@ public class BlogHotRankService {
      */
     public BlogHotRankReadResult readPage(Integer page) {
         if (!properties.isReadEnabled()) {
-            return BlogHotRankReadResult.miss(READ_DISABLED);
+            return observed(BlogHotRankReadResult.miss(READ_DISABLED));
         }
         if (page == null || page <= 0) {
-            return BlogHotRankReadResult.miss(INVALID_PAGE);
+            return observed(BlogHotRankReadResult.miss(INVALID_PAGE));
         }
 
         long offset = ((long) page - 1L) * properties.getPageSize();
         long requestedEndExclusive = offset + properties.getPageSize();
         if (offset >= properties.getTopK() || requestedEndExclusive > properties.getTopK()) {
-            return BlogHotRankReadResult.miss(OUTSIDE_TOP_K);
+            return observed(BlogHotRankReadResult.miss(OUTSIDE_TOP_K));
         }
         long end = requestedEndExclusive - 1L;
 
@@ -112,27 +116,27 @@ public class BlogHotRankService {
             HashOperations<String, Object, Object> hash = redisTemplate.opsForHash();
             Object ready = hash.get(META_KEY, META_READY_FIELD);
             if (!"1".equals(stringValue(ready))) {
-                return BlogHotRankReadResult.miss(NOT_READY);
+                return observed(BlogHotRankReadResult.miss(NOT_READY));
             }
 
             String generationBefore = positiveDecimal(hash.get(META_KEY, META_GENERATION_FIELD));
             if (generationBefore == null) {
-                return BlogHotRankReadResult.miss(BAD_METADATA);
+                return observed(BlogHotRankReadResult.miss(BAD_METADATA));
             }
             String countBefore = nonNegativeDecimal(hash.get(META_KEY, META_COUNT_FIELD));
             if (countBefore == null) {
-                return BlogHotRankReadResult.miss(BAD_METADATA);
+                return observed(BlogHotRankReadResult.miss(BAD_METADATA));
             }
             String capacity = positiveDecimal(hash.get(META_KEY, META_CAPACITY_FIELD));
             String publishedAt = positiveDecimal(hash.get(META_KEY, META_PUBLISHED_AT_FIELD));
             if (capacity == null || publishedAt == null ||
                     Long.parseLong(capacity) != properties.getTopK()) {
-                return BlogHotRankReadResult.miss(BAD_METADATA);
+                return observed(BlogHotRankReadResult.miss(BAD_METADATA));
             }
             long publishedAtMillis = Long.parseLong(publishedAt);
             long now = System.currentTimeMillis();
             if (publishedAtMillis > now || now - publishedAtMillis > properties.getMaxStale().toMillis()) {
-                return BlogHotRankReadResult.miss(STALE);
+                return observed(BlogHotRankReadResult.miss(STALE));
             }
 
             ZSetOperations<String, String> rank = redisTemplate.opsForZSet();
@@ -140,32 +144,37 @@ public class BlogHotRankService {
             long expectedCount = Long.parseLong(countBefore);
             if (cardinality == null || cardinality != expectedCount ||
                     expectedCount > properties.getTopK()) {
-                return BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT);
+                return observed(BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT));
             }
             Set<String> members = rank.reverseRange(LIVE_KEY, offset, end);
             if (members == null) {
-                return BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT);
+                return observed(BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT));
             }
 
             String generationAfter = positiveDecimal(hash.get(META_KEY, META_GENERATION_FIELD));
             String countAfter = nonNegativeDecimal(hash.get(META_KEY, META_COUNT_FIELD));
             if (!generationBefore.equals(generationAfter) || !countBefore.equals(countAfter)) {
-                return BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT);
+                return observed(BlogHotRankReadResult.miss(INCONSISTENT_SNAPSHOT));
             }
 
             List<Long> blogIds = new ArrayList<>(members.size());
             for (String member : members) {
                 Long blogId = parseMember(member);
                 if (blogId == null) {
-                    return BlogHotRankReadResult.miss(BAD_MEMBER);
+                    return observed(BlogHotRankReadResult.miss(BAD_MEMBER));
                 }
                 blogIds.add(blogId);
             }
-            return BlogHotRankReadResult.hit(blogIds);
+            return observed(BlogHotRankReadResult.hit(blogIds));
         } catch (RuntimeException e) {
             logRedisReadFailure(page, e);
-            return BlogHotRankReadResult.miss(REDIS_UNAVAILABLE);
+            return observed(BlogHotRankReadResult.miss(REDIS_UNAVAILABLE));
         }
+    }
+
+    private BlogHotRankReadResult observed(BlogHotRankReadResult result) {
+        metrics.recordHotRankRead(result);
+        return result;
     }
 
     private void logRedisReadFailure(Integer page, RuntimeException failure) {
@@ -184,12 +193,13 @@ public class BlogHotRankService {
      * Builds and publishes one complete top-K generation. The no-wait lock sheds duplicate work.
      */
     public RebuildOutcome rebuild() {
+        long startedAt = System.nanoTime();
         RLock lock;
         try {
             lock = redissonClient.getLock(LOCK_KEY);
         } catch (RuntimeException e) {
             log.error("Unable to obtain the blog hot-rank lock handle", e);
-            return RebuildOutcome.FAILED;
+            return observedRebuild(RebuildOutcome.FAILED, startedAt);
         }
 
         boolean locked = false;
@@ -197,7 +207,7 @@ public class BlogHotRankService {
         try {
             locked = lock.tryLock();
             if (!locked) {
-                return RebuildOutcome.SKIPPED_LOCK_BUSY;
+                return observedRebuild(RebuildOutcome.SKIPPED_LOCK_BUSY, startedAt);
             }
 
             Long generation = redisTemplate.opsForValue().increment(GENERATION_KEY);
@@ -219,11 +229,11 @@ public class BlogHotRankService {
             if (Long.valueOf(1L).equals(published)) {
                 log.info("Published Redis blog hot rank. generation={}, size={}",
                         generation, candidates.size());
-                return RebuildOutcome.PUBLISHED;
+                return observedRebuild(RebuildOutcome.PUBLISHED, startedAt);
             }
             if (Long.valueOf(0L).equals(published)) {
                 log.info("Discarded stale Redis blog hot-rank builder. generation={}", generation);
-                return RebuildOutcome.STALE_GENERATION;
+                return observedRebuild(RebuildOutcome.STALE_GENERATION, startedAt);
             }
             throw new IllegalStateException(
                     "Redis rejected the staged blog hot rank. generation=" + generation +
@@ -231,12 +241,32 @@ public class BlogHotRankService {
         } catch (RuntimeException e) {
             log.error("Failed to rebuild the Redis blog hot rank", e);
             cleanupTemporaryKey(temporaryKey);
-            return RebuildOutcome.FAILED;
+            return observedRebuild(RebuildOutcome.FAILED, startedAt);
         } finally {
             if (locked) {
                 unlockBestEffort(lock);
             }
         }
+    }
+
+    private RebuildOutcome observedRebuild(RebuildOutcome outcome, long startedAt) {
+        metrics.recordHotRankRebuild(outcome, System.nanoTime() - startedAt);
+        return outcome;
+    }
+
+    /** Returns the age of valid published metadata; missing or invalid metadata is unavailable. */
+    public double publishedAgeSeconds() {
+        Object raw = redisTemplate.opsForHash().get(META_KEY, META_PUBLISHED_AT_FIELD);
+        String publishedAt = positiveDecimal(raw);
+        if (publishedAt == null) {
+            throw new IllegalStateException("Blog hot-rank publication metadata is unavailable");
+        }
+        long publishedAtMillis = Long.parseLong(publishedAt);
+        long now = System.currentTimeMillis();
+        if (publishedAtMillis > now) {
+            throw new IllegalStateException("Blog hot-rank publication time is in the future");
+        }
+        return (now - publishedAtMillis) / 1000D;
     }
 
     /**

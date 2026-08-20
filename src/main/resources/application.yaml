@@ -40,11 +40,28 @@ logging:
     # Keep mapper parameters (including password hashes and user data) out of production logs.
     com.localdeals: info
 management:
+  server:
+    port: "${LOCAL_DEALS_MANAGEMENT_PORT:18084}"
+    address: "${LOCAL_DEALS_MANAGEMENT_ADDRESS:127.0.0.1}"
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: ping
+        readiness:
+          include: db,redis
 local-deals:
+  observability:
+    sampling-enabled: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_ENABLED:false}"
+    initial-delay: "${LOCAL_DEALS_OBSERVABILITY_INITIAL_DELAY:10s}"
+    sampling-interval: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_INTERVAL:30s}"
   admin:
     # Create-only, fail-closed platform account bootstrap. No default credential exists.
     bootstrap:

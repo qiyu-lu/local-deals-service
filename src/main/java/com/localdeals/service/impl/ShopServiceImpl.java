@@ -7,6 +7,7 @@ import com.localdeals.dto.Result;
 import com.localdeals.dto.ShopDoc;
 import com.localdeals.entity.Shop;
 import com.localdeals.mapper.ShopMapper;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.utils.CacheClient;
@@ -62,7 +63,14 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     public Result queryShopById(Long id) {
 
-        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.SECONDS);
+        Shop shop = cacheClient.queryWithPassThrough(
+                LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                CACHE_SHOP_KEY,
+                id,
+                Shop.class,
+                this::getById,
+                CACHE_SHOP_TTL,
+                TimeUnit.SECONDS);
 
 
         // 其他策略（教学用，已注释）：

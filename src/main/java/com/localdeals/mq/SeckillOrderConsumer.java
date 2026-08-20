@@ -5,6 +5,7 @@ import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.service.SeckillOrderStateService;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,6 +49,9 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     @Resource
     private SeckillOrderStateService seckillOrderStateService;
 
+    @Resource
+    private LocalDealsMetrics localDealsMetrics;
+
     private Counter consumeSuccessCounter;
     private Counter consumeFailureCounter;
 
@@ -71,30 +75,50 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     @Override
     public void onMessage(SeckillOrderMessage msg) {
         if (msg == null || msg.getUserId() == null || msg.getVoucherId() == null || msg.getOrderId() == null) {
+            localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.MALFORMED);
             consumeFailureCounter.increment();
             log.error("Rejecting malformed seckill message without touching MySQL. message={}", msg);
             throw new IllegalArgumentException("Malformed seckill message, will retry and eventually enter DLQ.");
         }
-        RLock lock = redissonClient.getLock(SECKILL_ORDER_LOCK_KEY + msg.getUserId());
-        boolean locked = lock.tryLock();
+        final RLock lock;
+        final boolean locked;
+        try {
+            lock = redissonClient.getLock(SECKILL_ORDER_LOCK_KEY + msg.getUserId());
+            locked = lock.tryLock();
+        } catch (RuntimeException lockFailure) {
+            localDealsMetrics.recordMqConsumeOutcome(
+                    LocalDealsMetrics.MqConsumeOutcome.TRANSIENT_ERROR);
+            throw lockFailure;
+        }
         if (!locked) {
+            localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.LOCK_BUSY);
             log.warn("Seckill order lock busy. userId={}, orderId={}", msg.getUserId(), msg.getOrderId());
             throw new IllegalStateException("Order lock busy, will retry.");
         }
+        boolean detailedOutcomeRecorded = false;
         try {
             SeckillOrderStateService.ReservationDecision decision =
                     seckillOrderStateService.validateForConsumption(msg);
             if (decision == SeckillOrderStateService.ReservationDecision.ALREADY_SUCCESS) {
+                localDealsMetrics.recordMqConsumeOutcome(
+                        LocalDealsMetrics.MqConsumeOutcome.ALREADY_SUCCESS);
+                detailedOutcomeRecorded = true;
                 consumeSuccessCounter.increment();
                 log.info("Acknowledging an already successful seckill message. orderId={}", msg.getOrderId());
                 return;
             }
             if (decision == SeckillOrderStateService.ReservationDecision.ALREADY_FAILED) {
+                localDealsMetrics.recordMqConsumeOutcome(
+                        LocalDealsMetrics.MqConsumeOutcome.ALREADY_FAILED);
+                detailedOutcomeRecorded = true;
                 consumeFailureCounter.increment();
                 log.info("Acknowledging an already compensated seckill message. orderId={}", msg.getOrderId());
                 return;
             }
             if (decision == SeckillOrderStateService.ReservationDecision.POISONED) {
+                localDealsMetrics.recordMqConsumeOutcome(
+                        LocalDealsMetrics.MqConsumeOutcome.RESERVATION_MISMATCH);
+                detailedOutcomeRecorded = true;
                 log.error("Rejecting seckill message with mismatched Redis ownership. " +
                                 "voucherId={} userId={} orderId={}",
                         msg.getVoucherId(), msg.getUserId(), msg.getOrderId());
@@ -103,6 +127,9 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                                 msg.getOrderId());
             }
             if (decision != SeckillOrderStateService.ReservationDecision.PROCESS) {
+                localDealsMetrics.recordMqConsumeOutcome(
+                        LocalDealsMetrics.MqConsumeOutcome.STATE_MISSING);
+                detailedOutcomeRecorded = true;
                 throw new IllegalStateException(
                         "Redis reservation state is missing or incomplete, will retry. orderId=" + msg.getOrderId());
             }
@@ -112,6 +139,8 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                         "Exact Redis reservation could not be marked SUCCESS. orderId=" + msg.getOrderId());
             }
             consumeSuccessCounter.increment();
+            localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.PERSISTED);
+            detailedOutcomeRecorded = true;
             log.debug("Seckill order persisted. orderId={}", msg.getOrderId());
             notifyBestEffort(msg, true);
         } catch (StockExhaustedException e) {
@@ -122,6 +151,10 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             handlePermanentFailure(msg, "DB_ORDER_CONFLICT", e);
         } catch (Exception e) {
             // Transient failures (network, DB timeout, etc.) — let RocketMQ retry.
+            if (!detailedOutcomeRecorded) {
+                localDealsMetrics.recordMqConsumeOutcome(
+                        LocalDealsMetrics.MqConsumeOutcome.TRANSIENT_ERROR);
+            }
             consumeFailureCounter.increment();
             log.error("Transient failure processing seckill order, will retry. orderId={}", msg.getOrderId(), e);
             throw e;
@@ -140,12 +173,15 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                         "Redis reservation compensation did not match. orderId=" + msg.getOrderId(), cause);
             }
         } catch (RuntimeException compensationFailure) {
+            localDealsMetrics.recordMqConsumeOutcome(
+                    LocalDealsMetrics.MqConsumeOutcome.COMPENSATION_ERROR);
             consumeFailureCounter.increment();
             log.error("Permanent DB failure could not be compensated; MQ will retry. orderId={}",
                     msg.getOrderId(), compensationFailure);
             throw compensationFailure;
         }
 
+        localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.COMPENSATED);
         consumeFailureCounter.increment();
         log.warn("Permanent seckill failure compensated. voucherId={} orderId={} reason={}",
                 msg.getVoucherId(), msg.getOrderId(), reason);
@@ -161,12 +197,15 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                         "Order-id conflict could not be quarantined. orderId=" + msg.getOrderId(), cause);
             }
         } catch (RuntimeException quarantineFailure) {
+            localDealsMetrics.recordMqConsumeOutcome(
+                    LocalDealsMetrics.MqConsumeOutcome.QUARANTINE_ERROR);
             consumeFailureCounter.increment();
             log.error("Order-id conflict could not be isolated; MQ will retry. orderId={}",
                     msg.getOrderId(), quarantineFailure);
             throw quarantineFailure;
         }
 
+        localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.QUARANTINED);
         consumeFailureCounter.increment();
         log.error("Order-id conflict was quarantined without Redis compensation; MQ will retain " +
                         "the poison message through retry/DLQ. voucherId={} orderId={}",

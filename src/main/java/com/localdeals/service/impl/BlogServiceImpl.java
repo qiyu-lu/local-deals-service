@@ -13,6 +13,7 @@ import com.localdeals.entity.Follow;
 import com.localdeals.entity.User;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.BlogMapper;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.IBlogService;
 import com.localdeals.service.BlogLikeCommandService;
 import com.localdeals.service.BlogHotRankReadResult;
@@ -94,6 +95,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private BlogLikeProperties blogLikeProperties;
 
+    @Resource
+    private LocalDealsMetrics metrics;
+
     @Autowired
     private ElasticsearchRestTemplate esRestTemplate;
 
@@ -108,11 +112,16 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 : null;
         if (records == null) {
             blogHotRankWarmupService.triggerIfEnabled();
-            records = query()
-                    .orderByDesc("liked")
-                    .orderByDesc("id")
-                    .page(new Page<>(current, blogHotRankProperties.getPageSize(), false))
-                    .getRecords();
+            long startedAt = System.nanoTime();
+            try {
+                records = query()
+                        .orderByDesc("liked")
+                        .orderByDesc("id")
+                        .page(new Page<>(current, blogHotRankProperties.getPageSize(), false))
+                        .getRecords();
+            } finally {
+                metrics.recordHotRankDbFallback(System.nanoTime() - startedAt);
+            }
         }
         hydrateBlogList(records);
         return Result.ok(records);
@@ -196,16 +205,31 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result setBlogLiked(Long id, boolean liked) {
-        if (!blogLikeProperties.isWriteEnabled()) {
-            throw new ApiStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE, "点赞功能维护中，请稍后重试");
+        LocalDealsMetrics.LikeOperation operation = liked
+                ? LocalDealsMetrics.LikeOperation.LIKE
+                : LocalDealsMetrics.LikeOperation.UNLIKE;
+        try {
+            if (!blogLikeProperties.isWriteEnabled()) {
+                throw new ApiStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE, "点赞功能维护中，请稍后重试");
+            }
+            Long userId = UserHolder.getUser().getId();
+            BlogLikeCommandResult commandResult = blogLikeCommandService.setLiked(id, userId, liked);
+            if (commandResult.getOutcome() == BlogLikeCommandResult.Outcome.NOT_FOUND) {
+                metrics.recordLike(operation, LocalDealsMetrics.LikeResult.NOT_FOUND);
+                throw new ApiStatusException(HttpStatus.NOT_FOUND, "笔记不存在!");
+            }
+            metrics.recordLike(operation, commandResult.isChanged()
+                    ? LocalDealsMetrics.LikeResult.CHANGED
+                    : LocalDealsMetrics.LikeResult.UNCHANGED);
+            return Result.ok(commandResult);
+        } catch (RuntimeException failure) {
+            if (!(failure instanceof ApiStatusException) ||
+                    ((ApiStatusException) failure).getStatus() != HttpStatus.NOT_FOUND) {
+                metrics.recordLike(operation, LocalDealsMetrics.LikeResult.FAILURE);
+            }
+            throw failure;
         }
-        Long userId = UserHolder.getUser().getId();
-        BlogLikeCommandResult commandResult = blogLikeCommandService.setLiked(id, userId, liked);
-        if (commandResult.getOutcome() == BlogLikeCommandResult.Outcome.NOT_FOUND) {
-            throw new ApiStatusException(HttpStatus.NOT_FOUND, "笔记不存在!");
-        }
-        return Result.ok(commandResult);
     }
 
     @Override

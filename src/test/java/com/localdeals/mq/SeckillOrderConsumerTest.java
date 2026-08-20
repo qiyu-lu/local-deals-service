@@ -3,6 +3,7 @@ package com.localdeals.mq;
 import com.localdeals.exception.OrderReservationConflictException;
 import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.service.SeckillOrderStateService;
 import com.localdeals.websocket.WebSocketNotifier;
@@ -45,7 +46,9 @@ class SeckillOrderConsumerTest {
 
     @BeforeEach
     void allowExactProcessingReservation() {
-        ReflectionTestUtils.setField(consumer, "meterRegistry", new SimpleMeterRegistry());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ReflectionTestUtils.setField(consumer, "meterRegistry", registry);
+        ReflectionTestUtils.setField(consumer, "localDealsMetrics", new LocalDealsMetrics(registry));
         ReflectionTestUtils.invokeMethod(consumer, "registerMetrics");
         lenient().when(redissonClient.getLock(any())).thenReturn(lock);
         lenient().when(lock.tryLock()).thenReturn(true);

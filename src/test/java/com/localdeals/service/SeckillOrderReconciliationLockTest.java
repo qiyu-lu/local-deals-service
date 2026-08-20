@@ -3,6 +3,7 @@ package com.localdeals.service;
 import com.localdeals.config.SeckillProperties;
 import com.localdeals.mq.SeckillOrderConsumer;
 import com.localdeals.mq.SeckillOrderMessage;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,7 +74,9 @@ class SeckillOrderReconciliationLockTest {
         ReflectionTestUtils.setField(consumer, "seckillOrderStateService", stateService);
         ReflectionTestUtils.setField(consumer, "redissonClient", redissonClient);
         ReflectionTestUtils.setField(consumer, "webSocketNotifier", webSocketNotifier);
-        ReflectionTestUtils.setField(consumer, "meterRegistry", new SimpleMeterRegistry());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ReflectionTestUtils.setField(consumer, "meterRegistry", registry);
+        ReflectionTestUtils.setField(consumer, "localDealsMetrics", new LocalDealsMetrics(registry));
         ReflectionTestUtils.invokeMethod(consumer, "registerMetrics");
 
         SeckillProperties properties = new SeckillProperties();

@@ -3,6 +3,7 @@ package com.localdeals.mq;
 import cn.hutool.json.JSONUtil;
 import com.localdeals.dto.BlogDoc;
 import com.localdeals.dto.ShopDoc;
+import com.localdeals.observability.LocalDealsMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
@@ -12,7 +13,6 @@ import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.Resource;
 import java.util.Map;
 
 /**
@@ -28,8 +28,13 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private static final IndexCoordinates SHOP_INDEX = IndexCoordinates.of("shop_index");
     private static final IndexCoordinates BLOG_INDEX = IndexCoordinates.of("blog_index");
 
-    @Resource
-    private ElasticsearchRestTemplate esTemplate;
+    private final ElasticsearchRestTemplate esTemplate;
+    private final LocalDealsMetrics metrics;
+
+    public EsSyncConsumer(ElasticsearchRestTemplate esTemplate, LocalDealsMetrics metrics) {
+        this.esTemplate = esTemplate;
+        this.metrics = metrics;
+    }
 
     @Override
     public void onMessage(String message) {
@@ -38,30 +43,46 @@ public class EsSyncConsumer implements RocketMQListener<String> {
             msg = JSONUtil.toBean(message, CanalMessage.class);
         } catch (Exception e) {
             log.error("Failed to parse Canal message: {}", message, e);
+            metrics.recordEsMessage(LocalDealsMetrics.EsTable.IGNORED,
+                    LocalDealsMetrics.EsOperation.OTHER,
+                    LocalDealsMetrics.EsMessageResult.FAILURE);
             return;
         }
-        if (msg == null || Boolean.TRUE.equals(msg.getIsDdl()) || msg.getData() == null || msg.getTable() == null) {
+        LocalDealsMetrics.EsTable table = tableOf(msg == null ? null : msg.getTable());
+        LocalDealsMetrics.EsOperation operation = operationOf(msg == null ? null : msg.getType());
+        if (msg == null || Boolean.TRUE.equals(msg.getIsDdl()) || msg.getData() == null ||
+                msg.getData().isEmpty() || table == LocalDealsMetrics.EsTable.IGNORED) {
+            metrics.recordEsMessage(table, operation, LocalDealsMetrics.EsMessageResult.IGNORED);
             return;
         }
 
-        switch (msg.getTable()) {
-            case "tb_shop":
-                handleShop(msg);
-                break;
-            case "tb_blog":
-                handleBlog(msg);
-                break;
-            default:
-                log.debug("Ignoring Canal message for unhandled table={}", msg.getTable());
+        long startedAt = System.nanoTime();
+        ApplyStats stats;
+        try {
+            stats = table == LocalDealsMetrics.EsTable.SHOP
+                    ? handleShop(msg, table, operation)
+                    : handleBlog(msg, table, operation);
+        } finally {
+            metrics.recordEsDuration(table, operation, System.nanoTime() - startedAt);
         }
+        LocalDealsMetrics.EsMessageResult result = stats.failures == 0
+                ? LocalDealsMetrics.EsMessageResult.SUCCESS
+                : (stats.successes == 0
+                        ? LocalDealsMetrics.EsMessageResult.FAILURE
+                        : LocalDealsMetrics.EsMessageResult.PARTIAL_FAILURE);
+        metrics.recordEsMessage(table, operation, result);
     }
 
-    private void handleShop(CanalMessage msg) {
+    private ApplyStats handleShop(CanalMessage msg,
+                                  LocalDealsMetrics.EsTable table,
+                                  LocalDealsMetrics.EsOperation operation) {
         boolean isDelete = "DELETE".equalsIgnoreCase(msg.getType());
+        ApplyStats stats = new ApplyStats();
         for (Map<String, Object> row : msg.getData()) {
             try {
                 String id = strVal(row, "id");
                 if (id == null) {
+                    stats.failure(metrics, table, operation);
                     continue;
                 }
                 if (isDelete) {
@@ -73,18 +94,25 @@ public class EsSyncConsumer implements RocketMQListener<String> {
                     esTemplate.index(query, SHOP_INDEX);
                     log.debug("Upserted shop in ES. id={}", id);
                 }
+                stats.success(metrics, table, operation);
             } catch (Exception e) {
+                stats.failure(metrics, table, operation);
                 log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
             }
         }
+        return stats;
     }
 
-    private void handleBlog(CanalMessage msg) {
+    private ApplyStats handleBlog(CanalMessage msg,
+                                  LocalDealsMetrics.EsTable table,
+                                  LocalDealsMetrics.EsOperation operation) {
         boolean isDelete = "DELETE".equalsIgnoreCase(msg.getType());
+        ApplyStats stats = new ApplyStats();
         for (Map<String, Object> row : msg.getData()) {
             try {
                 String id = strVal(row, "id");
                 if (id == null) {
+                    stats.failure(metrics, table, operation);
                     continue;
                 }
                 if (isDelete) {
@@ -96,10 +124,13 @@ public class EsSyncConsumer implements RocketMQListener<String> {
                     esTemplate.index(query, BLOG_INDEX);
                     log.debug("Upserted blog in ES. id={}", id);
                 }
+                stats.success(metrics, table, operation);
             } catch (Exception e) {
+                stats.failure(metrics, table, operation);
                 log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
             }
         }
+        return stats;
     }
 
     private ShopDoc rowToShopDoc(Map<String, Object> row) {
@@ -153,5 +184,45 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private String strVal(Map<String, Object> row, String key) {
         Object v = row.get(key);
         return v == null ? null : v.toString();
+    }
+
+    private static LocalDealsMetrics.EsTable tableOf(String table) {
+        if ("tb_shop".equals(table)) {
+            return LocalDealsMetrics.EsTable.SHOP;
+        }
+        if ("tb_blog".equals(table)) {
+            return LocalDealsMetrics.EsTable.BLOG;
+        }
+        return LocalDealsMetrics.EsTable.IGNORED;
+    }
+
+    private static LocalDealsMetrics.EsOperation operationOf(String operation) {
+        if ("INSERT".equalsIgnoreCase(operation)) {
+            return LocalDealsMetrics.EsOperation.INSERT;
+        }
+        if ("UPDATE".equalsIgnoreCase(operation)) {
+            return LocalDealsMetrics.EsOperation.UPDATE;
+        }
+        if ("DELETE".equalsIgnoreCase(operation)) {
+            return LocalDealsMetrics.EsOperation.DELETE;
+        }
+        return LocalDealsMetrics.EsOperation.OTHER;
+    }
+
+    private static final class ApplyStats {
+        private int successes;
+        private int failures;
+
+        private void success(LocalDealsMetrics metrics, LocalDealsMetrics.EsTable table,
+                             LocalDealsMetrics.EsOperation operation) {
+            successes++;
+            metrics.recordEsRow(table, operation, LocalDealsMetrics.EsRowResult.SUCCESS);
+        }
+
+        private void failure(LocalDealsMetrics metrics, LocalDealsMetrics.EsTable table,
+                             LocalDealsMetrics.EsOperation operation) {
+            failures++;
+            metrics.recordEsRow(table, operation, LocalDealsMetrics.EsRowResult.FAILURE);
+        }
     }
 }

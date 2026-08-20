@@ -21,6 +21,9 @@ rocketmq:
       es-sync-consumer-group:
         mysql-sync-topic: false
 local-deals:
+  observability:
+    # Tests opt in only when they own isolated MySQL and Redis targets.
+    sampling-enabled: false
   blog-hot-rank:
     read-enabled: false
     refresh-enabled: false

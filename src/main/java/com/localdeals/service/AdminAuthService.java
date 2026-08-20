@@ -10,6 +10,7 @@ import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.entity.AdminAccount;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.AdminAccountMapper;
+import com.localdeals.observability.LocalDealsMetrics;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -45,22 +46,53 @@ public class AdminAuthService {
     private final StringRedisTemplate stringRedisTemplate;
     private final PasswordEncoder passwordEncoder;
     private final AdminProperties adminProperties;
+    private final LocalDealsMetrics metrics;
     private final String dummyPasswordHash;
 
     public AdminAuthService(AdminAccountMapper adminAccountMapper,
             AdminSessionService adminSessionService,
             StringRedisTemplate stringRedisTemplate,
             PasswordEncoder passwordEncoder,
-            AdminProperties adminProperties) {
+            AdminProperties adminProperties,
+            LocalDealsMetrics metrics) {
         this.adminAccountMapper = adminAccountMapper;
         this.adminSessionService = adminSessionService;
         this.stringRedisTemplate = stringRedisTemplate;
         this.passwordEncoder = passwordEncoder;
         this.adminProperties = adminProperties;
+        this.metrics = metrics;
         this.dummyPasswordHash = passwordEncoder.encode("local-deals-dummy-admin-password");
     }
 
     public AdminLoginResponse login(AdminLoginRequest request, String remoteAddress) {
+        try {
+            AdminLoginResponse response = doLogin(request, remoteAddress);
+            metrics.recordAuth(LocalDealsMetrics.AuthFlow.ADMIN_LOGIN,
+                    LocalDealsMetrics.AuthResult.SUCCESS);
+            return response;
+        } catch (ApiStatusException failure) {
+            LocalDealsMetrics.AuthResult result;
+            if (failure.getStatus() == HttpStatus.TOO_MANY_REQUESTS) {
+                result = LocalDealsMetrics.AuthResult.LOCKED;
+            } else if (failure.getStatus() == HttpStatus.SERVICE_UNAVAILABLE) {
+                result = LocalDealsMetrics.AuthResult.UNAVAILABLE;
+            } else {
+                result = LocalDealsMetrics.AuthResult.REJECTED;
+            }
+            metrics.recordAuth(LocalDealsMetrics.AuthFlow.ADMIN_LOGIN, result);
+            throw failure;
+        } catch (IllegalArgumentException invalidInput) {
+            metrics.recordAuth(LocalDealsMetrics.AuthFlow.ADMIN_LOGIN,
+                    LocalDealsMetrics.AuthResult.INVALID_INPUT);
+            throw invalidInput;
+        } catch (RuntimeException failure) {
+            metrics.recordAuth(LocalDealsMetrics.AuthFlow.ADMIN_LOGIN,
+                    LocalDealsMetrics.AuthResult.FAILURE);
+            throw failure;
+        }
+    }
+
+    private AdminLoginResponse doLogin(AdminLoginRequest request, String remoteAddress) {
         String username = normalizeUsername(request == null ? null : request.getUsername());
         String password = request == null ? null : request.getPassword();
         String failureKey = failureKey(username, remoteAddress);

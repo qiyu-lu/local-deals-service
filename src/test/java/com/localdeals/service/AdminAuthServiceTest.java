@@ -8,6 +8,8 @@ import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.entity.AdminAccount;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.AdminAccountMapper;
+import com.localdeals.observability.LocalDealsMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -54,7 +56,8 @@ class AdminAuthServiceTest {
         properties.setMaxIpLoginAttempts(30);
         properties.setLoginLockDuration(Duration.ofMinutes(15));
         service = new AdminAuthService(
-                accountMapper, sessionService, redisTemplate, passwordEncoder, properties);
+                accountMapper, sessionService, redisTemplate, passwordEncoder, properties,
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
     }
 
     @Test

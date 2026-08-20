@@ -3,6 +3,8 @@ package com.localdeals.service.impl;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.localdeals.dto.LoginFormDTO;
 import com.localdeals.dto.Result;
+import com.localdeals.observability.LocalDealsMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.localdeals.entity.User;
 import com.localdeals.mapper.UserMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,8 +47,8 @@ class UserServiceImplTest {
     @BeforeEach
     void setUp() {
         redisTemplate = mock(StringRedisTemplate.class);
-        service = new UserServiceImpl();
-        ReflectionTestUtils.setField(service, "stringRedisTemplate", redisTemplate);
+        service = new UserServiceImpl(redisTemplate,
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
         ReflectionTestUtils.setField(service, "logVerificationCode", false);
     }
 

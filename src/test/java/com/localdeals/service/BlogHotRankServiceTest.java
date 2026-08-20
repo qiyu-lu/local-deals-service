@@ -1,6 +1,8 @@
 package com.localdeals.service;
 
 import com.localdeals.config.BlogHotRankProperties;
+import com.localdeals.observability.LocalDealsMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -74,7 +76,8 @@ class BlogHotRankServiceTest {
     @BeforeEach
     void setUp() {
         properties = new BlogHotRankProperties();
-        service = new BlogHotRankService(jdbcTemplate, redisTemplate, redissonClient, properties);
+        service = new BlogHotRankService(jdbcTemplate, redisTemplate, redissonClient, properties,
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
     }
 
     @Test

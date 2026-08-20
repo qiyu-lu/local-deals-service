@@ -1,6 +1,7 @@
 package com.localdeals.service;
 
 import com.localdeals.config.BlogLikeProperties;
+import com.localdeals.observability.LocalDealsMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -19,13 +20,16 @@ public class BlogLikeOutboxWorker {
     private final BlogLikeProperties properties;
     private final BlogLikeOutboxBatchService batchService;
     private final RedissonClient redissonClient;
+    private final LocalDealsMetrics metrics;
 
     public BlogLikeOutboxWorker(BlogLikeProperties properties,
                                 BlogLikeOutboxBatchService batchService,
-                                RedissonClient redissonClient) {
+                                RedissonClient redissonClient,
+                                LocalDealsMetrics metrics) {
         this.properties = properties;
         this.batchService = batchService;
         this.redissonClient = redissonClient;
+        this.metrics = metrics;
     }
 
     @Scheduled(
@@ -54,13 +58,15 @@ public class BlogLikeOutboxWorker {
             // UPDATE and the aggregate/marker transaction remain the correctness boundary.
             log.warn("Redis blog-like outbox lock unavailable; falling back to DB locking",
                     redisFailure);
-            return batchService.processNextBatch(properties.getBatchSize());
+            metrics.recordOutbox(LocalDealsMetrics.OutboxResult.REDIS_LOCK_ERROR);
+            return processDatabaseBatch();
         }
         if (!acquired) {
+            metrics.recordOutbox(LocalDealsMetrics.OutboxResult.LOCK_BUSY);
             return new BlogLikeOutboxBatchService.BatchResult(0, 0, Collections.emptyList());
         }
         try {
-            return batchService.processNextBatch(properties.getBatchSize());
+            return processDatabaseBatch();
         } finally {
             try {
                 if (lock.isHeldByCurrentThread()) {
@@ -70,6 +76,24 @@ public class BlogLikeOutboxWorker {
                 log.warn("Unable to release the blog-like outbox load-shedding lock",
                         unlockFailure);
             }
+        }
+    }
+
+    private BlogLikeOutboxBatchService.BatchResult processDatabaseBatch() {
+        long startedAt = System.nanoTime();
+        try {
+            BlogLikeOutboxBatchService.BatchResult result =
+                    batchService.processNextBatch(properties.getBatchSize());
+            metrics.recordOutbox(result.getProcessedEvents() == 0
+                    ? LocalDealsMetrics.OutboxResult.EMPTY
+                    : LocalDealsMetrics.OutboxResult.SUCCESS);
+            metrics.recordOutboxEvents(result.getProcessedEvents());
+            return result;
+        } catch (RuntimeException databaseFailure) {
+            metrics.recordOutbox(LocalDealsMetrics.OutboxResult.DB_ERROR);
+            throw databaseFailure;
+        } finally {
+            metrics.recordOutboxDuration(System.nanoTime() - startedAt);
         }
     }
 }

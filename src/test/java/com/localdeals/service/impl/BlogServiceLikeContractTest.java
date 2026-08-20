@@ -4,6 +4,7 @@ import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.dto.BlogLikeCommandResult;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.exception.ApiStatusException;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.BlogLikeCommandService;
 import com.localdeals.utils.UserHolder;
 import org.junit.jupiter.api.AfterEach;
@@ -14,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,6 +38,8 @@ class BlogServiceLikeContractTest {
         properties.setWriteEnabled(true);
         ReflectionTestUtils.setField(service, "blogLikeProperties", properties);
         ReflectionTestUtils.setField(service, "blogLikeCommandService", commandService);
+        ReflectionTestUtils.setField(service, "metrics",
+                new LocalDealsMetrics(new SimpleMeterRegistry()));
 
         UserDTO user = new UserDTO();
         user.setId(USER_ID);
