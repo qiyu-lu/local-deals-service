@@ -1,19 +1,14 @@
 package com.localdeals.controller;
 
 
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.entity.Blog;
-import com.localdeals.entity.User;
 import com.localdeals.service.IBlogService;
-import com.localdeals.service.IUserService;
-import com.localdeals.utils.SystemConstants;
 import com.localdeals.utils.UserHolder;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
-import java.util.List;
 
 /**
  * <p>
@@ -30,29 +25,36 @@ public class BlogController {
     @Resource
     private IBlogService blogService;
 
-    @Resource
-    private IUserService userService;
-
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
         return blogService.saveBlog(blog);
     }
 
-    @PutMapping("/like/{id}")
+    @PutMapping("/{id}/like")
     public Result likeBlog(@PathVariable("id") Long id) {
-        return blogService.likeBlog(id);
+        return blogService.setBlogLiked(id, true);
+    }
+
+    @DeleteMapping("/{id}/like")
+    public Result unlikeBlog(@PathVariable("id") Long id) {
+        return blogService.setBlogLiked(id, false);
+    }
+
+    /**
+     * Migration bridge for clients which already send an explicit desired state. Parameterless
+     * legacy toggle requests are deliberately rejected because an HTTP retry could invert state.
+     */
+    @Deprecated
+    @PutMapping("/like/{id}")
+    public Result setBlogLikedCompatibility(@PathVariable("id") Long id,
+                                            @RequestParam("liked") boolean liked) {
+        return blogService.setBlogLiked(id, liked);
     }
 
     @GetMapping("/of/me")
     public Result queryMyBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
-        // 获取登录用户
         UserDTO user = UserHolder.getUser();
-        // 根据用户查询
-        Page<Blog> page = blogService.query()
-                .eq("user_id", user.getId()).page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-        // 获取当前页数据
-        List<Blog> records = page.getRecords();
-        return Result.ok(records);
+        return blogService.queryBlogsByUserId(user.getId(), current);
     }
 
     @GetMapping("/hot")
@@ -74,12 +76,7 @@ public class BlogController {
     public Result queryBlogByUserId(
             @RequestParam(value = "current", defaultValue = "1") Integer current,
             @RequestParam("id") Long id) {
-        // 根据用户查询
-        Page<Blog> page = blogService.query()
-                .eq("user_id", id).page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-        // 获取当前页数据
-        List<Blog> records = page.getRecords();
-        return Result.ok(records);
+        return blogService.queryBlogsByUserId(id, current);
     }
 
     @GetMapping("/of/follow")
@@ -92,20 +89,7 @@ public class BlogController {
     public Result queryBlogByShopId(
             @RequestParam("id") Long shopId,
             @RequestParam(value = "current", defaultValue = "1") Integer current) {
-        Page<Blog> page = blogService.query()
-                .eq("shop_id", shopId)
-                .orderByDesc("liked")
-                .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
-        List<Blog> records = page.getRecords();
-        records.forEach(b -> {
-            Long userId = b.getUserId();
-            User user = userService.getById(userId);
-            if (user != null) {
-                b.setName(user.getNickName());
-                b.setIcon(user.getIcon());
-            }
-        });
-        return Result.ok(records);
+        return blogService.queryBlogsByShopId(shopId, current);
     }
 
     /**

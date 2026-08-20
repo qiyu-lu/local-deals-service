@@ -28,6 +28,8 @@
 | MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
 | 秒杀结果只依赖单次实时通知，断线或跨实例异常后用户无法确认结果 | WebSocket + Redis pub/sub 作为快速通知，`GET /voucher-order/status/{orderId}` 作为用户隔离的持久兜底；前端超时后有限轮询，64 位订单 ID 全链路按字符串传输 | `WebSocketNotifierTest`、`SeckillWebSocketIT`、`VoucherOrderServiceImplTest` |
 | 商铺、优惠券写接口匿名可调用，消费者账号可冒充管理端，管理广播没有商户边界 | 新增独立 `tb_admin_account` + BCrypt 登录、固定角色 RBAC 和以 `tb_shop.merchant_id` 为根的数据范围；旧写映射退役。后台 WebSocket 使用 30 秒一次性 ticket、平台/商户独立频道和发送前权限复核；同一连接的并发发送有界串行化 | `AdminMvcSecurityTest`、`AdminRbacIT`、`AdminCatalogServiceTest`、`WebSocketSessionIsolationTest` |
+| 点赞用 Redis ZSET 判状态且每次请求直接更新 `tb_blog.liked`，并发重试会双计、Redis 丢失后无法恢复用户身份 | `tb_blog_like` 作为身份真相，显式 PUT/DELETE 与不可变 outbox 同事务；worker 聚合 delta 并与 processed 标记同事务。旧 Redis 身份需停写导入，持久 cutover marker 未完成时生产写入 fail-closed | `BlogLikeCommandServiceTest`、`BlogLikeReliabilityIT`、`docs/blog-like-hot-rank.md` |
+| 热榜每次直接查库且同分分页不稳定，缓存缺失容易把空/坏状态当有效结果 | V7 复合索引 + `liked DESC,id DESC`；Redis top-K 用 generation-fenced 临时榜原子发布，校验 count/capacity/freshness，任何不安全状态整页回退 MySQL | `BlogHotRankServiceTest`、`BlogHotRankRedisIT` |
 | 验证码可重复使用、可在有效期内无限猜测 | Redis Lua 原子完成 60 秒发送冷却、一次性消费和每个验证码最多 5 次失败尝试；日志默认不输出验证码 | `UserServiceImplTest`、`UserServiceIT` |
 | 上传目录硬编码，删除接口可路径穿越或跨用户删除 | 上传根目录与 5 MB 上限配置化，校验扩展名/MIME/文件头；`tb_upload_file` 记录归属及 TEMP/DELETING/PUBLISHED 状态，只允许上传者删除未发布图片 | `UploadControllerTest`、`UploadFileServiceIT`、Flyway V3/V4 |
 | 秒杀链路主要依赖 Redis Lua 和业务层判断，DB 层缺少最终兜底 | 增加 `tb_voucher_order(user_id, voucher_id)` 唯一索引，并在落库时处理 `DuplicateKeyException` | Flyway 迁移：`src/main/resources/db/migration/`；核心实现：`SeckillOrderConsumer#onMessage` |
@@ -112,6 +114,8 @@
 | `SeckillWebSocketIT` | WebSocket | Awaitility 3s 内断言 mock session.sendMessage() 被调用，消息含 `"success":true` |
 | `AdminMvcSecurityTest` | MVC 边界 | 真实 Controller 映射与拦截链：匿名/消费者 token 拒绝、权限不足 403、旧写映射 404/405 |
 | `AdminRbacIT` | MySQL + Redis | V5/V6 前向迁移、商户范围 SQL、独立登录、一次性 WS ticket、改密/停用即时撤销会话 |
+| `BlogLikeReliabilityIT` | MySQL 事务 | 显式状态并发幂等、关系/outbox 原子回滚、worker 重放与并发只应用一次；仅可在隔离 schema 运行 |
+| `BlogHotRankRedisIT` | Redis Lua | generation 原子发布、新博客与旧 builder 竞态、top-K 裁剪及空榜；仅可在隔离 Redis 运行 |
 
 运行所有集成测试（需要 MySQL、Redis、Elasticsearch、RocketMQ NameServer/Broker
 在本地运行，并预先创建 `seckill-order-topic`）：
@@ -226,6 +230,22 @@ bootstrap、创建商户/主账号、认领 `LEGACY_UNASSIGNED` 商铺及跨商�
 bootstrap 密码并恢复管理入口。无法安排该停机窗口时，应先实现版本化后台入口和双轨隔离；
 当前代码不支持用普通滚动发布规避门禁。
 
+### 从旧版点赞与热榜升级
+
+V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚合计数；Redis 只保留可重建
+的有界热榜。该阶段同样**禁止新旧节点滚动混跑**：旧节点会继续绕过关系表/outbox 写计数，
+旧静态页面也仍发送不可重试的 toggle 请求。
+
+安全默认下 `LOCAL_DEALS_BLOG_LIKE_WRITE_ENABLED=false`、`WORKER_ENABLED=false`。发布时先在
+网关停点赞、停止全部旧实例并冻结 `blog:liked:*`，再由不接流量的单实例设置
+`LEGACY_BACKFILL_ON_STARTUP=true` 导入身份。导入成功且全库恒等式、pending outbox 均为 0
+后才会写入持久 cutover marker；生产环境缺少该 marker 时，即使误开 write/worker 也会启动
+失败。随后关闭 backfill，显式开启 write/worker；热榜先开 refresh 并核对 MySQL/Redis top-K，
+最后 canary 开 read。浏览器静态缓存也必须清理或版本化，因为旧无参数 URL 会按设计返回 400。
+
+完整 SQL 核对、配置组合、回滚边界与隔离测试要求见
+[点赞持久化、Outbox 聚合与热榜发布门禁](docs/blog-like-hot-rank.md)。
+
 ## 技术栈
 
 **后端**
@@ -270,6 +290,7 @@ bootstrap 密码并恢复管理入口。无法安排该停机窗口时，应先�
 
 - [商户后台、RBAC 与发布门禁](docs/admin-rbac.md)
 - [秒杀 PROCESSING 自动对账与升级门禁](docs/seckill-reconciliation.md)
+- [点赞持久化、Outbox 聚合与热榜发布门禁](docs/blog-like-hot-rank.md)
 - [改进前后对比](docs/improvement-comparison.md)
 - [本地环境与常见问题](docs/environment-setup.md)
 - [JMeter 使用说明](docs/jmeter-usage.md)

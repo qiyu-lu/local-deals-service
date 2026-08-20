@@ -65,6 +65,29 @@ local-deals:
     max-image-size: "${LOCAL_DEALS_MAX_IMAGE_SIZE:5MB}"
   websocket:
     allowed-origins: "${LOCAL_DEALS_WEBSOCKET_ALLOWED_ORIGINS:http://localhost:8088,http://localhost:5173}"
+  blog-hot-rank:
+    # Build first, verify parity, then enable reads. Unsafe cache states always fall back to MySQL.
+    read-enabled: "${LOCAL_DEALS_BLOG_HOT_RANK_READ_ENABLED:false}"
+    refresh-enabled: "${LOCAL_DEALS_BLOG_HOT_RANK_REFRESH_ENABLED:false}"
+    top-k: "${LOCAL_DEALS_BLOG_HOT_RANK_TOP_K:1000}"
+    page-size: "${LOCAL_DEALS_BLOG_HOT_RANK_PAGE_SIZE:10}"
+    initial-delay: "${LOCAL_DEALS_BLOG_HOT_RANK_INITIAL_DELAY:10s}"
+    fixed-delay: "${LOCAL_DEALS_BLOG_HOT_RANK_FIXED_DELAY:30s}"
+    max-stale: "${LOCAL_DEALS_BLOG_HOT_RANK_MAX_STALE:2m}"
+  blog-like:
+    # Upgrade-safe defaults: explicitly enable only after legacy identities are imported/audited.
+    write-enabled: "${LOCAL_DEALS_BLOG_LIKE_WRITE_ENABLED:false}"
+    worker-enabled: "${LOCAL_DEALS_BLOG_LIKE_WORKER_ENABLED:false}"
+    initial-delay: "${LOCAL_DEALS_BLOG_LIKE_INITIAL_DELAY:5s}"
+    fixed-delay: "${LOCAL_DEALS_BLOG_LIKE_FIXED_DELAY:200ms}"
+    batch-size: "${LOCAL_DEALS_BLOG_LIKE_BATCH_SIZE:500}"
+    processed-retention: "${LOCAL_DEALS_BLOG_LIKE_PROCESSED_RETENTION:1d}"
+    cleanup-fixed-delay: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_FIXED_DELAY:1s}"
+    cleanup-batch-size: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_BATCH_SIZE:2000}"
+    cleanup-max-batches: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_MAX_BATCHES:5}"
+    legacy-backfill-on-startup: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BACKFILL_ON_STARTUP:false}"
+    legacy-scan-count: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_SCAN_COUNT:500}"
+    legacy-batch-size: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BATCH_SIZE:500}"
   seckill:
     reconciliation:
       # Three independent, fail-closed rollout gates. Keep all false until the

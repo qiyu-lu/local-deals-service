@@ -186,15 +186,14 @@
           .catch(this.$message.error)
       },
       addLike(){
-        axios.put("/blog/like/" +this.blog.id)
+        const desired = !Boolean(this.blog.isLike);
+        axios({method: desired ? "put" : "delete", url: "/blog/" + this.blog.id + "/like"})
           .then(({data}) => {
-            axios.get("/blog/" + this.blog.id)
-              .then(({data}) => {
-                data.images = data.images.split(",")
-                this.blog = data;
-                this.queryLikeList(this.blog.id);
-              })
-              .catch(this.$message.error)
+            this.blog.isLike = data.desired;
+            if (data.changed) {
+              this.blog.liked = Math.max(0, (this.blog.liked || 0) + (data.desired ? 1 : -1));
+            }
+            this.queryLikeList(this.blog.id);
           })
           .catch(err => {
             this.$message.error(err)

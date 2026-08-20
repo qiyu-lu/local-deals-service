@@ -50,6 +50,7 @@ public class RedisConstants {
     public static final String SECKILL_RECONCILIATION_LOCK_KEY = "lock:seckill:reconcile:";
     public static final Long SECKILL_ORDER_STATUS_TTL_SECONDS = 7 * 24 * 60 * 60L;
     public static final String BLOG_LIKED_KEY = "blog:liked:";
+    public static final String BLOG_LIKE_OUTBOX_LOCK_KEY = "lock:blog:like:outbox";
 
     public static final String FOLLOWED_KEY = "followS:";
     public static final String FEED_KEY = "feed:";

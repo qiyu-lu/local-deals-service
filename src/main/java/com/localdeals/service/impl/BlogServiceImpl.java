@@ -1,24 +1,32 @@
 package com.localdeals.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.localdeals.dto.BlogDoc;
+import com.localdeals.dto.BlogLikeCommandResult;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.ScrollResult;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.entity.Blog;
 import com.localdeals.entity.Follow;
 import com.localdeals.entity.User;
+import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.BlogMapper;
 import com.localdeals.service.IBlogService;
+import com.localdeals.service.BlogLikeCommandService;
+import com.localdeals.service.BlogHotRankReadResult;
+import com.localdeals.service.BlogHotRankService;
+import com.localdeals.service.BlogHotRankWarmupService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.service.IFollowService;
 import com.localdeals.service.IUserService;
 import com.localdeals.service.UploadFileService;
+import com.localdeals.config.BlogHotRankProperties;
+import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.utils.SystemConstants;
 import com.localdeals.utils.UserHolder;
+import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
@@ -29,17 +37,21 @@ import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.localdeals.utils.RedisConstants.BLOG_LIKED_KEY;
 import static com.localdeals.utils.RedisConstants.FEED_KEY;
 
 /**
@@ -51,6 +63,7 @@ import static com.localdeals.utils.RedisConstants.FEED_KEY;
  * @since 2021-12-22
  */
 @Service
+@Slf4j
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IBlogService {
 
     private static final int FOLLOW_FEED_PAGE_SIZE = 2;
@@ -66,23 +79,97 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private UploadFileService uploadFileService;
 
+    @Resource
+    private BlogLikeCommandService blogLikeCommandService;
+
+    @Resource
+    private BlogHotRankService blogHotRankService;
+
+    @Resource
+    private BlogHotRankWarmupService blogHotRankWarmupService;
+
+    @Resource
+    private BlogHotRankProperties blogHotRankProperties;
+
+    @Resource
+    private BlogLikeProperties blogLikeProperties;
+
     @Autowired
     private ElasticsearchRestTemplate esRestTemplate;
 
     @Override
     public Result queryHotBlog(Integer current) {
-        // 根据用户查询
-        Page<Blog> page = query()
-                .orderByDesc("liked")
-                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-        // 获取当前页数据
-        List<Blog> records = page.getRecords();
-        // 查询用户
-        records.forEach(blog -> {
-            this.queryBlogUser(blog);
-            this.isBlogLiked(blog);
-        });
+        if (current == null || current <= 0) {
+            return Result.fail("页码必须为正数");
+        }
+        BlogHotRankReadResult rankResult = blogHotRankService.readPage(current);
+        List<Blog> records = rankResult.isHit()
+                ? loadRankedBlogs(rankResult.getBlogIds())
+                : null;
+        if (records == null) {
+            blogHotRankWarmupService.triggerIfEnabled();
+            records = query()
+                    .orderByDesc("liked")
+                    .orderByDesc("id")
+                    .page(new Page<>(current, blogHotRankProperties.getPageSize(), false))
+                    .getRecords();
+        }
+        hydrateBlogList(records);
         return Result.ok(records);
+    }
+
+    /** Hydrates one bounded page with one user query and at most one like-state query. */
+    private void hydrateBlogList(List<Blog> blogs) {
+        if (blogs == null || blogs.isEmpty()) {
+            return;
+        }
+        Set<Long> userIds = blogs.stream()
+                .map(Blog::getUserId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, User> users = userIds.isEmpty()
+                ? Collections.emptyMap()
+                : userService.listByIds(userIds).stream()
+                        .collect(Collectors.toMap(User::getId, user -> user));
+
+        UserDTO currentUser = UserHolder.getUser();
+        Set<Long> likedBlogIds = currentUser == null
+                ? Collections.emptySet()
+                : blogLikeCommandService.findLikedBlogIds(
+                        currentUser.getId(),
+                        blogs.stream().map(Blog::getId).collect(Collectors.toList()));
+        for (Blog blog : blogs) {
+            User author = users.get(blog.getUserId());
+            if (author != null) {
+                blog.setName(author.getNickName());
+                blog.setIcon(author.getIcon());
+            }
+            if (currentUser != null) {
+                blog.setIsLike(likedBlogIds.contains(blog.getId()));
+            }
+        }
+    }
+
+    /** Returns null when a stale rank contains a blog which no longer exists. */
+    private List<Blog> loadRankedBlogs(List<Long> blogIds) {
+        if (blogIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<Long, Blog> byId = listByIds(blogIds).stream()
+                .collect(Collectors.toMap(Blog::getId, blog -> blog, (left, right) -> left,
+                        LinkedHashMap::new));
+        if (byId.size() != blogIds.size()) {
+            return null;
+        }
+        List<Blog> ordered = new ArrayList<>(blogIds.size());
+        for (Long blogId : blogIds) {
+            Blog blog = byId.get(blogId);
+            if (blog == null) {
+                return null;
+            }
+            ordered.add(blog);
+        }
+        return ordered;
     }
 
     @Override
@@ -104,56 +191,29 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
         //1.获取登录用户
         Long userId = user.getId();
-        //2.判断当前登录用户是否已经点赞
-        String key = BLOG_LIKED_KEY + blog.getId();
-        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
-        blog.setIsLike(score != null);
+        blog.setIsLike(blogLikeCommandService.isLiked(blog.getId(), userId));
     }
 
     @Override
-    public Result likeBlog(Long id) {
-        //1.获取登录用户
+    public Result setBlogLiked(Long id, boolean liked) {
+        if (!blogLikeProperties.isWriteEnabled()) {
+            throw new ApiStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "点赞功能维护中，请稍后重试");
+        }
         Long userId = UserHolder.getUser().getId();
-        //2.判断当前登录用户是否已经点赞
-        String key = BLOG_LIKED_KEY + id;
-        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
-        if(score == null){
-            //3.如果未点赞，可以点赞
-            //3.1数据库点赞数+1
-            boolean isSuccess = update().setSql("liked = liked + 1").eq("id", id).update();
-            //3.2保存用户到redis的set集合中
-            if(isSuccess){
-                stringRedisTemplate.opsForZSet().add(key, userId.toString(), System.currentTimeMillis());
-            }
+        BlogLikeCommandResult commandResult = blogLikeCommandService.setLiked(id, userId, liked);
+        if (commandResult.getOutcome() == BlogLikeCommandResult.Outcome.NOT_FOUND) {
+            throw new ApiStatusException(HttpStatus.NOT_FOUND, "笔记不存在!");
         }
-        else{
-            //4.如果已经点赞，取消点赞
-            //4.1数据库点赞数-1
-            boolean isSuccess = update().setSql("liked = liked - 1").eq("id", id).update();
-            //4.2把用户从redis的set集合中移除
-            if(isSuccess){
-                stringRedisTemplate.opsForZSet().remove(key, userId.toString());
-            }
-        }
-        return Result.ok();
+        return Result.ok(commandResult);
     }
 
     @Override
     public Result queryBlogLikes(Long id) {
-        //1.查询top5个点赞的用户， zrange key 0 4 查完后得到的用户id和分数就是之前代码中设置的时间戳
-        String key = BLOG_LIKED_KEY + id;
-        Set<String> top5 = stringRedisTemplate.opsForZSet().range(key, 0, 4);
-        if(top5 == null ||  top5.isEmpty()){
+        List<Long> ids = blogLikeCommandService.findTopFiveUserIds(id);
+        if (ids.isEmpty()) {
             return Result.ok(Collections.emptyList());
         }
-        //2.解析用户id
-        List<Long> ids = top5.stream().map(Long::valueOf).collect(Collectors.toList());
-        //3.根据用户id查询用户
-//        List<UserDTO> userDTOS = userService.listByIds(ids)
-//                .stream()
-//                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
-//                .collect(Collectors.toList());
-
         String idStr = StrUtil.join("," , ids);
         List<UserDTO> userDTOS = userService.query()
                 .in("id", ids).last("ORDER BY FIELD(id, " + idStr+ ")").list()
@@ -161,6 +221,40 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
                 .collect(Collectors.toList());
         return Result.ok(userDTOS);
+    }
+
+    @Override
+    public Result queryBlogsByUserId(Long userId, Integer current) {
+        requirePositivePageAndId(userId, current, "userId");
+        List<Blog> records = query()
+                .eq("user_id", userId)
+                .orderByDesc("id")
+                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE, false))
+                .getRecords();
+        hydrateBlogList(records);
+        return Result.ok(records);
+    }
+
+    @Override
+    public Result queryBlogsByShopId(Long shopId, Integer current) {
+        requirePositivePageAndId(shopId, current, "shopId");
+        List<Blog> records = query()
+                .eq("shop_id", shopId)
+                .orderByDesc("liked")
+                .orderByDesc("id")
+                .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE, false))
+                .getRecords();
+        hydrateBlogList(records);
+        return Result.ok(records);
+    }
+
+    private static void requirePositivePageAndId(Long id, Integer current, String idName) {
+        if (id == null || id <= 0L) {
+            throw new IllegalArgumentException(idName + " must be positive");
+        }
+        if (current == null || current <= 0) {
+            throw new IllegalArgumentException("current must be positive");
+        }
     }
 
     @Override
@@ -181,16 +275,34 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return Result.fail("新增笔记失败!");
         }
         uploadFileService.markPublished(imagePaths, user.getId(), blog.getId());
-        //查询笔记作者的所有粉丝
-        List<Follow> follows = followService.query().eq("follow_user_id", user.getId()).list();
-        //推送笔记id给所有的粉丝
-        for( Follow follow : follows){
-            //获取粉丝id
-            Long userId = follow.getUserId();
-            //推送
-            String key = FEED_KEY + userId;
-            stringRedisTemplate.opsForZSet().add(key, blog.getId().toString(), System.currentTimeMillis());
+        List<Long> followerIds = followService.query()
+                .eq("follow_user_id", user.getId())
+                .list()
+                .stream()
+                .map(Follow::getUserId)
+                .collect(Collectors.toList());
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new IllegalStateException("Blog creation requires an active transaction synchronization");
         }
+        final Long committedBlogId = blog.getId();
+        final long publishedAt = System.currentTimeMillis();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                blogHotRankService.addNewBlogAfterCommit(committedBlogId);
+                for (Long followerId : followerIds) {
+                    try {
+                        stringRedisTemplate.opsForZSet().add(
+                                FEED_KEY + followerId,
+                                committedBlogId.toString(),
+                                publishedAt);
+                    } catch (RuntimeException e) {
+                        log.error("Unable to publish committed blog to follower feed. blogId={}, followerId={}",
+                                committedBlogId, followerId, e);
+                    }
+                }
+            }
+        });
         // 返回id
         return Result.ok(blog.getId());
     }

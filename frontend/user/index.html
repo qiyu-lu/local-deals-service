@@ -95,9 +95,13 @@
           })
       },
       addLike(b) {
-        axios.put("/blog/like/" +b.id)
+        const desired = !Boolean(b.isLike);
+        axios({method: desired ? "put" : "delete", url: "/blog/" + b.id + "/like"})
           .then(({data}) => {
-            this.queryBlogById(b)
+            b.isLike = data.desired;
+            if (data.changed) {
+              b.liked = Math.max(0, (b.liked || 0) + (data.desired ? 1 : -1));
+            }
           })
           .catch(err => {
             this.$message.error(err)
