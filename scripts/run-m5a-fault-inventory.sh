@@ -70,7 +70,13 @@ trap restore_dependencies EXIT
 prom_value() {
   local metric="$1"
   curl --silent --max-time 2 "${MANAGEMENT_URL}/actuator/prometheus" |
-    awk -v metric="$metric" '$1==metric {print $2; found=1} END{if(!found) print ""}'
+    awk -v metric="$metric" '
+      $0 !~ /^#/ && ($1 == metric || index($1, metric "{") == 1) {
+        sum += $NF
+        found=1
+      }
+      END {if(found) print sum+0; else print ""}
+    '
 }
 
 traffic_window() {
@@ -161,8 +167,8 @@ run_f3_consumer_pause() {
     docker exec "$broker" sh mqadmin updateSubGroup \
       -n "m5a-${M5A_RUN_ID}-namesrv:9876" -c "m5a-${M5A_RUN_ID}" \
       -g seckill-consumer-group -s true >> "$output" 2>&1 || true
-    printf '%s,F3-consumer-pause,fault,0,0,0,0,0,%s,,%s,"broker management pause executed; see raw mqadmin evidence"\n' \
-      "$M5A_RUN_ID" "$(prom_value local_deals_seckill_processing_oldest_overdue_seconds)" "$(invariants)" >> "$SUMMARY"
+    printf '%s,F3-consumer-pause,BLOCKED,0,0,0,0,0,%s,,blocked,"pause/resume control executed, but no accepted reservation was injected; run a bounded fixture before reporting pass"\n' \
+      "$M5A_RUN_ID" "$(prom_value local_deals_seckill_processing_oldest_overdue_seconds)" >> "$SUMMARY"
   else
     printf '%s,F3-consumer-pause,BLOCKED,0,0,0,0,0,,,blocked,"broker does not support a verified pause command; not reported as pass"\n' \
       "$M5A_RUN_ID" >> "$SUMMARY"

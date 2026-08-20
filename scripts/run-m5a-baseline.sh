@@ -102,6 +102,12 @@ prom_sum() {
     awk -v pattern="$pattern" '$0 !~ /^#/ && $1 ~ pattern {sum += $NF} END {printf "%.0f", sum+0}'
 }
 
+prom_scalar() {
+  local metric="$1"
+  curl --fail --silent "${MANAGEMENT_URL}/actuator/prometheus" |
+    awk -v metric="$metric" '$1 == metric {print $NF; found=1; exit} END {if(!found) print ""}'
+}
+
 mysql_questions() {
   mysql_cli -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Com_select','Com_insert','Com_update','Com_delete')" |
     awk '{sum += $2} END {print sum+0}'
@@ -116,7 +122,7 @@ mq_lag() {
   docker exec "m5a-${M5A_RUN_ID}-broker" sh mqadmin consumerProgress \
     -n "m5a-${M5A_RUN_ID}-namesrv:9876" -g seckill-consumer-group \
     > "$output" 2>&1 || return 1
-  awk '$1 !~ /^#/ && $0 ~ /seckill-order-topic/ {if ($(NF-1)+0 > max) max=$(NF-1)+0; found=1} END {if(found) print max; else exit 1}' "$output"
+  awk '$1 !~ /^#/ && $1 == "seckill-order-topic" {if ($6+0 > max) max=$6+0; found=1} END {if(found) print max; else exit 1}' "$output"
 }
 
 parse_jtl() {
@@ -185,9 +191,9 @@ run_idle() {
   for round in 1 2 3; do
     local mysql_before redis_before cpu_before cpu_after
     mysql_before="$(mysql_questions)"; redis_before="$(redis_commands)"
-    cpu_before="$(prom_sum '^process_cpu_usage')"
+    cpu_before="$(prom_scalar process_cpu_usage)"
     sleep "$duration"
-    cpu_after="$(prom_sum '^process_cpu_usage')"
+    cpu_after="$(prom_scalar process_cpu_usage)"
     printf '%s,%s,B0-idle,steady,0,0,0,,,,%s,%s,,,,,,pass,"duration=%ss round=%s cpu_before=%s cpu_after=%s"\n' \
       "$M5A_RUN_ID" "$(git -C "$PROJECT_DIR" rev-parse --short HEAD)" \
       "$(( $(mysql_questions)-mysql_before ))" "$(( $(redis_commands)-redis_before ))" \
@@ -214,7 +220,7 @@ run_b2() {
   run_http B2-hot-rank-not-ready cold 100 10 '/blog/hot?current=1'
   sleep 2
   run_http B2-hot-rank-ready warm 100 10 '/blog/hot?current=1'
-  redis_cli HSET 'blog:hot:{global}:meta' builtAt 1 >/dev/null || true
+  redis_cli HSET 'blog:hot:{global}:meta' publishedAt 1 >/dev/null || true
   run_http B2-hot-rank-stale stale 100 10 '/blog/hot?current=1'
   if [[ -n "$token" ]]; then
     run_http B2-like changed 1 1 "/blog/${blog_id}/like" PUT "$token"
