@@ -8,11 +8,13 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 当前已提交 HEAD：`dd36b4b feat(seckill): reconcile stale reservations`
+> 最新功能里程碑：`710ad61 feat(blog): make likes durable and hot rank rebuildable`
+>
+> 当前阶段：M4 已完成；M5 已规划但尚未实施
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
-当前工作区包含未提交的“点赞持久化与热榜”改动。本文件不是对这些改动已经正确或已经通过测试的声明。恢复实施时，禁止先加新功能，必须先完成“阶段 M4：收口当前 WIP”。
+“点赞持久化与热榜”已在 M4 完成审计、隔离集成验证和本地提交。下一会话可以进入 M5，但仍需遵守单阶段门禁，不得同时实施 M6 或技术栈升级。
 
 `docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
 
@@ -76,12 +78,13 @@
 | M2 秒杀精确生命周期 | `3abad89` | 已提交 | RocketMQ 事务消息；`userId -> orderId` 精确预约；消费前校验；成功/失败状态；精确补偿；状态查询和前端轮询 |
 | M3 商户后台与 RBAC | `91362e8` | 已提交 | 独立后台账号、BCrypt、固定角色权限、merchant scope、一次性 WS ticket、平台/商户频道、V5/V6 迁移 |
 | M3.1 超龄预约对账 | `dd36b4b` | 已提交 | PROCESSING 索引、消费者共享锁、每订单调度仲裁、DB 精确分类、quarantine、可审批补偿、回填和运行手册 |
+| M4 点赞持久化与热榜 | `710ad61` | 已完成 | MySQL 点赞关系、事务 outbox、停写导入与 cutover、generation-fenced Redis top-K、DB 安全回退 |
 
 “已提交”只表示形成了可追踪节点，不表示未来任何环境下都无需复验。发布或演示前仍应按照本文件的证据门禁运行当前版本测试。
 
-### 4.2 当前未提交 WIP
+### 4.2 M4 验收快照
 
-当前工作区正在改造点赞与热榜，主要包括：
+M4 已交付的点赞与热榜范围包括：
 
 - V7 热榜查询索引与 Redis generation-fenced top-K；
 - V8 `tb_blog_like` 持久点赞关系、历史计数 offset、事务 outbox 和 cutover marker；
@@ -91,9 +94,11 @@
 - 热榜 DB 回退、异步 singleflight 预热、原子发布和新博客 after-commit 更新；
 - 用户端页面和对应单元、MVC、MySQL、Redis 测试。
 
-这批文件尚未形成提交。中断前曾有部分定向测试通过，但随后又修改了 generation、配置校验、错误状态和临时 key 等逻辑，**当前源码没有一份覆盖最新文件时间的完整绿灯证据**。两个真实集成测试也必须在隔离 MySQL/Redis 中重跑，不能使用共享开发库。
-
-因此，README 中关于 V7/V8 的描述暂时属于“拟交付能力”，不能在 M4 验收前当作完成结论对外展示。
+2026-08-20 使用 Java 8 对最终源码执行编译和默认测试，228 个测试全绿；专用 MySQL
+schema 与专用 Redis 中的 M4 集成测试 11 个全绿。Flyway 的 V1->V8、V6->V8 均通过，
+最终 `invalid_blogs=0`、`pending_outbox=0`、专用 Redis `DBSIZE=0`。完整命令、时间、隔离
+边界和测试计数记录在 `docs/blog-like-hot-rank.md`。这份证据不等于生产容量结论，也不等于
+浏览器端到端测试。
 
 ## 5. 目标架构及真相边界
 
@@ -123,7 +128,7 @@
 | 商铺和券配置 | MySQL | Redis 缓存；ES 提供搜索 | 缓存坏则受控回库，搜索读模型坏则限流降级 |
 | 秒杀资格预占 | Redis 精确状态机，订单最终由 MySQL确认 | RocketMQ 传递订单意图 | Redis 不可用时停止新预占，不能绕过校验 |
 | 秒杀订单和 DB 库存 | MySQL | Redis 保存 PROCESSING/SUCCESS/FAILED 快速状态 | 用精确预约、DB 分类和对账收敛，不猜测成功 |
-| 点赞身份 | M4 计划为 MySQL `tb_blog_like` | outbox 聚合计数；Redis 只做热榜 | Redis 丢失不影响是否点赞的判断 |
+| 点赞身份 | MySQL `tb_blog_like` | outbox 聚合计数；Redis 只做热榜 | Redis 丢失不影响是否点赞的判断 |
 | 博客热榜 | MySQL `tb_blog.liked` + 稳定排序 | Redis top-K 是可重建读模型 | metadata/live 不一致时整页回 DB |
 | 搜索索引 | MySQL | Canal/RocketMQ/ES 是派生链路 | 记录 lag；不要把索引缺记录当数据库不存在 |
 | WebSocket 通知 | 订单状态仍以持久查询为准 | Redis pub/sub + WebSocket 只加速通知 | 断线后使用状态接口有限轮询 |
@@ -134,7 +139,7 @@
 
 | 顺序 | 阶段 | 优先级 | 前置条件 | 主要产物 |
 | --- | --- | --- | --- | --- |
-| 1 | M4 收口点赞持久化与热榜 WIP | P0 | 当前中断现场 | 一个可验证、可回滚的独立提交 |
+| 1 | M4 收口点赞持久化与热榜 WIP（已完成） | P0 | 当前中断现场 | `710ad61` 可验证、可回滚的独立提交 |
 | 2 | M5 缓存语义、流控、降级与可观测 | P1 | M4 完成且工作区干净 | 资源级限流、降级矩阵、指标和故障测试 |
 | 3 | M6 活动资格、标签、任务与统一发券账本 | P1 | M5 的幂等/流控基础可用 | 一条真实的新业务闭环，而非零散 CRUD |
 | 4 | M7 故障演练、压测对比和项目展示收口 | P1 | 核心功能冻结 | 可重复证据、运行手册、架构图和面试材料 |
@@ -142,7 +147,7 @@
 
 硬性停止线：M4 未验收、未形成 Git 提交前，不得开始 M5；M5 的限流和故障指标未验证前，不得用“大流量高可用”作为项目结论；M6 不需要为了显得功能多而同时实现自定义角色 UI、推荐系统和供应商父子层级。
 
-## 7. 阶段 M4：收口点赞持久化与热榜 WIP
+## 7. 阶段 M4：收口点赞持久化与热榜 WIP（已完成）
 
 ### 7.1 目标
 
@@ -154,9 +159,9 @@
 - Redis top-K 只是 generation-fenced 的可重建读模型；
 - 旧数据通过明确停写、停旧实例、导入、审计和 cutover marker 完成迁移。
 
-### 7.2 新会话的第一组动作
+### 7.2 M4 恢复动作（历史记录）
 
-只做只读盘点，不修代码：
+执行 M4 时首先只做只读盘点，不修代码：
 
 ```bash
 cd /home/sd101t/IdeaProjects/hm-dianping
@@ -168,7 +173,7 @@ git diff --name-status
 git ls-files --others --exclude-standard
 ```
 
-预期分支为 `codex/platform-hardening`、HEAD 为 `dd36b4b`。若不一致，先记录差异再决定如何继续。禁止使用 `git reset --hard`、`git clean` 或切换分支覆盖现场，也不要未经检查把全部文件一次性加入暂存区。
+当时预期分支为 `codex/platform-hardening`、基线 HEAD 为 `dd36b4b`。若复核历史过程，必须先记录差异；禁止使用 `git reset --hard`、`git clean` 或切换分支覆盖现场，也不要未经检查把全部文件一次性加入暂存区。
 
 建议先保存只读证据：
 
@@ -258,6 +263,10 @@ feat(blog): make likes durable and hot rank rebuildable
 
 若 M4 一次审计后仍过大，可拆成两个可独立绿灯的提交：先提交 V7 DB 索引和热榜读模型，再提交 V8 点赞关系/outbox/cutover。不能为保留既有工作量而把未闭合代码硬塞进同一个提交。
 
+完成记录：M4 于 2026-08-20 按上述门禁验收并形成 `710ad61`。路线文档此前已单独形成
+`b0178e5`，两个提交均只保存在本地，未 push。后续变更若破坏 M4 不变量，必须重新运行
+第 7.4 节的相关门禁，不能仅引用本次历史结果。
+
 ## 8. 阶段 M5：缓存语义、限流、降级与可观测
 
 ### 8.1 目标
@@ -333,6 +342,26 @@ feat(cache): add bounded rebuild and fallback policies
 feat(traffic): add resource-level limiting and degradation
 feat(observability): expose reliability and backlog metrics
 ```
+
+### 8.7 下一会话的具体执行顺序
+
+M5 尚未实施。下一会话只执行 M5，并按以下顺序逐个形成可独立回滚的绿灯节点：
+
+1. **M5-A 基线与契约**：核对干净工作区；固定商铺详情、热榜、搜索、验证码、后台登录和
+   秒杀提交的正常/突发流量；记录现有吞吐、P95/P99、DB QPS、缓存命中/回退和拒绝语义；
+   先定义 429/503 与有限 reason 标签，禁止 userId/orderId 进入指标标签。
+2. **M5-B 有界缓存**：只处理商铺详情和小字典的 cache-aside、短空值、singleflight、
+   超时及后台写后失效；为缓存击穿、坏值、Redis 延迟/断连和 DB 回退增加测试。若基线没有
+   证明布隆过滤器必要，则不实现。
+3. **M5-C 资源级流控**：复用已有验证码/后台登录门禁，新增秒杀 activity+user+IP 和
+   读接口本地并发上限；验证 429、依赖故障 503、秒杀 fail closed，以及已接受订单消费和
+   对账不被新流量限流误伤。
+4. **M5-D 指标与故障收口**：补齐第 8.5 节低基数指标；依次注入 Redis、MySQL、MQ
+   consumer、ES 故障；同时记录业务不变量、backlog oldest age 和恢复时间，再更新 README
+   与运行手册。未取得 baseline/current 对比前不得写性能提升百分比。
+
+M5-B、M5-C、M5-D 各自通过 Java 8 默认测试、相关隔离 IT、`git diff --check` 和 staged
+diff 检查后再提交；任一节点未闭合，不进入下一节点，更不得开始 M6。
 
 ## 9. 阶段 M6：活动资格、用户标签、每日任务与统一发券
 
@@ -494,7 +523,7 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ### 13.4 为什么点赞不用每次直接更新博客表
 
-同用户并发、HTTP 重试和 Redis 写失败会让 `+1/-1` 漂移。M4 计划以用户/博客关系作为事实，只有关系真实变化才写不可变 outbox，worker 聚合更新 aggregate；热榜从 DB 快照构建，因此计数和用户身份都可审计。
+同用户并发、HTTP 重试和 Redis 写失败会让 `+1/-1` 漂移。M4 已以用户/博客关系作为事实，只有关系真实变化才写不可变 outbox，worker 聚合更新 aggregate；热榜从 DB 快照构建，因此计数和用户身份都可审计。
 
 ### 13.5 为什么不立即升级 Spring Boot 3、Kafka、分库分表
 
@@ -515,37 +544,36 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-新会话只执行当前阶段，完成后再回来更新路线状态：
+新会话只执行 M5，完成后再回来更新路线状态：
 
-1. 阅读本文件的第 4、7、11 节；
-2. 核对 branch、HEAD、status，不覆盖当前 WIP；
-3. 只审计 M4 已有改动，不添加 M5/M6 功能；
-4. 为最新源码重跑 Java 8 单元测试；
-5. 在隔离 MySQL/Redis 中跑两类真实 IT 和 Flyway 迁移；
-6. 修复发现的 P0/P1，并同步源码、配置、README、runbook；
-7. 检查 staged diff 后形成 M4 独立提交，不 push；
-8. 报告实际测试、仍有边界、commit 和干净/剩余工作区状态；
-9. 只有 M4 达到完成条件，才把本文件中 M4 状态改为“已完成”并规划 M5 的具体实现任务。
+1. 阅读本文件的第 4、8、11 节和 `docs/blog-like-hot-rank.md` 的现有证据边界；
+2. 核对 branch、HEAD、status，预期最新功能里程碑为 `710ad61`，不得覆盖用户改动；
+3. 先执行第 8.7 节 M5-A，保存改造前基线和错误语义，不直接堆限流组件；
+4. 按 M5-B、M5-C、M5-D 顺序工作，每个节点独立测试、审查和提交；
+5. 使用 Java 8；所有真实 MySQL/Redis/MQ/ES 测试必须隔离测试数据与正式 key/topic；
+6. 同时核对业务正确性、拒绝语义、积压、最老年龄和恢复时间，不只看 HTTP 成功率；
+7. 不实现标签、每日任务、统一发券账本、Spring Boot 3、分片或 Redis Cluster；
+8. 不 push；最后报告命令、计数、环境、commit、遗留边界和工作区状态；
+9. 只有 M5 全部门禁闭合，才把 M5 状态改为“已完成”并进入 M6 规划。
 
 ### 可复制到新会话的提示词
 
 ```text
 请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md，
-并严格只执行“阶段 M4：收口点赞持久化与热榜 WIP”。
+并严格只执行“阶段 M5：缓存语义、限流、降级与可观测”。
 
-当前预期分支是 codex/platform-hardening，已提交 HEAD 是
-dd36b4b feat(seckill): reconcile stale reservations，但工作区有大量未提交的
-V7/V8 点赞/热榜改动。先用 git branch/log/status/diff 核对真实现场；禁止 reset、clean、
-切分支覆盖或把现有用户改动丢掉。不要开始限流、标签、每日任务、Spring Boot 3、
-分库分表等后续阶段。
+当前预期分支是 codex/platform-hardening，M4 功能提交是
+710ad61 feat(blog): make likes durable and hot rank rebuildable。先用
+git branch/log/status/diff 核对真实现场；禁止 reset、clean、切分支覆盖或丢弃用户改动。
+不要开始标签、每日任务、统一发券账本、Spring Boot 3、Redis Cluster 或分库分表。
 
-先审计当前 WIP 的事务、outbox、历史导入、generation 热榜、兼容接口和测试隔离，
-再用 Java 8 运行覆盖最新源码的单元测试；BlogLikeReliabilityIT 必须使用专用 MySQL
-schema，BlogHotRankRedisIT 必须使用专用 Redis，禁止操作共享开发数据。同时验证 Flyway
-V1->V8 和 V6->V8、前端脚本、git diff --check。
+先执行第 8.7 节 M5-A，固定流量模型并保存现有吞吐、P95/P99、DB QPS、cache
+hit/fallback 和错误语义。随后严格按 M5-B 有界缓存、M5-C 资源级流控、M5-D 指标与故障
+收口推进；每一步都要同时验证正确性、429/503、backlog oldest age 和恢复时间。
 
-只有文档第 7.5 节的门禁全部满足后，才显式暂存本阶段文件并创建一个独立本地提交；
-不要 push。最后报告测试命令和数量、隔离环境、commit、尚存边界及 git status。
+每个节点使用 Java 8，真实依赖测试使用隔离数据；通过相关测试、git diff --check 和 staged
+diff 审查后再创建独立本地提交。不要 push。M5 未全部闭合前不得开始 M6；最后报告测试
+命令和数量、隔离环境、commit、尚存边界及 git status。
 ```
 
 ## 16. 路线完成的判定
