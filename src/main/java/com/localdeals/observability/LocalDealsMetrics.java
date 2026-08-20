@@ -136,7 +136,7 @@ public class LocalDealsMetrics {
                         .register(registry));
             }
             cacheDbFallback.put(resource, Timer.builder("local_deals.cache.db_fallback")
-                    .description("Database fallback duration after a cache miss")
+                    .description("Database fallback duration after a cache miss, bad value, or Redis error")
                     .tag("resource", metricValue(resource))
                     .publishPercentileHistogram()
                     .register(registry));
