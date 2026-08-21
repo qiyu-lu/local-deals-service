@@ -8,7 +8,7 @@ import com.localdeals.dto.AdminWebSocketTicketResponse;
 import com.localdeals.dto.Result;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.service.AdminAuthService;
-import com.localdeals.service.AdminClientIpResolver;
+import com.localdeals.service.TrustedClientIpResolver;
 import com.localdeals.service.AdminSessionService;
 import com.localdeals.utils.AdminPrincipalHolder;
 import org.springframework.http.HttpStatus;
@@ -28,19 +28,19 @@ import javax.servlet.http.HttpServletRequest;
 public class AdminAuthController {
     private final AdminAuthService adminAuthService;
     private final AdminSessionService adminSessionService;
-    private final AdminClientIpResolver adminClientIpResolver;
+    private final TrustedClientIpResolver clientIpResolver;
 
     public AdminAuthController(AdminAuthService adminAuthService,
             AdminSessionService adminSessionService,
-            AdminClientIpResolver adminClientIpResolver) {
+            TrustedClientIpResolver clientIpResolver) {
         this.adminAuthService = adminAuthService;
         this.adminSessionService = adminSessionService;
-        this.adminClientIpResolver = adminClientIpResolver;
+        this.clientIpResolver = clientIpResolver;
     }
 
     @PostMapping("/login")
     public Result login(@RequestBody AdminLoginRequest request, HttpServletRequest servletRequest) {
-        return Result.ok(adminAuthService.login(request, adminClientIpResolver.resolve(servletRequest)));
+        return Result.ok(adminAuthService.login(request, clientIpResolver.resolve(servletRequest)));
     }
 
     @GetMapping("/me")

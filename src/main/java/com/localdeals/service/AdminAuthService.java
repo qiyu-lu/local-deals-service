@@ -9,6 +9,7 @@ import com.localdeals.dto.AdminPasswordChangeRequest;
 import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.entity.AdminAccount;
 import com.localdeals.exception.ApiStatusException;
+import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.mapper.AdminAccountMapper;
 import com.localdeals.observability.LocalDealsMetrics;
 import org.springframework.core.io.ClassPathResource;
@@ -98,11 +99,13 @@ public class AdminAuthService {
         String failureKey = failureKey(username, remoteAddress);
         String ipAttemptKey = ipAttemptKey(remoteAddress);
         if (isLocked(failureKey, maxFailures())) {
-            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS, "登录失败次数过多，请稍后再试");
+            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    ApiErrorCodes.ADMIN_LOGIN_RATE_LIMITED, "登录失败次数过多，请稍后再试");
         }
         long ipAttempts = incrementCounter(ipAttemptKey, (long) maxIpAttempts() + 1L);
         if (ipAttempts > maxIpAttempts()) {
-            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS, "登录请求过于频繁，请稍后再试");
+            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    ApiErrorCodes.ADMIN_LOGIN_RATE_LIMITED, "登录请求过于频繁，请稍后再试");
         }
 
         AdminAccount account = username == null ? null : adminAccountMapper.selectOne(
@@ -122,7 +125,8 @@ public class AdminAuthService {
         if (principal == null) {
             long failures = incrementCounter(failureKey, maxFailures());
             if (failures >= maxFailures()) {
-                throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS, "登录失败次数过多，请稍后再试");
+                throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                        ApiErrorCodes.ADMIN_LOGIN_RATE_LIMITED, "登录失败次数过多，请稍后再试");
             }
             throw new ApiStatusException(HttpStatus.UNAUTHORIZED, LOGIN_ERROR);
         }
@@ -219,7 +223,8 @@ public class AdminAuthService {
     }
 
     private ApiStatusException loginThrottleUnavailable() {
-        return new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE, "后台登录暂不可用");
+        return new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                ApiErrorCodes.ADMIN_LOGIN_UNAVAILABLE, "后台登录暂不可用");
     }
 
     private int maxFailures() {

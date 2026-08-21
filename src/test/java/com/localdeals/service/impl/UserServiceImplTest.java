@@ -6,6 +6,8 @@ import com.localdeals.dto.Result;
 import com.localdeals.observability.LocalDealsMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.localdeals.entity.User;
+import com.localdeals.exception.ApiErrorCodes;
+import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.UserMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -74,9 +77,40 @@ class UserServiceImplTest {
         doReturn(0L).when(redisTemplate).execute(
                 any(RedisScript.class), anyList(), any(), any(), any());
 
-        Result result = service.sendCode(PHONE, null);
+        assertThatThrownBy(() -> service.sendCode(PHONE, null))
+                .isInstanceOfSatisfying(ApiStatusException.class, error -> {
+                    assertEquals(429, error.getStatus().value());
+                    assertEquals(ApiErrorCodes.OTP_RATE_LIMITED, error.getCode());
+                });
+    }
 
-        assertFalse(result.getSuccess());
+    @Test
+    void otpAndLoginRedisFailuresReturnStableUnavailableCode() {
+        doReturn(null).when(redisTemplate).execute(
+                any(RedisScript.class), anyList(), any(), any(), any());
+        assertThatThrownBy(() -> service.sendCode(PHONE, null))
+                .isInstanceOfSatisfying(ApiStatusException.class,
+                        error -> assertEquals(ApiErrorCodes.OTP_RATE_LIMITED, error.getCode()));
+
+        org.mockito.Mockito.reset(redisTemplate);
+        org.mockito.Mockito.doThrow(new IllegalStateException("redis down"))
+                .when(redisTemplate).execute(any(RedisScript.class), anyList(), any(), any(), any());
+        assertThatThrownBy(() -> service.sendCode(PHONE, null))
+                .isInstanceOfSatisfying(ApiStatusException.class, error -> {
+                    assertEquals(503, error.getStatus().value());
+                    assertEquals(ApiErrorCodes.AUTH_STATE_UNAVAILABLE, error.getCode());
+                });
+
+        LoginFormDTO form = new LoginFormDTO();
+        form.setPhone(PHONE);
+        form.setCode(CODE);
+        org.mockito.Mockito.doThrow(new IllegalStateException("redis down"))
+                .when(redisTemplate).execute(any(RedisScript.class), anyList(), any(), any());
+        assertThatThrownBy(() -> service.login(form, null))
+                .isInstanceOfSatisfying(ApiStatusException.class, error -> {
+                    assertEquals(503, error.getStatus().value());
+                    assertEquals(ApiErrorCodes.AUTH_STATE_UNAVAILABLE, error.getCode());
+                });
     }
 
     @Test

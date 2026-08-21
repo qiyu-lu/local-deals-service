@@ -29,10 +29,18 @@ class LocalDealsMetricsTest {
         assertThat(registry.find("local_deals.cache.access")
                 .tags("resource", "shop_detail", "result", "bad_value").counter()).isNotNull();
         assertThat(registry.find("local_deals.cache.singleflight")
-                .tags("resource", "shop_type", "result", "shared").counter()).isNotNull();
+                .tags("resource", "shop_type", "result", "shared_timeout").counter()).isNotNull();
         assertThat(registry.find("local_deals.cache.maintenance")
                 .tags("resource", "shop_detail", "operation", "write", "result", "skipped")
                 .counter()).isNotNull();
+        assertThat(registry.find("local_deals.traffic.decision")
+                .tags("resource", "seckill", "result", "rejected", "reason", "activity")
+                .counter()).isNotNull();
+        assertThat(registry.find("local_deals.traffic.inflight")
+                .tag("resource", "db_read").gauge()).isNotNull();
+        assertThat(registry.find("local_deals.traffic.decision")
+                .tags("resource", "db_read", "result", "rejected", "reason", "ip")
+                .counter()).isNull();
 
         metrics.updateOutboxBacklog(7L, 3.5D);
         assertThat(registry.get("local_deals.blog.like.outbox.pending").gauge().value())
@@ -132,5 +140,24 @@ class LocalDealsMetricsTest {
         assertThat(registry.get("local_deals.cache.maintenance")
                 .tags("resource", "shop_type", "operation", "evict", "result", "failure")
                 .counter().count()).isEqualTo(1D);
+    }
+
+    @Test
+    void trafficMetersExposeOnlyLegalFiniteCombinations() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        LocalDealsMetrics metrics = new LocalDealsMetrics(registry);
+
+        metrics.recordTraffic(LocalDealsMetrics.TrafficResource.SEARCH,
+                LocalDealsMetrics.TrafficResult.REJECTED,
+                LocalDealsMetrics.TrafficReason.CONCURRENCY);
+        metrics.setTrafficInflight(LocalDealsMetrics.TrafficResource.SEARCH, 3);
+
+        assertThat(registry.get("local_deals.traffic.decision").counters()).hasSize(11);
+        assertThat(registry.get("local_deals.traffic.inflight").gauges()).hasSize(2);
+        assertThat(registry.get("local_deals.traffic.decision")
+                .tags("resource", "search", "result", "rejected", "reason", "concurrency")
+                .counter().count()).isEqualTo(1D);
+        assertThat(registry.get("local_deals.traffic.inflight")
+                .tag("resource", "search").gauge().value()).isEqualTo(3D);
     }
 }

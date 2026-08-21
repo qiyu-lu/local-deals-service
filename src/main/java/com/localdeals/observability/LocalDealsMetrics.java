@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -30,7 +31,7 @@ public class LocalDealsMetrics {
     public enum CacheResult {
         HIT, EMPTY_HIT, MISS, BAD_VALUE, REDIS_ERROR, DB_SUCCESS, DB_EMPTY, DB_ERROR
     }
-    public enum CacheSingleFlightResult { LEADER, SHARED }
+    public enum CacheSingleFlightResult { LEADER, SHARED, SHARED_TIMEOUT }
     public enum CacheMaintenanceOperation { WRITE, EVICT }
     public enum CacheMaintenanceResult { SUCCESS, FAILURE, SKIPPED }
     public enum AuthFlow { OTP_SEND, USER_LOGIN, ADMIN_LOGIN }
@@ -40,6 +41,9 @@ public class LocalDealsMetrics {
     public enum EsMessageResult { SUCCESS, PARTIAL_FAILURE, FAILURE, IGNORED }
     public enum EsRowResult { SUCCESS, FAILURE, IGNORED }
     public enum CollectorResult { SUCCESS, FAILURE }
+    public enum TrafficResource { SECKILL, DB_READ, SEARCH }
+    public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
+    public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
     public enum MqConsumeOutcome {
         PERSISTED,
         ALREADY_SUCCESS,
@@ -80,6 +84,9 @@ public class LocalDealsMetrics {
             new EnumMap<>(CollectorResult.class);
     private final Map<MqConsumeOutcome, Counter> mqConsumeOutcomes =
             new EnumMap<>(MqConsumeOutcome.class);
+    private final Map<String, Counter> trafficDecisions = new HashMap<>();
+    private final Map<TrafficResource, AtomicInteger> trafficInflight =
+            new EnumMap<>(TrafficResource.class);
 
     private final AtomicReference<Double> outboxPending = nanGauge();
     private final AtomicReference<Double> outboxOldestAge = nanGauge();
@@ -228,6 +235,18 @@ public class LocalDealsMetrics {
                             "Detailed finite outcome for each seckill MQ delivery attempt",
                             "result", metricValue(outcome)));
         }
+        registerTrafficDecision(registry, TrafficResource.SECKILL,
+                TrafficResult.ALLOWED, TrafficReason.NONE);
+        registerTrafficDecision(registry, TrafficResource.SECKILL,
+                TrafficResult.REJECTED, TrafficReason.ACTIVITY);
+        registerTrafficDecision(registry, TrafficResource.SECKILL,
+                TrafficResult.REJECTED, TrafficReason.USER);
+        registerTrafficDecision(registry, TrafficResource.SECKILL,
+                TrafficResult.REJECTED, TrafficReason.IP);
+        registerTrafficDecision(registry, TrafficResource.SECKILL,
+                TrafficResult.UNAVAILABLE, TrafficReason.REDIS);
+        registerLocalTrafficResource(registry, TrafficResource.DB_READ);
+        registerLocalTrafficResource(registry, TrafficResource.SEARCH);
     }
 
     public void recordLike(LikeOperation operation, LikeResult result) {
@@ -301,6 +320,17 @@ public class LocalDealsMetrics {
         safeIncrement(mqConsumeOutcomes.get(outcome));
     }
 
+    public void recordTraffic(TrafficResource resource, TrafficResult result, TrafficReason reason) {
+        safeIncrement(trafficDecisions.get(key(resource, result, reason)));
+    }
+
+    public void setTrafficInflight(TrafficResource resource, int value) {
+        AtomicInteger gauge = trafficInflight.get(resource);
+        if (gauge != null) {
+            gauge.set(Math.max(0, value));
+        }
+    }
+
     public void updateOutboxBacklog(long pending, double oldestAgeSeconds) {
         outboxPending.set((double) pending);
         outboxOldestAge.set(oldestAgeSeconds);
@@ -352,6 +382,29 @@ public class LocalDealsMetrics {
         for (CollectorResult result : CollectorResult.values()) {
             target.put(result, counter(registry, name, description, "result", metricValue(result)));
         }
+    }
+
+    private void registerLocalTrafficResource(MeterRegistry registry, TrafficResource resource) {
+        registerTrafficDecision(registry, resource, TrafficResult.ALLOWED, TrafficReason.NONE);
+        registerTrafficDecision(registry, resource, TrafficResult.REJECTED, TrafficReason.CONCURRENCY);
+        registerTrafficDecision(registry, resource, TrafficResult.UNAVAILABLE, TrafficReason.INTERRUPTED);
+        AtomicInteger inflight = new AtomicInteger();
+        trafficInflight.put(resource, inflight);
+        Gauge.builder("local_deals.traffic.inflight", inflight, AtomicInteger::get)
+                .description("Current permits held by bounded local read resources")
+                .tag("resource", metricValue(resource))
+                .register(registry);
+    }
+
+    private void registerTrafficDecision(MeterRegistry registry, TrafficResource resource,
+                                         TrafficResult result, TrafficReason reason) {
+        trafficDecisions.put(key(resource, result, reason),
+                Counter.builder("local_deals.traffic.decision")
+                        .description("Finite resource admission decisions")
+                        .tags("resource", metricValue(resource),
+                                "result", metricValue(result),
+                                "reason", metricValue(reason))
+                        .register(registry));
     }
 
     private static void gauge(MeterRegistry registry, String name, String baseUnit,

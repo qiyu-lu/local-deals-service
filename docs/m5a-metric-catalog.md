@@ -1,10 +1,10 @@
 # M5A 低基数指标目录与管理面契约
 
-> 状态：M5A 实施契约；商铺缓存条目含 M5B 有限扩展
+> 状态：M5A 实施契约；商铺缓存条目含 M5B/M5C 有限扩展
 >
 > 基线提交：`a36e379`
 >
-> 约束：本目录定义指标语义；M5B 有界缓存已实现，M5C 限流仍未实现。
+> 约束：本目录定义指标语义；M5C 只增加本文列出的有限值域，不建设通用流控平台。
 
 ## 1. 全局规则
 
@@ -24,7 +24,7 @@
 
 | Micrometer / Prometheus | 类型 | 标签和值域 | 记录点与解释 |
 | --- | --- | --- | --- |
-| `local_deals.seckill.requests` / `local_deals_seckill_requests_total` | Counter | `result=accepted|rejected_stock|rejected_duplicate|rejected_activity|unavailable` | 秒杀准入返回分支，每个请求一次；`accepted` 包含发送异常后通过 exact reservation 恢复确认的请求。 |
+| `local_deals.seckill.requests` / `local_deals_seckill_requests_total` | Counter | `result=accepted|rejected_rate|rejected_stock|rejected_duplicate|rejected_activity|unavailable` | 秒杀准入返回分支，每个请求一次；`accepted` 包含发送异常后通过 exact reservation 恢复确认的请求。`rejected_rate` 只表示前置限流，具体维度见 traffic decision。 |
 | `local_deals.seckill.mq.consume` / `local_deals_seckill_mq_consume_total` | Counter | `result=success|failure` | 兼容旧指标。`success` 包含新落库和 already-success ACK；`failure` 混合暂态重试、已补偿 ACK、永久补偿与隔离，不能单独推断 DLQ 或 Broker lag。M5A 在目录中保留这一局限，不用动态异常标签拆分。 |
 | `local_deals.seckill.mq.consume.outcome` / `local_deals_seckill_mq_consume_outcome_total` | Counter | `result=persisted|already_success|already_failed|malformed|lock_busy|reservation_mismatch|state_missing|compensated|quarantined|transient_error|compensation_error|quarantine_error` | M5A 新增的有限详细结果，每次 delivery attempt 只递增一个；与兼容 aggregate 分开查询，不能和旧 `success|failure` 相加。WebSocket 通知是持久终态后的 best-effort，不改变本指标 outcome。 |
 | `local_deals.seckill.db.orders` / `local_deals_seckill_db_orders_total` | Counter | `result=duplicate|stock_rollback` | DB 幂等命中和库存条件更新失败；不是全部订单写入计数。 |
@@ -63,12 +63,22 @@ Outbox SQL 先用 `(processed_time,id)` 找 count 与最早 id，再按主键读
 | Micrometer / Prometheus | 类型/单位 | 标签和值域 | 记录点与解释 |
 | --- | --- | --- | --- |
 | `local_deals.cache.access` / `local_deals_cache_access_total` | Counter | `resource=shop_detail|shop_type`; `result=hit|empty_hit|miss|bad_value|redis_error|db_success|db_empty|db_error` | Redis 阶段记录 hit/empty_hit/miss/bad_value/redis_error；发生 fallback 时再记录一个 DB outcome。因此冷请求会有一个 read outcome 和一个 DB outcome，不能把所有 result 相加当请求总数。`bad_value` 是 M5B 新增的坏 payload 分类。 |
-| `local_deals.cache.singleflight` / `local_deals_cache_singleflight_total` | Counter | `resource=shop_detail|shop_type`; `result=leader|shared` | M5B 中每个进入进程内 DB load 合并边界的请求一次；只说明当前 JVM、当前 key 的角色，不能推导跨实例全局调用数。 |
+| `local_deals.cache.singleflight` / `local_deals_cache_singleflight_total` | Counter | `resource=shop_detail|shop_type`; `result=leader|shared|shared_timeout` | `shared_timeout` 表示 follower 超过 750 ms 默认上界；不取消 leader、不移除在飞 entry，也不与 leader/shared 相加推导 DB 次数。 |
 | `local_deals.cache.maintenance` / `local_deals_cache_maintenance_total` | Counter | `resource=shop_detail|shop_type`; `operation=write|evict`; `result=success|failure|skipped` | M5B DB fallback 后的 best-effort 写入与事务提交后的精确失效。Redis read 已失败时本次 write 为 `skipped`；写入/失效失败不能改变 DB 结果。 |
 | `local_deals.cache.db_fallback` / `local_deals_cache_db_fallback_seconds_*` | Timer/seconds | `resource=shop_detail|shop_type` | M5B 只包 miss、bad_value 或 redis_error 后实际发生的 DB 查询；followers 不重复记录；发布 histogram。 |
 
 M5A 基线期 Redis 异常仍抛出；M5B 已将其改为有界 DB fallback，并增加上述有限指标。
 指标本身不额外读取缓存，也不携带 cache key、shop ID、异常文本等动态标签。
+
+### 3.3.1 M5C 资源准入
+
+| Micrometer / Prometheus | 类型 | 标签和值域 | 记录点与解释 |
+| --- | --- | --- | --- |
+| `local_deals.traffic.decision` / `local_deals_traffic_decision_total` | Counter | `resource=seckill|db_read|search`; `result=allowed|rejected|unavailable`; `reason=none|activity|user|ip|concurrency|redis|interrupted` | 每次 guard 决策一个终态，只预注册合法组合：seckill 的 allowed/none、rejected/activity\|user\|ip、unavailable/redis，DB_READ/SEARCH 的 allowed/none、rejected/concurrency、unavailable/interrupted。 |
+| `local_deals.traffic.inflight` / `local_deals_traffic_inflight` | Gauge | `resource=db_read|search` | 当前 JVM 内已持有的 semaphore permit 数；不是线程池队列，不表示跨实例并发。 |
+
+本节不注册 voucherId、userId、IP、bucket、Redis key、异常类型/message
+或 raw URI 标签。HTTP 429/503/500 继续由 `http.server.requests` 的 status 统计。
 
 ### 3.4 认证入口
 

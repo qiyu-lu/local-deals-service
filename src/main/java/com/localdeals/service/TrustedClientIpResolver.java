@@ -1,6 +1,6 @@
 package com.localdeals.service;
 
-import com.localdeals.config.AdminProperties;
+import com.localdeals.config.ClientIpProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -13,12 +13,12 @@ import java.util.List;
 
 /** Resolves proxy headers only when the direct peer is explicitly trusted. */
 @Component
-public class AdminClientIpResolver {
+public class TrustedClientIpResolver {
     private static final int MAX_IP_LITERAL_LENGTH = 64;
 
     private final List<IpRange> trustedProxyRanges;
 
-    public AdminClientIpResolver(AdminProperties properties) {
+    public TrustedClientIpResolver(ClientIpProperties properties) {
         List<String> configured = properties == null
                 ? Collections.emptyList()
                 : properties.getTrustedProxies();
@@ -110,22 +110,22 @@ public class AdminClientIpResolver {
         private static IpRange parse(String configured) {
             String[] parts = configured.split("/", -1);
             if (parts.length > 2) {
-                throw new IllegalStateException("Invalid trusted admin proxy range: " + configured);
+                throw new IllegalStateException("Invalid trusted proxy range: " + configured);
             }
             byte[] network = parseIpLiteral(parts[0]);
             if (network == null) {
-                throw new IllegalStateException("Invalid trusted admin proxy address: " + configured);
+                throw new IllegalStateException("Invalid trusted proxy address: " + configured);
             }
             int prefix = network.length * 8;
             if (parts.length == 2) {
                 try {
                     prefix = Integer.parseInt(parts[1]);
                 } catch (NumberFormatException e) {
-                    throw new IllegalStateException("Invalid trusted admin proxy prefix: " + configured, e);
+                    throw new IllegalStateException("Invalid trusted proxy prefix: " + configured, e);
                 }
             }
             if (prefix < 0 || prefix > network.length * 8) {
-                throw new IllegalStateException("Invalid trusted admin proxy prefix: " + configured);
+                throw new IllegalStateException("Invalid trusted proxy prefix: " + configured);
             }
             return new IpRange(network, prefix);
         }

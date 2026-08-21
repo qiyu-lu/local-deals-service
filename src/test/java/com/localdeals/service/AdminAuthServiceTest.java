@@ -7,6 +7,7 @@ import com.localdeals.dto.AdminPasswordChangeRequest;
 import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.entity.AdminAccount;
 import com.localdeals.exception.ApiStatusException;
+import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.mapper.AdminAccountMapper;
 import com.localdeals.observability.LocalDealsMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -117,7 +118,10 @@ class AdminAuthServiceTest {
         assertThatThrownBy(() -> service.login(
                 request("merchant.owner", "any-password"), "127.0.0.1"))
                 .isInstanceOfSatisfying(ApiStatusException.class,
-                        error -> assertThat(error.getStatus().value()).isEqualTo(429));
+                        error -> {
+                            assertThat(error.getStatus().value()).isEqualTo(429);
+                            assertThat(error.getCode()).isEqualTo(ApiErrorCodes.ADMIN_LOGIN_RATE_LIMITED);
+                        });
 
         verify(accountMapper, never()).selectOne(any());
     }
@@ -130,7 +134,10 @@ class AdminAuthServiceTest {
         assertThatThrownBy(() -> service.login(
                 request("different.user", "any-password"), "203.0.113.9"))
                 .isInstanceOfSatisfying(ApiStatusException.class,
-                        error -> assertThat(error.getStatus().value()).isEqualTo(429));
+                        error -> {
+                            assertThat(error.getStatus().value()).isEqualTo(429);
+                            assertThat(error.getCode()).isEqualTo(ApiErrorCodes.ADMIN_LOGIN_RATE_LIMITED);
+                        });
 
         verify(accountMapper, never()).selectOne(any());
         verify(passwordEncoder, never()).matches(anyString(), anyString());
@@ -176,7 +183,10 @@ class AdminAuthServiceTest {
         assertThatThrownBy(() -> service.login(
                 request("different.user", "any-password"), "203.0.113.9"))
                 .isInstanceOfSatisfying(ApiStatusException.class,
-                        error -> assertThat(error.getStatus().value()).isEqualTo(503));
+                        error -> {
+                            assertThat(error.getStatus().value()).isEqualTo(503);
+                            assertThat(error.getCode()).isEqualTo(ApiErrorCodes.ADMIN_LOGIN_UNAVAILABLE);
+                        });
 
         verify(accountMapper, never()).selectOne(any());
         verify(passwordEncoder, never()).matches(anyString(), anyString());

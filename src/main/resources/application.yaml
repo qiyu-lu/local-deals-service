@@ -60,6 +60,9 @@ management:
         readiness:
           include: db,redis
 local-deals:
+  client-ip:
+    # Proxy headers are trusted only when the direct peer is in this explicit list.
+    trusted-proxies: "${LOCAL_DEALS_TRUSTED_PROXIES:${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}}"
   cache:
     shop-detail-ttl: "${LOCAL_DEALS_CACHE_SHOP_DETAIL_TTL:30s}"
     shop-detail-empty-ttl: "${LOCAL_DEALS_CACHE_SHOP_DETAIL_EMPTY_TTL:30s}"
@@ -79,11 +82,25 @@ local-deals:
     max-login-failures: "${LOCAL_DEALS_ADMIN_MAX_LOGIN_FAILURES:5}"
     max-ip-login-attempts: "${LOCAL_DEALS_ADMIN_MAX_IP_LOGIN_ATTEMPTS:30}"
     login-lock-duration: "${LOCAL_DEALS_ADMIN_LOGIN_LOCK_DURATION:15m}"
-    # Exact IPs or CIDRs. Empty by default: proxy headers require an explicit trust boundary.
-    trusted-proxies: "${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}"
   auth:
     # Never enable this outside an isolated local development environment.
     log-verification-code: "${LOCAL_DEALS_LOG_VERIFICATION_CODE:false}"
+  traffic:
+    seckill:
+      enabled: "${LOCAL_DEALS_SECKILL_RATE_LIMIT_ENABLED:true}"
+      window: "${LOCAL_DEALS_SECKILL_RATE_WINDOW:1s}"
+      activity-limit: "${LOCAL_DEALS_SECKILL_ACTIVITY_LIMIT:300}"
+      user-limit: "${LOCAL_DEALS_SECKILL_USER_LIMIT:2}"
+      ip-limit: "${LOCAL_DEALS_SECKILL_IP_LIMIT:100}"
+    read:
+      db-max-concurrent: "${LOCAL_DEALS_DB_READ_MAX_CONCURRENT:4}"
+      db-max-wait: "${LOCAL_DEALS_DB_READ_MAX_WAIT:20ms}"
+      shared-load-wait: "${LOCAL_DEALS_SHARED_LOAD_WAIT:750ms}"
+      search-max-concurrent: "${LOCAL_DEALS_SEARCH_MAX_CONCURRENT:4}"
+      search-max-wait: "${LOCAL_DEALS_SEARCH_MAX_WAIT:20ms}"
+    search:
+      connect-timeout: "${LOCAL_DEALS_ES_CONNECT_TIMEOUT:500ms}"
+      socket-timeout: "${LOCAL_DEALS_ES_SOCKET_TIMEOUT:1s}"
   upload:
     image-root: "${LOCAL_DEALS_IMAGE_UPLOAD_DIR:./frontend/user/imgs}"
     max-image-size: "${LOCAL_DEALS_MAX_IMAGE_SIZE:5MB}"

@@ -9,6 +9,8 @@ import com.localdeals.dto.LoginFormDTO;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.entity.User;
+import com.localdeals.exception.ApiErrorCodes;
+import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.UserMapper;
 import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.IUserService;
@@ -19,6 +21,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
@@ -98,12 +101,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         } catch (RuntimeException unavailable) {
             metrics.recordAuth(LocalDealsMetrics.AuthFlow.OTP_SEND,
                     LocalDealsMetrics.AuthResult.UNAVAILABLE);
-            throw unavailable;
+            throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    ApiErrorCodes.AUTH_STATE_UNAVAILABLE, "认证状态暂不可用，请稍后重试");
         }
         if (!Long.valueOf(1L).equals(issued)) {
             metrics.recordAuth(LocalDealsMetrics.AuthFlow.OTP_SEND,
                     LocalDealsMetrics.AuthResult.REJECTED);
-            return Result.fail("验证码发送过于频繁，请稍后再试");
+            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    ApiErrorCodes.OTP_RATE_LIMITED, "验证码发送过于频繁，请稍后再试");
         }
 
         // 仅供显式开启的本地开发环境使用，生产默认绝不记录验证码。
@@ -142,7 +147,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         } catch (RuntimeException unavailable) {
             metrics.recordAuth(LocalDealsMetrics.AuthFlow.USER_LOGIN,
                     LocalDealsMetrics.AuthResult.UNAVAILABLE);
-            throw unavailable;
+            throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    ApiErrorCodes.AUTH_STATE_UNAVAILABLE, "认证状态暂不可用，请稍后重试");
         }
         if (!Long.valueOf(1L).equals(consumed)) {
             metrics.recordAuth(LocalDealsMetrics.AuthFlow.USER_LOGIN,

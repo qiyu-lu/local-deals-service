@@ -6,8 +6,6 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Configuration for the independent merchant administration identity boundary.
@@ -24,8 +22,6 @@ public class AdminProperties {
     private int maxLoginFailures = 5;
 
     private int maxIpLoginAttempts = 30;
-
-    private List<String> trustedProxies = new ArrayList<>();
 
     @DurationUnit(ChronoUnit.MINUTES)
     private Duration loginLockDuration = Duration.ofMinutes(15);
@@ -56,14 +52,6 @@ public class AdminProperties {
 
     public void setMaxIpLoginAttempts(int maxIpLoginAttempts) {
         this.maxIpLoginAttempts = maxIpLoginAttempts;
-    }
-
-    public List<String> getTrustedProxies() {
-        return trustedProxies;
-    }
-
-    public void setTrustedProxies(List<String> trustedProxies) {
-        this.trustedProxies = trustedProxies == null ? new ArrayList<>() : trustedProxies;
     }
 
     public Duration getLoginLockDuration() {

@@ -8,7 +8,7 @@ import com.localdeals.dto.AdminLoginResponse;
 import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.entity.Shop;
 import com.localdeals.service.AdminAuthService;
-import com.localdeals.service.AdminClientIpResolver;
+import com.localdeals.service.TrustedClientIpResolver;
 import com.localdeals.service.AdminCatalogService;
 import com.localdeals.service.AdminManagementService;
 import com.localdeals.service.AdminSessionService;
@@ -65,7 +65,7 @@ class AdminMvcSecurityTest {
     @MockBean
     private AdminSessionService adminSessionService;
     @MockBean
-    private AdminClientIpResolver adminClientIpResolver;
+    private TrustedClientIpResolver clientIpResolver;
     @MockBean
     private AdminCatalogService adminCatalogService;
     @MockBean
@@ -80,7 +80,7 @@ class AdminMvcSecurityTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        when(adminClientIpResolver.resolve(any())).thenReturn("127.0.0.1");
+        when(clientIpResolver.resolve(any())).thenReturn("127.0.0.1");
         AdminPrincipal shopReader = principal(AdminPermissionCodes.SHOP_READ);
         AdminPrincipal noMerchantPermission = principal(AdminPermissionCodes.SHOP_READ);
         when(adminSessionService.extractBearerToken("Bearer " + ADMIN_TOKEN)).thenReturn(ADMIN_TOKEN);
