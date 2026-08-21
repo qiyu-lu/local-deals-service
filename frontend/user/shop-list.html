@@ -165,9 +165,11 @@
             current: this.params.current
           }
         }).then(({data}) => {
-          if (!data || !data.length) { this.loading = false; return; }
-          data.forEach(s => s.images = (s.images || '').split(',')[0]);
-          this.shops = this.shops.concat(data);
+          const results = data || [];
+          results.forEach(s => s.images = (s.images || '').split(',')[0]);
+          this.shops = this.params.current === 1
+            ? results
+            : this.shops.concat(results);
         }).catch(err => this.$message.error(err))
           .finally(() => { this.loading = false; });
       },
@@ -182,7 +184,6 @@
       doSearch() {
         if (!this.keyword.trim()) { this.clearSearch(); return; }
         this.isEsSearch = true;
-        this.shops = [];
         this.params.current = 1;
         this.queryShopsByKeyword();
       },

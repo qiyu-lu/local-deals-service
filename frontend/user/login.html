@@ -98,22 +98,22 @@
         }
         // 发送验证码
         axios.post("/user/code?phone="+this.form.phone)
-          .then(() => {})
+          .then(() => {
+            // 只有后端确认发送成功才启动倒计时。
+            this.disabled = true;
+            let i = 60;
+            this.codeBtnMsg = (i--) + '秒后可重发'
+            let taskId = setInterval(() => this.codeBtnMsg = (i--) + '秒后可重发', 1000);
+            setTimeout(() => {
+              this.disabled = false;
+              clearInterval(taskId);
+              this.codeBtnMsg = "发送验证码";
+            }, 59000)
+          })
           .catch(err => {
             console.log(err);
             this.$message.error(err)
           });
-        // 禁用按钮
-        this.disabled = true;
-        // 按钮倒计时
-        let i = 60;
-        this.codeBtnMsg = (i--) + '秒后可重发'
-        let taskId = setInterval(() => this.codeBtnMsg = (i--) + '秒后可重发', 1000);
-        setTimeout(() => {
-          this.disabled = false;
-          clearInterval(taskId);
-          this.codeBtnMsg = "发送验证码";
-        }, 59000)
       }
     }
   })
