@@ -236,6 +236,62 @@ class SingleFlightLoaderTest {
         assertThat(loader.inFlightCount()).isZero();
     }
 
+    @Test
+    void twentyFollowersHonorConfigured750MillisWithoutStartingAnotherLeader() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        SingleFlightLoader loader = new SingleFlightLoader(new LocalDealsMetrics(registry),
+                properties(Duration.ofMillis(750)));
+        CountDownLatch leaderEntered = new CountDownLatch(1);
+        CountDownLatch releaseLeader = new CountDownLatch(1);
+        CountDownLatch followersReady = new CountDownLatch(20);
+        CountDownLatch startFollowers = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        Thread leader = new Thread(() -> loader.load(
+                LocalDealsMetrics.CacheResource.SHOP_DETAIL, "cache:shop:twenty", () -> {
+                    calls.incrementAndGet();
+                    leaderEntered.countDown();
+                    releaseLeader.await();
+                    return "leader-value";
+                }));
+        ExecutorService followers = Executors.newFixedThreadPool(20);
+        List<Future<Long>> outcomes = new ArrayList<>();
+        leader.start();
+        assertThat(leaderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        try {
+            for (int index = 0; index < 20; index++) {
+                outcomes.add(followers.submit(() -> {
+                    followersReady.countDown();
+                    startFollowers.await();
+                    long started = System.nanoTime();
+                    assertThatThrownBy(() -> loader.load(
+                            LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                            "cache:shop:twenty", () -> {
+                                calls.incrementAndGet();
+                                return "unexpected";
+                            })).isInstanceOfSatisfying(ApiStatusException.class,
+                            error -> assertThat(error.getCode())
+                                    .isEqualTo(ApiErrorCodes.DATABASE_UNAVAILABLE));
+                    return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                }));
+            }
+            assertThat(followersReady.await(5, TimeUnit.SECONDS)).isTrue();
+            startFollowers.countDown();
+            for (Future<Long> outcome : outcomes) {
+                assertThat(outcome.get(3, TimeUnit.SECONDS)).isBetween(650L, 1_500L);
+            }
+            assertThat(calls).hasValue(1);
+            assertThat(loader.inFlightCount()).isEqualTo(1);
+            assertThat(registry.get("local_deals.cache.singleflight")
+                    .tags("resource", "shop_detail", "result", "shared_timeout")
+                    .counter().count()).isEqualTo(20D);
+        } finally {
+            releaseLeader.countDown();
+            followers.shutdownNow();
+            leader.join(5_000L);
+        }
+        assertThat(loader.inFlightCount()).isZero();
+    }
+
     private static TrafficControlProperties properties(Duration sharedWait) {
         TrafficControlProperties properties = new TrafficControlProperties();
         properties.getRead().setSharedLoadWait(sharedWait);

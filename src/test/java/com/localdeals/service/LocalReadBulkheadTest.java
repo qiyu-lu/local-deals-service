@@ -73,18 +73,18 @@ class LocalReadBulkheadTest {
 
     private void assertConcurrencyCap(LocalReadBulkhead.Resource resource,
                                       String expectedCode) throws Exception {
-        TrafficControlProperties properties = properties(2, Duration.ZERO);
+        TrafficControlProperties properties = properties(4, Duration.ofMillis(20));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         LocalReadBulkhead bulkhead = new LocalReadBulkhead(
                 properties, new LocalDealsMetrics(registry));
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        CountDownLatch entered = new CountDownLatch(2);
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        CountDownLatch entered = new CountDownLatch(4);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger current = new AtomicInteger();
         AtomicInteger maximum = new AtomicInteger();
         List<Future<?>> holders = new ArrayList<>();
         try {
-            for (int index = 0; index < 2; index++) {
+            for (int index = 0; index < 4; index++) {
                 holders.add(executor.submit(() -> execute(bulkhead, resource, () -> {
                     int value = current.incrementAndGet();
                     maximum.accumulateAndGet(value, Math::max);
@@ -95,10 +95,15 @@ class LocalReadBulkheadTest {
                 })));
             }
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
-            assertThatThrownBy(() -> execute(bulkhead, resource, () -> "overflow"))
-                    .isInstanceOfSatisfying(ApiStatusException.class,
-                            error -> assertThat(error.getCode()).isEqualTo(expectedCode));
-            assertThat(maximum).hasValue(2);
+            for (int index = 0; index < 20; index++) {
+                long started = System.nanoTime();
+                assertThatThrownBy(() -> execute(bulkhead, resource, () -> "overflow"))
+                        .isInstanceOfSatisfying(ApiStatusException.class,
+                                error -> assertThat(error.getCode()).isEqualTo(expectedCode));
+                assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
+                        .isLessThan(250L);
+            }
+            assertThat(maximum).hasValue(4);
         } finally {
             release.countDown();
             for (Future<?> holder : holders) {
