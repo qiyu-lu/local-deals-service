@@ -4,6 +4,7 @@ import com.localdeals.dto.ShopDoc;
 import com.localdeals.entity.Shop;
 import com.localdeals.service.IShopService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
 import org.springframework.data.elasticsearch.core.IndexOperations;
@@ -19,6 +20,7 @@ import java.util.List;
 @Slf4j
 @Component
 @Profile("!test")
+@DependsOn("flywayInitializer")
 public class ShopIndexInitializer {
 
     @Resource
