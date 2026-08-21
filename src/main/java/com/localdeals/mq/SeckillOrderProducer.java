@@ -38,8 +38,6 @@ import static com.localdeals.utils.RedisConstants.SECKILL_STOCK_KEY;
 @RocketMQTransactionListener(rocketMQTemplateBeanName = "rocketMQTemplate")
 public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
 
-    private static final String TOPIC = "seckill-order-topic";
-
     public static final int ADMISSION_SYSTEM_ERROR = -1;
     public static final int ADMISSION_ACCEPTED = 0;
     public static final int ADMISSION_OUT_OF_STOCK = 1;
@@ -84,7 +82,7 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
 
             // sendMessageInTransaction blocks until executeLocalTransaction has completed.
             rocketMQTemplate.sendMessageInTransaction(
-                    TOPIC,
+                    seckillProperties.getTopic(),
                     message,
                     context
             );

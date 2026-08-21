@@ -1,6 +1,9 @@
 package com.localdeals.utils;
 
 import com.localdeals.observability.LocalDealsMetrics;
+import com.localdeals.config.TrafficControlProperties;
+import com.localdeals.exception.ApiErrorCodes;
+import com.localdeals.exception.ApiStatusException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -148,7 +152,7 @@ class SingleFlightLoaderTest {
             }
             return null;
         }).when(metrics).recordCacheSingleFlight(any(), any());
-        SingleFlightLoader loader = new SingleFlightLoader(metrics);
+        SingleFlightLoader loader = new SingleFlightLoader(metrics, properties(Duration.ofSeconds(2)));
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
         AtomicReference<Throwable> followerFailure = new AtomicReference<>();
@@ -190,7 +194,53 @@ class SingleFlightLoaderTest {
     }
 
     private static SingleFlightLoader loader(SimpleMeterRegistry registry) {
-        return new SingleFlightLoader(new LocalDealsMetrics(registry));
+        return new SingleFlightLoader(new LocalDealsMetrics(registry),
+                properties(Duration.ofSeconds(2)));
+    }
+
+    @Test
+    void followerTimeoutDoesNotCancelLeaderRemoveEntryOrStartSecondLoad() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        SingleFlightLoader loader = new SingleFlightLoader(new LocalDealsMetrics(registry),
+                properties(Duration.ofMillis(100)));
+        CountDownLatch leaderEntered = new CountDownLatch(1);
+        CountDownLatch releaseLeader = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> leaderResult = new AtomicReference<>();
+        Thread leader = new Thread(() -> leaderResult.set(loader.load(
+                LocalDealsMetrics.CacheResource.SHOP_DETAIL, "cache:shop:timeout", () -> {
+                    calls.incrementAndGet();
+                    leaderEntered.countDown();
+                    releaseLeader.await();
+                    return "leader-value";
+                })));
+        leader.start();
+        assertThat(leaderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        assertThatThrownBy(() -> loader.load(LocalDealsMetrics.CacheResource.SHOP_DETAIL,
+                "cache:shop:timeout", () -> {
+                    calls.incrementAndGet();
+                    return "unexpected";
+                })).isInstanceOfSatisfying(ApiStatusException.class,
+                error -> assertThat(error.getCode()).isEqualTo(ApiErrorCodes.DATABASE_UNAVAILABLE));
+
+        assertThat(calls).hasValue(1);
+        assertThat(loader.inFlightCount()).isEqualTo(1);
+        assertThat(registry.get("local_deals.cache.singleflight")
+                .tags("resource", "shop_detail", "result", "shared_timeout")
+                .counter().count()).isEqualTo(1D);
+        releaseLeader.countDown();
+        leader.join(5_000L);
+        assertThat(leader.isAlive()).isFalse();
+        assertThat(leaderResult).hasValue("leader-value");
+        assertThat(loader.inFlightCount()).isZero();
+    }
+
+    private static TrafficControlProperties properties(Duration sharedWait) {
+        TrafficControlProperties properties = new TrafficControlProperties();
+        properties.getRead().setSharedLoadWait(sharedWait);
+        properties.validate();
+        return properties;
     }
 
     private static void awaitCounter(SimpleMeterRegistry registry,

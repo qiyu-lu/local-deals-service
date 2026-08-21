@@ -1,8 +1,10 @@
 package com.localdeals.utils;
 
 import com.localdeals.config.BoundedCacheProperties;
+import com.localdeals.config.TrafficControlProperties;
 import com.localdeals.entity.Shop;
 import com.localdeals.observability.LocalDealsMetrics;
+import com.localdeals.service.LocalReadBulkhead;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +33,7 @@ class CacheClientTest {
     private ValueOperations<String, String> valueOperations;
     private SimpleMeterRegistry registry;
     private CacheClient cacheClient;
+    private BoundedCacheProperties cacheProperties;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -40,12 +43,13 @@ class CacheClientTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         registry = new SimpleMeterRegistry();
         LocalDealsMetrics metrics = new LocalDealsMetrics(registry);
-        BoundedCacheProperties properties = new BoundedCacheProperties();
-        properties.setShopDetailTtl(Duration.ofSeconds(45));
-        properties.setShopDetailEmptyTtl(Duration.ofSeconds(5));
-        properties.validate();
-        cacheClient = new CacheClient(redisTemplate, metrics, properties,
-                new SingleFlightLoader(metrics));
+        cacheProperties = new BoundedCacheProperties();
+        cacheProperties.setShopDetailTtl(Duration.ofSeconds(45));
+        cacheProperties.setShopDetailEmptyTtl(Duration.ofSeconds(5));
+        cacheProperties.validate();
+        cacheClient = new CacheClient(redisTemplate, metrics, cacheProperties,
+                new SingleFlightLoader(metrics, new TrafficControlProperties()),
+                new LocalReadBulkhead(new TrafficControlProperties(), metrics));
     }
 
     @Test
@@ -132,7 +136,11 @@ class CacheClientTest {
 
         assertThatThrownBy(() -> queryShop(8L, id -> {
             throw databaseFailure;
-        })).isSameAs(databaseFailure);
+        })).isInstanceOfSatisfying(com.localdeals.exception.ApiStatusException.class, error -> {
+            assertThat(error.getStatus().value()).isEqualTo(503);
+            assertThat(error.getCode()).isEqualTo(
+                    com.localdeals.exception.ApiErrorCodes.DATABASE_UNAVAILABLE);
+        });
 
         verify(valueOperations, never()).set(eq("cache:shop:8"), anyString(),
                 eq(45_000L), eq(TimeUnit.MILLISECONDS));
@@ -150,6 +158,56 @@ class CacheClientTest {
 
         assertCounter("local_deals.cache.access", "result", "redis_error", 0D);
         assertMaintenance("failure", 1D);
+    }
+
+    @Test
+    void timedOutFollowerDoesNotAcquireDbPermitOrStartASecondFallback() throws Exception {
+        TrafficControlProperties traffic = new TrafficControlProperties();
+        traffic.getRead().setSharedLoadWait(Duration.ofMillis(100));
+        traffic.getRead().setDbMaxConcurrent(1);
+        traffic.validate();
+        LocalDealsMetrics metrics = new LocalDealsMetrics(registry);
+        cacheClient = new CacheClient(redisTemplate, metrics, cacheProperties,
+                new SingleFlightLoader(metrics, traffic), new LocalReadBulkhead(traffic, metrics));
+        when(valueOperations.get("cache:shop:10")).thenReturn(null);
+        java.util.concurrent.CountDownLatch fallbackEntered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseFallback = new java.util.concurrent.CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<Shop> leader = executor.submit(() -> queryShop(10L, id -> {
+                calls.incrementAndGet();
+                fallbackEntered.countDown();
+                try {
+                    releaseFallback.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(interrupted);
+                }
+                return new Shop().setId(id).setName("database");
+            }));
+            assertThat(fallbackEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            assertThatThrownBy(() -> queryShop(10L, id -> {
+                calls.incrementAndGet();
+                return new Shop().setId(id).setName("unexpected");
+            })).isInstanceOfSatisfying(com.localdeals.exception.ApiStatusException.class,
+                    error -> assertThat(error.getCode()).isEqualTo(
+                            com.localdeals.exception.ApiErrorCodes.DATABASE_UNAVAILABLE));
+
+            assertThat(calls).hasValue(1);
+            assertThat(registry.get("local_deals.traffic.decision")
+                    .tags("resource", "db_read", "result", "allowed", "reason", "none")
+                    .counter().count()).isEqualTo(1D);
+            assertThat(registry.get("local_deals.traffic.decision")
+                    .tags("resource", "db_read", "result", "rejected", "reason", "concurrency")
+                    .counter().count()).isZero();
+            releaseFallback.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS).getName()).isEqualTo("database");
+        } finally {
+            releaseFallback.countDown();
+            executor.shutdownNow();
+        }
     }
 
     private Shop queryShop(Long id, java.util.function.Function<Long, Shop> fallback) {

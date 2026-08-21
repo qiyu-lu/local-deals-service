@@ -130,6 +130,8 @@ local-deals:
     legacy-scan-count: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_SCAN_COUNT:500}"
     legacy-batch-size: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BATCH_SIZE:500}"
   seckill:
+    topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
+    consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"
     reconciliation:
       # Three independent, fail-closed rollout gates. Keep all false until the
       # stop-write/backfill/observe procedure in docs/seckill-reconciliation.md is complete.
@@ -156,5 +158,6 @@ local-deals:
 rocketmq:
   name-server: localhost:9876
   producer:
-    group: local-deals-producer-group
-    send-message-timeout: 3000
+    group: "${LOCAL_DEALS_ROCKETMQ_PRODUCER_GROUP:local-deals-producer-group}"
+    send-message-timeout: 1000
+    retry-times-when-send-failed: 0

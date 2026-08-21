@@ -8,6 +8,7 @@ import com.localdeals.entity.VoucherOrder;
 import com.localdeals.mapper.VoucherOrderMapper;
 import com.localdeals.mq.SeckillOrderProducer;
 import com.localdeals.service.SeckillOrderStateService;
+import com.localdeals.service.SeckillTrafficGuard;
 import com.localdeals.utils.RedisIdWorker;
 import com.localdeals.utils.UserHolder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class VoucherOrderServiceImplTest {
@@ -32,6 +34,7 @@ class VoucherOrderServiceImplTest {
     private RedisIdWorker redisIdWorker;
     private SeckillOrderProducer producer;
     private SeckillOrderStateService stateService;
+    private SeckillTrafficGuard trafficGuard;
 
     @BeforeEach
     void setUp() {
@@ -39,12 +42,14 @@ class VoucherOrderServiceImplTest {
         redisIdWorker = mock(RedisIdWorker.class);
         producer = mock(SeckillOrderProducer.class);
         stateService = mock(SeckillOrderStateService.class);
+        trafficGuard = mock(SeckillTrafficGuard.class);
 
         voucherOrderMapper = mock(VoucherOrderMapper.class);
         ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
         ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
+        ReflectionTestUtils.setField(service, "seckillTrafficGuard", trafficGuard);
         ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
         ReflectionTestUtils.invokeMethod(service, "registerMetrics");
 
@@ -63,7 +68,7 @@ class VoucherOrderServiceImplTest {
         when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
         when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(0);
 
-        Result result = service.seckillVoucher(17L);
+        Result result = service.seckillVoucher(17L, "203.0.113.9");
 
         assertThat(result.getSuccess()).isTrue();
         assertThat(result.getData()).isEqualTo("90071992547409931");
@@ -76,10 +81,81 @@ class VoucherOrderServiceImplTest {
         when(stateService.find(LARGE_ORDER_ID)).thenReturn(new SeckillOrderStateService.Snapshot(
                 LARGE_ORDER_ID, 23L, 17L, SeckillOrderStateService.STATUS_PROCESSING, null));
 
-        Result result = service.seckillVoucher(17L);
+        Result result = service.seckillVoucher(17L, "203.0.113.9");
 
         assertThat(result.getSuccess()).isTrue();
         assertThat(result.getData()).isEqualTo(Long.toString(LARGE_ORDER_ID));
+    }
+
+    @Test
+    void businessRejectionsKeepHttp200BodyContractWithStableCodes() {
+        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        String[] expectedCodes = {
+                com.localdeals.exception.ApiErrorCodes.SECKILL_OUT_OF_STOCK,
+                com.localdeals.exception.ApiErrorCodes.SECKILL_DUPLICATE,
+                com.localdeals.exception.ApiErrorCodes.SECKILL_NOT_STARTED,
+                com.localdeals.exception.ApiErrorCodes.SECKILL_ENDED
+        };
+        for (int resultCode = 1; resultCode <= 4; resultCode++) {
+            when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID))
+                    .thenReturn(resultCode);
+
+            Result result = service.seckillVoucher(17L, "203.0.113.9");
+
+            assertThat(result.getSuccess()).isFalse();
+            assertThat(result.getCode()).isEqualTo(expectedCodes[resultCode - 1]);
+        }
+    }
+
+    @Test
+    void unavailableMetadataAndUnrecoveredProducerFailureReturn503Codes() {
+        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(5);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.seckillVoucher(17L, "203.0.113.9"))
+                .isInstanceOfSatisfying(com.localdeals.exception.ApiStatusException.class, error -> {
+                    assertThat(error.getStatus().value()).isEqualTo(503);
+                    assertThat(error.getCode()).isEqualTo(
+                            com.localdeals.exception.ApiErrorCodes.SECKILL_STATE_UNAVAILABLE);
+                });
+
+        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(-1);
+        when(stateService.find(LARGE_ORDER_ID)).thenReturn(null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.seckillVoucher(17L, "203.0.113.9"))
+                .isInstanceOfSatisfying(com.localdeals.exception.ApiStatusException.class, error -> {
+                    assertThat(error.getStatus().value()).isEqualTo(503);
+                    assertThat(error.getCode()).isEqualTo(
+                            com.localdeals.exception.ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE);
+                });
+    }
+
+    @Test
+    void idAllocationFailureDoesNotSendMq() {
+        when(redisIdWorker.nextId("order")).thenThrow(new RuntimeException("redis down"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.seckillVoucher(17L, "203.0.113.9"))
+                .isInstanceOfSatisfying(com.localdeals.exception.ApiStatusException.class, error ->
+                        assertThat(error.getCode()).isEqualTo(
+                                com.localdeals.exception.ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE));
+
+        verifyNoInteractions(producer, stateService);
+    }
+
+    @Test
+    void rateRejectionOccursBeforeIdAllocationAndMqSubmission() {
+        org.mockito.Mockito.doThrow(new com.localdeals.exception.ApiStatusException(
+                org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                com.localdeals.exception.ApiErrorCodes.SECKILL_RATE_LIMITED, "busy"))
+                .when(trafficGuard).check(17L, 23L, "203.0.113.9");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.seckillVoucher(17L, "203.0.113.9"))
+                .isInstanceOf(com.localdeals.exception.ApiStatusException.class);
+
+        verifyNoInteractions(redisIdWorker, producer, stateService);
     }
 
     @Test

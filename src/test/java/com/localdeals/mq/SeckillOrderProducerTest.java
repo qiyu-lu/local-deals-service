@@ -212,6 +212,18 @@ class SeckillOrderProducerTest {
                 .isEqualTo(ADMISSION_SYSTEM_ERROR);
     }
 
+    @Test
+    void sendSeckillTransaction_usesConfiguredIsolatedTopic() {
+        SeckillProperties properties = new SeckillProperties();
+        properties.setTopic("m5c-topic-run-1");
+        ReflectionTestUtils.setField(producer, "seckillProperties", properties);
+
+        producer.sendSeckillTransaction(VOUCHER_ID, USER_ID, ORDER_ID);
+
+        verify(rocketMQTemplate).sendMessageInTransaction(
+                eq("m5c-topic-run-1"), any(Message.class), any());
+    }
+
     private static SeckillOrderProducer.LocalTransactionContext context() {
         return new SeckillOrderProducer.LocalTransactionContext(VOUCHER_ID, USER_ID, ORDER_ID);
     }

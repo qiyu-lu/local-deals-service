@@ -1,6 +1,7 @@
 package com.localdeals.utils;
 
 import com.localdeals.config.BoundedCacheProperties;
+import com.localdeals.config.TrafficControlProperties;
 import com.localdeals.entity.Shop;
 import com.localdeals.entity.ShopType;
 import com.localdeals.observability.LocalDealsMetrics;
@@ -240,8 +241,8 @@ class BoundedCacheRedisIT {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(BoundedCacheProperties.class)
-    @Import({CacheClient.class, SingleFlightLoader.class})
+    @EnableConfigurationProperties({BoundedCacheProperties.class, TrafficControlProperties.class})
+    @Import({CacheClient.class, SingleFlightLoader.class, com.localdeals.service.LocalReadBulkhead.class})
     static class Config {
         @Bean
         MeterRegistry meterRegistry() {

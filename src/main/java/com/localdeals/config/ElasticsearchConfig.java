@@ -16,14 +16,23 @@ public class ElasticsearchConfig extends AbstractElasticsearchConfiguration {
     @Value("${spring.elasticsearch.rest.uris:http://localhost:9200}")
     private String esUri;
 
+    private final TrafficControlProperties trafficControlProperties;
+
+    public ElasticsearchConfig(TrafficControlProperties trafficControlProperties) {
+        this.trafficControlProperties = trafficControlProperties;
+    }
+
     @Override
     public RestHighLevelClient elasticsearchClient() {
-        ClientConfiguration config = ClientConfiguration.builder()
+        return RestClients.create(clientConfiguration()).rest();
+    }
+
+    ClientConfiguration clientConfiguration() {
+        return ClientConfiguration.builder()
                 .connectedTo(esUri.replace("http://", "").replace("https://", ""))
-                .withConnectTimeout(5000)
-                .withSocketTimeout(10000)
+                .withConnectTimeout(trafficControlProperties.getSearch().getConnectTimeout())
+                .withSocketTimeout(trafficControlProperties.getSearch().getSocketTimeout())
                 .build();
-        return RestClients.create(config).rest();
     }
 
     /**

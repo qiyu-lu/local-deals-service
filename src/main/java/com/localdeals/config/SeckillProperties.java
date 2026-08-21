@@ -13,11 +13,17 @@ import java.util.Locale;
 @ConfigurationProperties(prefix = "local-deals.seckill")
 public class SeckillProperties {
 
+    private String topic = "seckill-order-topic";
+    private String consumerGroup = "seckill-consumer-group";
     private Stream stream = new Stream();
     private Reconciliation reconciliation = new Reconciliation();
 
     @PostConstruct
     public void validate() {
+        if (topic == null || topic.trim().isEmpty() ||
+                consumerGroup == null || consumerGroup.trim().isEmpty()) {
+            throw new IllegalStateException("local-deals.seckill topic and consumer-group must not be blank");
+        }
         if (reconciliation == null) {
             throw new IllegalStateException("local-deals.seckill.reconciliation must not be null");
         }

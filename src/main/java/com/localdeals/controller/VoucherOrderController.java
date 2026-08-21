@@ -3,6 +3,7 @@ package com.localdeals.controller;
 
 import com.localdeals.dto.Result;
 import com.localdeals.service.IVoucherOrderService;
+import com.localdeals.service.TrustedClientIpResolver;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 
 /**
  * <p>
@@ -24,10 +26,13 @@ import javax.annotation.Resource;
 public class VoucherOrderController {
     @Resource
     private IVoucherOrderService voucherOrderService;
+    @Resource
+    private TrustedClientIpResolver clientIpResolver;
 
     @PostMapping("/seckill/{id}")
-    public Result seckillVoucher(@PathVariable("id") Long voucherId) {
-        return voucherOrderService.seckillVoucher(voucherId);
+    public Result seckillVoucher(@PathVariable("id") Long voucherId,
+                                 HttpServletRequest request) {
+        return voucherOrderService.seckillVoucher(voucherId, clientIpResolver.resolve(request));
         //return Result.fail("功能未完成");
     }
 

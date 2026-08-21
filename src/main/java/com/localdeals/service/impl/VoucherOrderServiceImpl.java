@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.SeckillOrderPersistenceResult;
 import com.localdeals.dto.SeckillOrderStatusDTO;
+import com.localdeals.exception.ApiErrorCodes;
+import com.localdeals.exception.ApiStatusException;
 import com.localdeals.exception.OrderReservationConflictException;
 import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
@@ -14,12 +16,14 @@ import com.localdeals.mq.SeckillOrderProducer;
 import com.localdeals.service.ISeckillVoucherService;
 import com.localdeals.service.IVoucherOrderService;
 import com.localdeals.service.SeckillOrderStateService;
+import com.localdeals.service.SeckillTrafficGuard;
 import com.localdeals.utils.RedisIdWorker;
 import com.localdeals.utils.UserHolder;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,9 +55,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private SeckillOrderStateService seckillOrderStateService;
 
     @Resource
+    private SeckillTrafficGuard seckillTrafficGuard;
+
+    @Resource
     private MeterRegistry meterRegistry;
 
     private Counter requestAcceptedCounter;
+    private Counter requestRateRejectedCounter;
     private Counter requestStockRejectedCounter;
     private Counter requestDuplicateRejectedCounter;
     private Counter requestActivityRejectedCounter;
@@ -65,6 +73,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private void registerMetrics() {
         requestAcceptedCounter = Counter.builder("local_deals.seckill.requests")
                 .tag("result", "accepted").register(meterRegistry);
+        requestRateRejectedCounter = Counter.builder("local_deals.seckill.requests")
+                .tag("result", "rejected_rate").register(meterRegistry);
         requestStockRejectedCounter = Counter.builder("local_deals.seckill.requests")
                 .tag("result", "rejected_stock").register(meterRegistry);
         requestDuplicateRejectedCounter = Counter.builder("local_deals.seckill.requests")
@@ -80,9 +90,28 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     @Override
-    public Result seckillVoucher(Long voucherId) {
-        long orderId = redisIdWorker.nextId("order");
+    public Result seckillVoucher(Long voucherId, String clientIp) {
         Long userId = UserHolder.getUser().getId();
+        try {
+            seckillTrafficGuard.check(voucherId, userId, clientIp);
+        } catch (ApiStatusException e) {
+            if (HttpStatus.TOO_MANY_REQUESTS.equals(e.getStatus())) {
+                requestRateRejectedCounter.increment();
+            } else {
+                requestUnavailableCounter.increment();
+            }
+            throw e;
+        }
+
+        final long orderId;
+        try {
+            orderId = redisIdWorker.nextId("order");
+        } catch (RuntimeException e) {
+            requestUnavailableCounter.increment();
+            log.warn("Unable to allocate seckill order id. voucherId={}, userId={}",
+                    voucherId, userId, e);
+            throw submitUnavailable();
+        }
 
         int luaResult = seckillOrderProducer.sendSeckillTransaction(voucherId, userId, orderId);
 
@@ -92,19 +121,21 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 return Result.ok(Long.toString(orderId));
             case 1:
                 requestStockRejectedCounter.increment();
-                return Result.fail("库存不足");
+                return Result.fail(ApiErrorCodes.SECKILL_OUT_OF_STOCK, "库存不足");
             case 2:
                 requestDuplicateRejectedCounter.increment();
-                return Result.fail("您已抢过该优惠券");
+                return Result.fail(ApiErrorCodes.SECKILL_DUPLICATE, "您已抢过该优惠券");
             case 3:
                 requestActivityRejectedCounter.increment();
-                return Result.fail("秒杀活动尚未开始");
+                return Result.fail(ApiErrorCodes.SECKILL_NOT_STARTED, "秒杀活动尚未开始");
             case 4:
                 requestActivityRejectedCounter.increment();
-                return Result.fail("秒杀活动已结束或暂停");
+                return Result.fail(ApiErrorCodes.SECKILL_ENDED, "秒杀活动已结束或暂停");
             case 5:
                 requestUnavailableCounter.increment();
-                return Result.fail("活动正在初始化，请稍后重试");
+                throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        ApiErrorCodes.SECKILL_STATE_UNAVAILABLE,
+                        "活动正在初始化，请稍后重试");
             default:
                 // The client call can fail after Redis admission. If the exact reservation
                 // exists, expose its id so the caller can recover through the status API.
@@ -113,8 +144,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     return Result.ok(Long.toString(orderId));
                 }
                 requestUnavailableCounter.increment();
-                return Result.fail("系统繁忙，请稍后重试");
+                throw submitUnavailable();
         }
+    }
+
+    private static ApiStatusException submitUnavailable() {
+        return new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE, "系统繁忙，请稍后重试");
     }
 
     private boolean isAcceptedDespiteProducerError(Long voucherId, Long userId, Long orderId) {

@@ -30,7 +30,9 @@ import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_LOCK_KEY;
  */
 @Slf4j
 @Service
-@RocketMQMessageListener(topic = "seckill-order-topic", consumerGroup = "seckill-consumer-group")
+@RocketMQMessageListener(
+        topic = "${local-deals.seckill.topic:seckill-order-topic}",
+        consumerGroup = "${local-deals.seckill.consumer-group:seckill-consumer-group}")
 public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessage>,
         RocketMQPushConsumerLifecycleListener {
 

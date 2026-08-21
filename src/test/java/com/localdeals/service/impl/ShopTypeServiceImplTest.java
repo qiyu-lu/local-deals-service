@@ -1,8 +1,10 @@
 package com.localdeals.service.impl;
 
 import com.localdeals.config.BoundedCacheProperties;
+import com.localdeals.config.TrafficControlProperties;
 import com.localdeals.entity.ShopType;
 import com.localdeals.observability.LocalDealsMetrics;
+import com.localdeals.service.LocalReadBulkhead;
 import com.localdeals.utils.CacheClient;
 import com.localdeals.utils.SingleFlightLoader;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -44,7 +46,8 @@ class ShopTypeServiceImplTest {
         properties.setShopTypeEmptyTtl(Duration.ofSeconds(15));
         properties.validate();
         cacheClient = new CacheClient(redisTemplate, metrics, properties,
-                new SingleFlightLoader(metrics));
+                new SingleFlightLoader(metrics, new TrafficControlProperties()),
+                new LocalReadBulkhead(new TrafficControlProperties(), metrics));
     }
 
     @Test

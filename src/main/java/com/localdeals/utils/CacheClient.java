@@ -5,6 +5,7 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.localdeals.config.BoundedCacheProperties;
 import com.localdeals.observability.LocalDealsMetrics;
+import com.localdeals.service.LocalReadBulkhead;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -35,6 +36,7 @@ public class CacheClient {
     private final LocalDealsMetrics metrics;
     private final BoundedCacheProperties properties;
     private final SingleFlightLoader singleFlightLoader;
+    private final LocalReadBulkhead localReadBulkhead;
     private final AtomicLong lastWriteWarningAt = new AtomicLong();
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR =
@@ -43,11 +45,13 @@ public class CacheClient {
     public CacheClient(StringRedisTemplate stringRedisTemplate,
                        LocalDealsMetrics metrics,
                        BoundedCacheProperties properties,
-                       SingleFlightLoader singleFlightLoader) {
+                       SingleFlightLoader singleFlightLoader,
+                       LocalReadBulkhead localReadBulkhead) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.metrics = metrics;
         this.properties = properties;
         this.singleFlightLoader = singleFlightLoader;
+        this.localReadBulkhead = localReadBulkhead;
     }
 
     //方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
@@ -145,7 +149,8 @@ public class CacheClient {
                                  Function<ID, T> dbFallback,
                                  boolean skipCacheWrite) {
         return singleFlightLoader.load(resource, cacheKey, () -> {
-            T result = timedDatabaseLoad(resource, () -> dbFallback.apply(id));
+            T result = localReadBulkhead.executeDbRead(
+                    () -> timedDatabaseLoad(resource, () -> dbFallback.apply(id)));
             if (result == null) {
                 bestEffortWrite(resource, cacheKey, EMPTY_PLACEHOLDER,
                         emptyTtl(resource), skipCacheWrite);
@@ -162,7 +167,8 @@ public class CacheClient {
                                  Supplier<List<T>> dbFallback,
                                  boolean skipCacheWrite) {
         return singleFlightLoader.load(resource, cacheKey, () -> {
-            List<T> loaded = timedDatabaseLoad(resource, dbFallback);
+            List<T> loaded = localReadBulkhead.executeDbRead(
+                    () -> timedDatabaseLoad(resource, dbFallback));
             List<T> result = loaded == null ? Collections.emptyList() : loaded;
             boolean empty = result.isEmpty();
             bestEffortWrite(resource, cacheKey, empty ? "[]" : JSONUtil.toJsonStr(result),

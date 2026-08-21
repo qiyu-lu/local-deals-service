@@ -1,6 +1,10 @@
 package com.localdeals.utils;
 
+import com.localdeals.config.TrafficControlProperties;
+import com.localdeals.exception.ApiErrorCodes;
+import com.localdeals.exception.ApiStatusException;
 import com.localdeals.observability.LocalDealsMetrics;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
@@ -9,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Coalesces overlapping loads for the same cache resource and key inside one JVM.
@@ -19,9 +25,11 @@ public class SingleFlightLoader {
 
     private final ConcurrentMap<FlightKey, FutureTask<Object>> inFlight = new ConcurrentHashMap<>();
     private final LocalDealsMetrics metrics;
+    private final TrafficControlProperties properties;
 
-    public SingleFlightLoader(LocalDealsMetrics metrics) {
+    public SingleFlightLoader(LocalDealsMetrics metrics, TrafficControlProperties properties) {
         this.metrics = metrics;
+        this.properties = properties;
     }
 
     @SuppressWarnings("unchecked")
@@ -43,7 +51,16 @@ public class SingleFlightLoader {
             task.run();
         }
         try {
-            return (T) task.get();
+            if (leader) {
+                return (T) task.get();
+            }
+            return (T) task.get(properties.getRead().getSharedLoadWait().toNanos(),
+                    TimeUnit.NANOSECONDS);
+        } catch (TimeoutException timeout) {
+            metrics.recordCacheSingleFlight(resource,
+                    LocalDealsMetrics.CacheSingleFlightResult.SHARED_TIMEOUT);
+            throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    ApiErrorCodes.DATABASE_UNAVAILABLE, "数据暂不可用，请稍后重试");
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new SingleFlightInterruptedException(interrupted);

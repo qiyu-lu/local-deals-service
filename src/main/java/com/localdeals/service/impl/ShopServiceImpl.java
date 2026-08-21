@@ -9,6 +9,7 @@ import com.localdeals.entity.Shop;
 import com.localdeals.mapper.ShopMapper;
 import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.service.IShopService;
+import com.localdeals.service.LocalReadBulkhead;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.utils.CacheClient;
 import com.localdeals.utils.RedisData;
@@ -51,13 +52,16 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private final StringRedisTemplate stringRedisTemplate;
     private final CacheClient cacheClient;
     private final ElasticsearchRestTemplate esRestTemplate;
+    private final LocalReadBulkhead localReadBulkhead;
 
     public ShopServiceImpl(StringRedisTemplate stringRedisTemplate,
                            CacheClient cacheClient,
-                           ElasticsearchRestTemplate esRestTemplate) {
+                           ElasticsearchRestTemplate esRestTemplate,
+                           LocalReadBulkhead localReadBulkhead) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.cacheClient = cacheClient;
         this.esRestTemplate = esRestTemplate;
+        this.localReadBulkhead = localReadBulkhead;
     }
 
     @Override
@@ -216,7 +220,25 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
+    public Result queryShopByName(String name, Integer current) {
+        requirePositivePage(current);
+        return localReadBulkhead.executeSearch(() -> {
+            Page<Shop> page = query()
+                    .like(StrUtil.isNotBlank(name), "name", name)
+                    .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+            return Result.ok(page.getRecords());
+        });
+    }
+
+    @Override
     public Result searchShops(String keyword, Double x, Double y, Integer radius, Long typeId, Integer current) {
+        requirePositivePage(current);
+        return localReadBulkhead.executeSearch(
+                () -> searchShopsAdmitted(keyword, x, y, radius, typeId, current));
+    }
+
+    private Result searchShopsAdmitted(String keyword, Double x, Double y,
+                                       Integer radius, Long typeId, Integer current) {
         NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
 
         // 关键词全文检索（name 或 address 包含关键词）
@@ -267,5 +289,11 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 .last("ORDER BY FIELD(id, " + idStr + ")").list();
 
         return Result.ok(shops);
+    }
+
+    private static void requirePositivePage(Integer current) {
+        if (current == null || current <= 0) {
+            throw new IllegalArgumentException("current must be positive");
+        }
     }
 }

@@ -23,6 +23,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.service.IFollowService;
 import com.localdeals.service.IUserService;
 import com.localdeals.service.UploadFileService;
+import com.localdeals.service.LocalReadBulkhead;
 import com.localdeals.config.BlogHotRankProperties;
 import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.utils.SystemConstants;
@@ -98,6 +99,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private LocalDealsMetrics metrics;
 
+    @Resource
+    private LocalReadBulkhead localReadBulkhead;
+
     @Autowired
     private ElasticsearchRestTemplate esRestTemplate;
 
@@ -107,6 +111,13 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return Result.fail("页码必须为正数");
         }
         BlogHotRankReadResult rankResult = blogHotRankService.readPage(current);
+        if (rankResult.isHit() && rankResult.getBlogIds().isEmpty()) {
+            return Result.ok(Collections.emptyList());
+        }
+        return localReadBulkhead.executeDbRead(() -> queryHotBlogAdmitted(current, rankResult));
+    }
+
+    private Result queryHotBlogAdmitted(Integer current, BlogHotRankReadResult rankResult) {
         List<Blog> records = rankResult.isHit()
                 ? loadRankedBlogs(rankResult.getBlogIds())
                 : null;
@@ -385,6 +396,13 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result searchBlogs(String keyword, Integer current) {
+        if (current == null || current <= 0) {
+            throw new IllegalArgumentException("current must be positive");
+        }
+        return localReadBulkhead.executeSearch(() -> searchBlogsAdmitted(keyword, current));
+    }
+
+    private Result searchBlogsAdmitted(String keyword, Integer current) {
         NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
         if (StrUtil.isNotBlank(keyword)) {
             queryBuilder.withQuery(QueryBuilders.multiMatchQuery(keyword, "title", "content"));
