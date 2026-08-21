@@ -153,8 +153,8 @@ verify_rocketmq_scope() {
   local namesrv broker consumer_config
   namesrv="$(container_name namesrv):9876"
   broker="$(container_name broker)"
-  docker exec "$broker" sh mqadmin topicList -n "$namesrv" | grep -Fxq "$M5C_RMQ_TOPIC" ||
-    fail "dedicated RocketMQ topic missing"
+  wait_until "dedicated RocketMQ topic route" docker exec "$broker" sh mqadmin topicStatus \
+    -n "$namesrv" -t "$M5C_RMQ_TOPIC"
   consumer_config="$(docker exec "$broker" sh mqadmin getConsumerConfig -n "$namesrv" \
     -g "$M5C_RMQ_CONSUMER_GROUP" 2>&1)"
   [[ "$consumer_config" == *"groupName"*"$M5C_RMQ_CONSUMER_GROUP"* ]] ||
@@ -296,6 +296,15 @@ consumer_action() {
   echo "Consumer group ${M5C_RMQ_CONSUMER_GROUP} consumeEnable=${enabled}."
 }
 
+consumer_progress() {
+  local broker namesrv
+  broker="$(container_name broker)"
+  namesrv="$(container_name namesrv):9876"
+  assert_owned_container "$broker"
+  docker exec "$broker" sh mqadmin consumerProgress -n "$namesrv" \
+    -g "$M5C_RMQ_CONSUMER_GROUP"
+}
+
 down() {
   local name resolved network residual=0
   for name in mysql redis es namesrv broker; do
@@ -347,9 +356,10 @@ case "$ACTION" in
   broker-start) dependency_action broker start ;;
   consumer-pause) consumer_action false ;;
   consumer-resume) consumer_action true ;;
+  consumer-progress) consumer_progress ;;
   down) down ;;
   *)
-    echo "Usage: M5C_ISOLATED=true M5C_RUN_ID=... M5C_*_PORT=... $0 up|status|redis-pause|redis-unpause|redis-stop|redis-start|mysql-stop|mysql-start|es-pause|es-unpause|es-stop|es-start|broker-stop|broker-start|consumer-pause|consumer-resume|down" >&2
+    echo "Usage: M5C_ISOLATED=true M5C_RUN_ID=... M5C_*_PORT=... $0 up|status|redis-pause|redis-unpause|redis-stop|redis-start|mysql-stop|mysql-start|es-pause|es-unpause|es-stop|es-start|broker-stop|broker-start|consumer-pause|consumer-resume|consumer-progress|down" >&2
     exit 2
     ;;
 esac

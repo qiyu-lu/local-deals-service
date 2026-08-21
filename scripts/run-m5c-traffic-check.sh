@@ -13,6 +13,8 @@ MYSQL_STOPPED=false
 ES_RECOVERY="none"
 CONSUMER_PAUSED=false
 BROKER_STOPPED=false
+F4_LOCK_PID=""
+F4_LOCK_CONNECTION=""
 
 fail() {
   echo "M5C traffic check failed: $*" >&2
@@ -66,6 +68,8 @@ mysql_exec() {
 
 cleanup() {
   set +e
+  if [[ -n "$F4_LOCK_CONNECTION" ]]; then mysql_exec "KILL ${F4_LOCK_CONNECTION};" >/dev/null 2>&1; fi
+  if [[ -n "$F4_LOCK_PID" ]]; then kill "$F4_LOCK_PID" >/dev/null 2>&1; wait "$F4_LOCK_PID" 2>/dev/null; fi
   if [[ "$BROKER_STOPPED" == true ]]; then stack broker-start; fi
   if [[ "$CONSUMER_PAUSED" == true ]]; then stack consumer-resume; fi
   if [[ "$ES_RECOVERY" == unpause ]]; then stack es-unpause; fi
@@ -211,15 +215,79 @@ record() {
   printf '%s,%s,%s,"%s"\n' "$scenario" "$source" "$status" "${detail//\"/\"\"}" >>"$SUMMARY_CSV"
 }
 
-wait_for_success_order() {
-  local voucher="$1" attempt
+consumer_lags() {
+  local progress lags
+  progress="$(stack consumer-progress)"
+  lags="$(printf '%s\n' "$progress" | awk \
+    -v topic="$M5C_RMQ_TOPIC" -v retry="%RETRY%${M5C_RMQ_CONSUMER_GROUP}" '
+      $1 == topic { main += $6 }
+      $1 == retry { retried += $6 }
+      $1 == "Diff" && $2 == "Total:" { total = $3; found = 1 }
+      END { if (found) printf "%d %d %d", main + 0, retried + 0, total + 0 }
+    ')"
+  [[ "$lags" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]] ||
+    fail "unable to parse RocketMQ main/retry/total lag"
+  printf '%s\n' "$lags"
+}
+
+wait_for_main_consumer_lag() {
+  local expected="$1" attempt lags main_lag
   for attempt in $(seq 1 60); do
-    if [[ "$(mysql_exec "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id=${voucher};")" -ge 1 ]]; then
+    lags="$(consumer_lags)"
+    read -r main_lag _ <<<"$lags"
+    if [[ "$main_lag" -eq "$expected" ]]; then
+      printf '%s\n' "$lags"
       return 0
     fi
     sleep 1
   done
   return 1
+}
+
+assert_seckill_converged() {
+  local voucher="$1" expected_orders="$2" expected_stock="$3" attempt
+  local db_orders db_stock redis_stock duplicates
+  local reservation_state
+  for attempt in $(seq 1 60); do
+    db_orders="$(mysql_exec "SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id=${voucher};")"
+    if [[ "$db_orders" -eq "$expected_orders" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  [[ "$db_orders" -eq "$expected_orders" ]] ||
+    fail "voucher ${voucher} DB orders did not converge to ${expected_orders}"
+  db_stock="$(mysql_exec "SELECT stock FROM tb_seckill_voucher WHERE voucher_id=${voucher};")"
+  redis_stock="$(redis_cli --raw GET "seckill:stock:${voucher}")"
+  reservation_state="$(redis_cli --raw EVAL "local ids=redis.call('HVALS','seckill:reservation:${voucher}'); local success=0; local processing=0; for _,id in ipairs(ids) do if redis.call('HGET','seckill:order:status:'..id,'status') == 'SUCCESS' then success=success+1 end; if redis.call('ZSCORE','seckill:order:processing',id) then processing=processing+1 end end; return {#ids,success,processing}" 0 | paste -sd ' ' -)"
+  duplicates="$(mysql_exec "SELECT COUNT(*) FROM (SELECT user_id,COUNT(*) c FROM tb_voucher_order WHERE voucher_id=${voucher} GROUP BY user_id HAVING c>1) d;")"
+  [[ "$db_stock" -eq "$expected_stock" && "$redis_stock" -eq "$expected_stock" &&
+      "$reservation_state" == "${expected_orders} ${expected_orders} 0" && "$duplicates" -eq 0 ]] ||
+    fail "voucher ${voucher} stock/reservation/SUCCESS/processing invariant failed"
+}
+
+start_f4_row_lock() {
+  local lock_log="${ARTIFACT_DIR}/f4-row-lock.log" attempt
+  docker exec "m5c-${M5C_RUN_ID}-mysql" mysql \
+    -uroot "-p${M5C_MYSQL_PASSWORD}" "$SCHEMA" -N -s \
+    -e "START TRANSACTION; SELECT voucher_id FROM tb_seckill_voucher WHERE voucher_id=9017 FOR UPDATE; SELECT SLEEP(120); COMMIT;" \
+    >"$lock_log" 2>&1 &
+  F4_LOCK_PID=$!
+  for attempt in $(seq 1 30); do
+    F4_LOCK_CONNECTION="$(mysql_exec "SELECT ID FROM information_schema.PROCESSLIST WHERE DB='${SCHEMA}' AND INFO='SELECT SLEEP(120)' ORDER BY ID DESC LIMIT 1;")"
+    if [[ "$F4_LOCK_CONNECTION" =~ ^[0-9]+$ ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "F4 deterministic row-lock fixture did not become ready"
+}
+
+release_f4_row_lock() {
+  mysql_exec "KILL ${F4_LOCK_CONNECTION};" >/dev/null
+  wait "$F4_LOCK_PID" 2>/dev/null || true
+  F4_LOCK_CONNECTION=""
+  F4_LOCK_PID=""
 }
 
 broker_preflight() {
@@ -256,7 +324,8 @@ c0_admin="$(probe c0-admin --url "${APP1_URL}/admin/auth/login" --method POST --
 assert_summary "$c0_admin" 's["transport_errors"] == 0 and not s["status_counts"].get("429") and not s["status_counts"].get("503")'
 c0_seckill="$(probe c0-seckill --url "${APP1_URL}/voucher-order/seckill/9011" --method POST --count 20 --parallel 8 --token-base 1 --ip-mode unique)"
 assert_summary "$c0_seckill" 's["transport_errors"] == 0 and not s["status_counts"].get("429") and not s["status_counts"].get("503")'
-record C0 real-http PASS "search=${c0_search};hot=${c0_hot};otp=${c0_otp};admin=${c0_admin};seckill=${c0_seckill}"
+assert_seckill_converged 9011 20 980
+record C0 real-http PASS "search=${c0_search};hot=${c0_hot};otp=${c0_otp};admin=${c0_admin};seckill=${c0_seckill};orders=reservation=SUCCESS=20;db_stock=redis_stock=980;processing=duplicates=0;throughput=NA_incomparable_probe"
 
 # C1-C3 exact target dimensions. Redis TIME alignment prevents boundary ambiguity.
 align_redis_window
@@ -267,7 +336,8 @@ after_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill"
 after_rejected="$(prom_sum local_deals_traffic_decision_total 'reason="activity",resource="seckill",result="rejected"')"
 [[ $((after_allowed - before_allowed)) -eq 300 && $((after_rejected - before_rejected)) -eq 20 ]] || fail "C1 exact activity limit failed"
 assert_summary "$c1" 's["transport_errors"] == 0 and s["status_counts"].get("429") == 20 and s["code_counts"].get("SECKILL_RATE_LIMITED") == 20'
-record C1 real-http PASS "$c1"
+assert_seckill_converged 9012 300 700
+record C1 real-http PASS "$c1; orders=reservation=SUCCESS=300;db_stock=redis_stock=700;processing=duplicates=0"
 
 align_redis_window
 before_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill",result="allowed"')"
@@ -276,7 +346,8 @@ c2="$(probe c2-user --url "${APP1_URL}/voucher-order/seckill/9013" --method POST
 after_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill",result="allowed"')"
 after_rejected="$(prom_sum local_deals_traffic_decision_total 'reason="user",resource="seckill",result="rejected"')"
 [[ $((after_allowed - before_allowed)) -eq 2 && $((after_rejected - before_rejected)) -eq 20 ]] || fail "C2 exact user limit failed"
-record C2 real-http PASS "$c2"
+assert_seckill_converged 9013 1 999
+record C2 real-http PASS "$c2; orders=reservation=SUCCESS=1;db_stock=redis_stock=999;processing=duplicates=0"
 
 align_redis_window
 before_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill",result="allowed"')"
@@ -285,7 +356,8 @@ c3="$(probe c3-ip --url "${APP1_URL}/voucher-order/seckill/9014" --method POST -
 after_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill",result="allowed"')"
 after_rejected="$(prom_sum local_deals_traffic_decision_total 'reason="ip",resource="seckill",result="rejected"')"
 [[ $((after_allowed - before_allowed)) -eq 100 && $((after_rejected - before_rejected)) -eq 20 ]] || fail "C3 exact IP limit failed"
-record C3 real-http PASS "$c3"
+assert_seckill_converged 9014 100 900
+record C3 real-http PASS "$c3; orders=reservation=SUCCESS=100;db_stock=redis_stock=900;processing=duplicates=0"
 
 # C4-C6 are deterministic latch/exception contracts; dependency behavior is fault-tested below.
 "$MAVEN_BIN" -Dtest=LocalReadBulkheadTest,SingleFlightLoaderTest,SearchTrafficContractTest test \
@@ -300,7 +372,8 @@ before_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill
 x1="$(probe x1-dual-seckill --url "${APP1_URL}/voucher-order/seckill/9015" --url "${APP2_URL}/voucher-order/seckill/9015" --method POST --count 320 --parallel 64 --token-base 21 --ip-mode unique --timeout 5)"
 after_allowed="$(prom_sum local_deals_traffic_decision_total 'resource="seckill",result="allowed"')"
 [[ $((after_allowed - before_allowed)) -eq 300 ]] || fail "X1 shared activity limit exceeded 300"
-record X1 dual-jvm PASS "$x1; allowed_delta=300"
+assert_seckill_converged 9015 300 700
+record X1 dual-jvm PASS "$x1; allowed_delta=300;orders=reservation=SUCCESS=300;db_stock=redis_stock=700;processing=duplicates=0"
 
 # X2: per-JVM singleflight explicitly permits one DB fallback in each process.
 redis_cli DEL cache:shop:1 >/dev/null
@@ -336,20 +409,54 @@ stack es-unpause
 ES_RECOVERY=none
 
 # F4: pause only the dedicated consumer group, accept one order, overload entry, then converge.
-stack consumer-pause
-CONSUMER_PAUSED=true
+read -r f4_main_lag_before f4_retry_lag_before f4_total_lag_before \
+  <<<"$(wait_for_main_consumer_lag 0)" || fail "F4 pre-existing main-topic Broker lag"
+[[ "$f4_retry_lag_before" -eq 0 && "$f4_total_lag_before" -eq 0 ]] ||
+  fail "F4 pre-existing retry or total Broker lag"
+start_f4_row_lock
 f4_accept="$(probe f4-accept --url "${APP1_URL}/voucher-order/seckill/9017" --method POST --count 1 --parallel 1 --token-base 601 --ip-mode unique)"
 assert_summary "$f4_accept" 's["transport_errors"] == 0 and s["status_counts"].get("200") == 1 and s["code_counts"].get("null") == 1'
 [[ "$(redis_cli HLEN seckill:reservation:9017)" -eq 1 ]] || fail "F4 accepted reservation missing"
+f4_order_id="$(redis_cli --raw HGET seckill:reservation:9017 601)"
+[[ "$(redis_cli --raw HGET "seckill:order:status:${f4_order_id}" status)" == PROCESSING ]] ||
+  fail "F4 accepted order did not remain PROCESSING before consumer pause"
+stack consumer-pause
+CONSUMER_PAUSED=true
 f4_overload="$(probe f4-overload --url "${APP1_URL}/voucher-order/seckill/9018" --url "${APP2_URL}/voucher-order/seckill/9018" --method POST --count 320 --parallel 64 --token-base 21 --ip-mode unique --timeout 5)"
+assert_summary "$f4_overload" 's["transport_errors"] == 0 and s["status_counts"].get("200") == 300 and s["status_counts"].get("429") == 20'
 [[ "$(redis_cli HLEN seckill:reservation:9017)" -eq 1 ]] || fail "F4 PROCESSING reservation changed under overload"
+[[ "$(redis_cli --raw HGET "seckill:order:status:${f4_order_id}" status)" == PROCESSING ]] ||
+  fail "F4 existing PROCESSING order changed under entry overload"
+read -r f4_main_lag_before f4_retry_lag_before f4_total_lag_before \
+  <<<"$(wait_for_main_consumer_lag 301)" || fail "F4 main-topic Broker lag did not reach 301"
+stack consumer-progress >"${ARTIFACT_DIR}/f4-consumer-progress-paused.txt"
+f4_resume_ms="$(date +%s%3N)"
 stack consumer-resume
 CONSUMER_PAUSED=false
-wait_for_success_order 9017 || fail "F4 accepted order did not converge"
+release_f4_row_lock
+for attempt in $(seq 1 120); do
+  f4_order_count="$(mysql_exec 'SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id IN (9017,9018);')"
+  f4_processing="$(redis_cli ZCARD seckill:order:processing)"
+  read -r f4_main_lag_after f4_retry_lag_after f4_total_lag_after <<<"$(consumer_lags)"
+  if [[ "$f4_order_count" -eq 301 && "$f4_processing" -eq 0 &&
+      "$f4_main_lag_after" -eq 0 && "$f4_retry_lag_after" -eq 0 &&
+      "$f4_total_lag_after" -eq 0 ]]; then
+    break
+  fi
+  sleep 1
+done
+[[ "$f4_order_count" -eq 301 && "$f4_processing" -eq 0 &&
+    "$f4_main_lag_after" -eq 0 && "$f4_retry_lag_after" -eq 0 &&
+    "$f4_total_lag_after" -eq 0 ]] ||
+  fail "F4 backlog did not fully converge"
+f4_convergence_ms=$(( $(date +%s%3N) - f4_resume_ms ))
+f4_success="$(redis_cli EVAL "local count=0; for _,v in ipairs({'9017','9018'}) do local ids=redis.call('HVALS','seckill:reservation:'..v); for _,id in ipairs(ids) do if redis.call('HGET','seckill:order:status:'..id,'status') ~= 'SUCCESS' then return -1 end; count=count+1 end end; return count" 0)"
+[[ "$f4_success" -eq 301 ]] || fail "F4 reservations did not all reach SUCCESS"
+stack consumer-progress >"${ARTIFACT_DIR}/f4-consumer-progress-recovered.txt"
 duplicates="$(mysql_exec 'SELECT COUNT(*) FROM (SELECT user_id,voucher_id,COUNT(*) c FROM tb_voucher_order GROUP BY user_id,voucher_id HAVING c>1) d;')"
 negative_stock="$(mysql_exec 'SELECT COUNT(*) FROM tb_seckill_voucher WHERE stock < 0;')"
 [[ "$duplicates" -eq 0 && "$negative_stock" -eq 0 ]] || fail "F4 order invariant failed"
-record F4 real-rmq PASS "accepted=${f4_accept};overload=${f4_overload};duplicates=0;negative_stock=0"
+record F4 real-rmq PASS "accepted=${f4_accept};overload=${f4_overload};main_lag_before=${f4_main_lag_before};retry_lag_before=${f4_retry_lag_before};total_lag_before=${f4_total_lag_before};main_lag_after=${f4_main_lag_after};retry_lag_after=${f4_retry_lag_after};total_lag_after=${f4_total_lag_after};convergence_ms=${f4_convergence_ms};orders=301;success=301;processing=0;duplicates=0;negative_stock=0"
 
 # F2: first four licensed leaders retain the underlying JDBC/Hikari boundary. Record it honestly.
 for shop in $(seq 1 20); do redis_cli DEL "cache:shop:${shop}" >/dev/null; done
