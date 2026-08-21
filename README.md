@@ -37,6 +37,7 @@
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态、活动状态和本券 processing index 归零；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露秒杀请求分流、MQ 消费结果、DB 幂等与库存回滚等指标 | `/actuator/prometheus` |
 | 关键依赖故障只能靠日志猜测，Actuator 与业务入口同面暴露 | M5A 建立固定枚举指标目录，补齐点赞/Outbox、热榜、商铺缓存、认证、ES consumer 和秒杀 backlog 观测；management 仅绑定 loopback 独立端口，nginx 明确拒绝 `/api/actuator` | `docs/m5a-metric-catalog.md`、`docs/m5a-observability-results.md` |
+| 突发秒杀在 ID/MQ 前无共享准入，缓存/搜索故障可能放大 DB/ES 并返回模糊 HTTP 200 | M5C 在 ID/MQ 前用 Redis TIME Lua 做 activity/user/IP 固定窗；DB_READ/SEARCH 仅两枚 JVM semaphore；follower 750ms 有界等待；统一 429/503/业务码，ES 故障不回退无界 MySQL LIKE | `docs/m5c-resource-traffic-results.md`；双实例 activity 合计 300、冷 key DB fallback delta=2；Broker F5 仍 BLOCKED |
 
 
 ## 前端
