@@ -1,5 +1,6 @@
 package com.localdeals.websocket;
 
+import com.localdeals.entity.VoucherGrantNotificationOutbox;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -57,6 +58,32 @@ class WebSocketNotifierTest {
                 eq(WebSocketNotifier.ADMIN_PLATFORM_CHANNEL), anyString());
         verify(redisTemplate, never()).convertAndSend(
                 startsWith(WebSocketNotifier.ADMIN_MERCHANT_CHANNEL_PREFIX), anyString());
+    }
+
+    @Test
+    void voucherGrantUsesIndependentUserChannelAndStableEventPayload() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        WebSocketNotifier notifier = notifier(redisTemplate, mock(JdbcTemplate.class));
+        VoucherGrantNotificationOutbox outbox = new VoucherGrantNotificationOutbox();
+        outbox.setId(71L);
+        outbox.setGrantId(81L);
+        outbox.setUserId(91L);
+        outbox.setCampaignId(101L);
+        outbox.setVoucherId(111L);
+        outbox.setEventType("VOUCHER_GRANTED");
+
+        notifier.notifyVoucherGranted(outbox);
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(redisTemplate).convertAndSend(
+                eq(WebSocketNotifier.VOUCHER_GRANT_CHANNEL_PREFIX + 91L), payload.capture());
+        assertThat(payload.getValue())
+                .contains("\"type\":\"VOUCHER_GRANTED\"")
+                .contains("\"eventId\":\"71\"")
+                .contains("\"grantId\":\"81\"")
+                .contains("\"campaignId\":\"101\"")
+                .contains("\"voucherId\":\"111\"")
+                .contains("优惠券已发放");
     }
 
     private WebSocketNotifier notifier(StringRedisTemplate redisTemplate, JdbcTemplate jdbcTemplate) {

@@ -11,6 +11,7 @@ import com.localdeals.mapper.ShopMapper;
 import com.localdeals.mapper.SignMapper;
 import com.localdeals.mapper.VoucherCampaignMapper;
 import com.localdeals.mapper.VoucherGrantMapper;
+import com.localdeals.mapper.VoucherGrantNotificationOutboxMapper;
 import com.localdeals.mapper.VoucherMapper;
 import com.localdeals.service.MarketingAdminService;
 import com.localdeals.service.VoucherCampaignUserService;
@@ -89,6 +90,12 @@ public class M6aPersistenceTestConfiguration {
     @Bean
     public MapperFactoryBean<VoucherGrantMapper> voucherGrantMapper(SqlSessionFactory sqlSessionFactory) {
         return mapper(VoucherGrantMapper.class, sqlSessionFactory);
+    }
+
+    @Bean
+    public MapperFactoryBean<VoucherGrantNotificationOutboxMapper> voucherGrantNotificationOutboxMapper(
+            SqlSessionFactory sqlSessionFactory) {
+        return mapper(VoucherGrantNotificationOutboxMapper.class, sqlSessionFactory);
     }
 
     private <T> MapperFactoryBean<T> mapper(Class<T> mapperType, SqlSessionFactory sqlSessionFactory) {

@@ -36,11 +36,13 @@ class M6bFlywayIT {
         recreateSchema(baseUrl, username, password, runId, sentinelSchema, fresh);
         recreateSchema(baseUrl, username, password, runId, sentinelSchema, upgrade);
 
-        Flyway.configure().dataSource(schemaUrl(baseUrl, fresh), username, password).load().migrate();
+        Flyway.configure().dataSource(schemaUrl(baseUrl, fresh), username, password)
+                .target(MigrationVersion.fromVersion("10")).load().migrate();
         Flyway.configure().dataSource(schemaUrl(baseUrl, upgrade), username, password)
                 .target(MigrationVersion.fromVersion("9")).load().migrate();
         seedV9Grant(schemaUrl(baseUrl, upgrade), username, password);
-        Flyway.configure().dataSource(schemaUrl(baseUrl, upgrade), username, password).load().migrate();
+        Flyway.configure().dataSource(schemaUrl(baseUrl, upgrade), username, password)
+                .target(MigrationVersion.fromVersion("10")).load().migrate();
 
         assertSchema(schemaUrl(baseUrl, fresh), username, password, false);
         assertSchema(schemaUrl(baseUrl, upgrade), username, password, true);

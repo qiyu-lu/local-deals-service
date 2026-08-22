@@ -11,6 +11,7 @@ import com.localdeals.service.AdminSessionService;
 import com.localdeals.service.MarketingAdminService;
 import com.localdeals.service.VoucherCampaignUserService;
 import com.localdeals.service.VoucherGrantService;
+import com.localdeals.service.VoucherBatchJobService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.SpringBootConfiguration;
@@ -52,6 +53,7 @@ class MarketingMvcSecurityTest {
     @Autowired private MockMvc mockMvc;
     @MockBean private MarketingAdminService marketingAdminService;
     @MockBean private VoucherGrantService grantService;
+    @MockBean private VoucherBatchJobService batchJobService;
     @MockBean private VoucherCampaignUserService campaignUserService;
     @MockBean private AdminSessionService adminSessionService;
     @MockBean private StringRedisTemplate redisTemplate;
@@ -197,6 +199,33 @@ class MarketingMvcSecurityTest {
                         .header("Authorization", "Bearer " + READ_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void batchJobApisKeepMarketingPermissionBoundaryAndDtoRequestShape() throws Exception {
+        String body = "{\"requestId\":\"m6c-test-request\",\"expectedRuleVersion\":\"2\"}";
+        mockMvc.perform(get("/admin/marketing/batch-jobs")
+                        .header("Authorization", "Bearer " + READ_TOKEN))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/marketing/campaigns/7/batch-jobs")
+                        .header("Authorization", "Bearer " + READ_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/marketing/campaigns/7/batch-jobs")
+                        .header("Authorization", "Bearer " + WRITE_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/admin/marketing/batch-jobs/7/items")
+                        .header("Authorization", "Bearer " + READ_TOKEN)
+                        .param("status", "FAILED")
+                        .param("page", "1")
+                        .param("size", "20"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/marketing/batch-jobs/7/pause")
+                        .header("Authorization", "Bearer " + READ_TOKEN))
                 .andExpect(status().isForbidden());
     }
 
