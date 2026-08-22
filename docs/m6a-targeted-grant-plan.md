@@ -1,6 +1,6 @@
 # M6A 商户定向发券最小闭环实施契约
 
-> 状态：IN PROGRESS；M6A-R0 隔离阻塞已解除，M6A 尚未完成；历史 BLOCKED 记录保留
+> 状态：M6A COMPLETED；M6 后续范围等待下一阶段定义；M6B/M6C 未开始且未经授权；历史 BLOCKED 记录保留
 >
 > 起点：`2f83b6b docs(observability): record M5D recovery evidence`
 >
@@ -167,7 +167,7 @@ BLOCKED 结论和 `m6a_20260822b` 的失败均保留，不改判为 PASS；当�
 
 ## 11. M6A 继续实施与验证证据（2026-08-22）
 
-本节记录 R0 通过后继续实施的当前状态；第 8、9 节的历史 BLOCKED 记录不改写。
+本节记录 R0 通过后继续实施的历史状态；第 8、9 节的历史 BLOCKED 记录不改写，最终状态见第 12 节。
 
 机器可读结果见 `docs/m6a-targeted-grant-results.md` 和
 `docs/m6a-targeted-grant-summary.csv`。
@@ -221,4 +221,13 @@ Controller 安全测试 3/3，低基数 grant source/result 指标测试通过�
 专用容器/网络；随后删除 c 的 `m6a-m6a_20260822c-mysql`（`24318->3306`）、
 `m6a-m6a_20260822c-redis`（`27391->6379`）及 `m6a-m6a_20260822c-net`。未执行 broad
 prune，未触碰共享 RocketMQ；c 的 schema、sentinel、marker、connect、日志和测试结果已
-保留在本节及 `/tmp` 证据目录。当前阶段仍为 `M6A IN PROGRESS`；未 push。
+保留在本节及 `/tmp` 证据目录。该段保留 R0 后的历史阶段口径；未 push。
+
+## 12. M6A-Close-R1 完成（2026-08-22）
+
+`m6a_close_20260822b` 在 fail-closed datasource guard 下完成最终闭环：专用 MySQL
+`127.0.0.1:24320`、fresh/upgrade history=9、业务 IT 2/2、grant=1、`granted_count=1`、
+重复领取幂等、`ALREADY_GRANTED`、无资格零副作用、bean absence 和 fixture 清零均通过。
+Java 8、MVC 4/4、Node 前端契约、admin build 和 CSV/diff 检查均通过。R1 后 M6A 标记为
+`COMPLETED`；M6 后续范围等待下一阶段定义，M6B/M6C 未开始且未经授权。第 8-11 节的历史
+BLOCKED 结论不改写。

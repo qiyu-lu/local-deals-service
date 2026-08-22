@@ -8,9 +8,9 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新已完成阶段：M5D（提交链见 `docs/m5d-reliability-results.md`）
+> 最新已完成阶段：M6A（提交链和证据见 `docs/m6a-targeted-grant-results.md`）
 >
-> 当前阶段：M5A、M5B、M5C、M5D 已完成；M6 未开始且未经授权
+> 当前阶段：M5A、M5B、M5C、M5D、M6A 已完成；M6 后续范围等待下一阶段定义；M6B/M6C 未开始且未经授权
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
@@ -18,7 +18,8 @@
 `docs/m5b-bounded-cache-plan.md` 完成有界缓存，证据见 `docs/m5b-bounded-cache-results.md`。
 M5C 任务级契约见 `docs/m5c-resource-traffic-plan.md`，完成证据见
 `docs/m5c-resource-traffic-results.md`。M5D 覆盖矩阵、隔离故障和恢复证据见
-`docs/m5d-reliability-plan.md` 与 `docs/m5d-reliability-results.md`。本次未进入 M6，也未升级技术栈。
+`docs/m5d-reliability-plan.md` 与 `docs/m5d-reliability-results.md`。M6A 已完成，证据见
+`docs/m6a-targeted-grant-plan.md`、`docs/m6a-targeted-grant-results.md`；本次未进入 M6B/M6C，也未升级技术栈。
 
 `docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
 
@@ -443,9 +444,9 @@ feat(coupon): unify claim push and task reward grants
 feat(marketing): add auditable batch delivery and notification outbox
 ```
 
-### 9.7 当前 M6A 实施快照（2026-08-22）
+### 9.7 M6A R0 后历史快照（2026-08-22）
 
-当前阶段为 `M6A IN PROGRESS`；M6B/M6C 未开始且未经授权。M6A-R0 已用新的
+当时阶段为 `M6A IN PROGRESS`；M6B/M6C 未开始且未经授权。M6A-R0 已用新的
 `m6a_20260822c` 解除当前隔离阻塞：fresh V1→V9、upgrade V8→V9、schema assert、真实
 MySQL 商户隔离 1/1 和无 RocketMQ/Redis/ES runtime bean 断言均通过。原始 `d026db3`
 BLOCKED 结论和 `m6a_20260822b` 失败仍保留，不能追溯改判为 PASS。
@@ -456,6 +457,19 @@ R0 后已完成并分段提交标签/活动、统一 grant ledger、真实 MySQL
 无条件全量外部回归。详细结果见 `docs/m6a-targeted-grant-results.md`，机器可读摘要见
 `docs/m6a-targeted-grant-summary.csv`。c 的专用容器和网络已按精确 run-id 清理，未执行
 broad prune，未 push。
+
+M6A-Close 的一次最终重跑因测试命令遗漏实际 datasource 环境变量而回落到共享
+`127.0.0.1:3306`，已按硬停止线记录为 BLOCKED，未改判历史负面证据，也未继续真实依赖重跑。
+因此当时 M6A 仍为 `IN PROGRESS`，M6B/M6C 仍未开始且未经授权；最终 R1 结论见 9.8。
+
+### 9.8 M6A-Close-R1 当前结论（2026-08-22）
+
+新的 `m6a_close_20260822b` 已在 fail-closed datasource guard 下完成 M6A 最后业务闭环：
+fresh/upgrade history=9，真实 MySQL 业务 IT 2/2，安全 DTO 领取/幂等/无资格零副作用、
+RocketMQ/Redis/ES bean absence、Java 8 回归、MVC、Node 前端和 admin build 均通过。strace
+唯一 AF_INET/AF_INET6 目标为专用 `127.0.0.1:24320`；fixture 清零后按精确名称清理容器和网络。
+因此 M6A 标记为 `COMPLETED`；M6 后续范围等待下一阶段定义，M6B/M6C 未开始且未经授权。原始
+d026db3、`m6a_20260822b` 和 `m6a_close_20260822a` BLOCKED 记录保留，不改判 PASS。
 
 ## 10. 阶段 M7：故障演练和展示收口
 
@@ -572,16 +586,16 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-M5 已收口。新会话先核对本阶段提交链、`docs/m5d-reliability-results.md` 和工作区状态；没有
-用户明确授权时不自动进入 M6。发布或演示前可复验 M5D，但必须使用新的 run-id 和专用依赖，
+M5 和 M6A 已收口。新会话先核对本阶段提交链、`docs/m6a-targeted-grant-results.md` 和工作区状态；没有
+用户明确授权时不自动进入 M6B/M6C。发布或演示前可复验 M5D，但必须使用新的 run-id 和专用依赖，
 保留 F5 全量预检、consumer-level/Canal E2E 边界以及历史负面证据。
 
 ### 可复制到新会话的提示词
 
 ```text
 请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md 和
-docs/m5d-reliability-results.md，核对 branch、HEAD、status、diff 与 M5D 提交链，不覆盖用户改动。
-M5A--M5D 已完成；未经用户明确授权不要实施 M6 或技术栈升级。如只复验 M5D，必须使用新的
+docs/m6a-targeted-grant-results.md，核对 branch、HEAD、status、diff 与 M6A 提交链，不覆盖用户改动。
+M5A--M5D、M6A 已完成；未经用户明确授权不要实施 M6B/M6C 或技术栈升级。如只复验 M5D，必须使用新的
 run-id 专用依赖，保留严格 F5 门禁、全部负面证据和 consumer-level/Canal E2E 边界。
 ```
 
