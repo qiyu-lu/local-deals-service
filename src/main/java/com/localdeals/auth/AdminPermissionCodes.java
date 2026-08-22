@@ -11,6 +11,8 @@ public final class AdminPermissionCodes {
     public static final String ACCOUNT_READ = "account:read";
     public static final String ACCOUNT_WRITE = "account:manage";
     public static final String MERCHANT_MANAGE = "merchant:manage";
+    public static final String MARKETING_READ = "marketing:read";
+    public static final String MARKETING_WRITE = "marketing:write";
 
     private AdminPermissionCodes() {
     }
