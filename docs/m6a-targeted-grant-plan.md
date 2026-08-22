@@ -129,8 +129,38 @@ Surefire 子进程。连接日志共 269 行，其中 13 次 TCP connect 全部�
 不能将其记为 PASS。失败后仅保留了 sentinel/marker 和部分 Flyway history，没有产生
 merchant、tag、member、campaign、grant fixture，Redis 仍只有 sentinel。
 
-已在未提交 WIP 中将 target marker 改为“fresh/upgrade migration 和 schema assert 成功后
-才写入”；失败或部分迁移的 schema 没有 marker 时，下一次会在 DROP 前停止。该修正只
-完成离线 `test-compile`，按一次性 R0 规则不进行第二次真实依赖重跑。契约偏差、统一
-grant、并发不变量、Controller、前端、故障验证、全量测试均未开始；当前仍为
+target marker 已改为只有在 fresh/upgrade migration 和 schema assert 成功后才写入；失败或
+部分迁移的 schema 没有 marker 时，下一次会在 DROP 前停止。该修正已包含在当前 HEAD 的
+`1351a9b test(marketing): isolate M6A integration context`，不再是未提交 WIP。`m6a_20260822b`
+的上述失败仍是历史负面证据，不能改判为 PASS；按本轮执行规则，普通测试代码/fixture/业务
+缺陷可以保留证据后修复并使用新的 run-id 重跑。契约偏差、统一 grant、并发不变量、Controller、
+前端、故障验证、全量测试均未开始；当前仍为
 `M6A BLOCKED / M6 in progress / M6B/M6C not started and not authorized`。
+
+## 10. M6A-R0 隔离恢复通过（2026-08-22）
+
+新的 run-id 为 `m6a_20260822c`。在使用前已删除经过精确名称、镜像、label 和端口核对的旧
+`m6a-20260822a` 与 `m6a_20260822b` 专用容器，以及 b 的专用网络；未执行 broad prune，
+共享 RocketMQ 容器和 `9876/10911` 未修改。c 只建立了 `mysql:8.0` 容器
+`m6a-m6a_20260822c-mysql`，label 为 `com.localdeals.m6a.run-id=m6a_20260822c`，通过
+`127.0.0.1:24318->3306` 提供服务；没有启动 Redis、RocketMQ 或 ES。MySQL sentinel 为
+`m6a_20260822c_sentinel.m6a_run_sentinel`，run-id 和 purpose 均精确匹配。
+
+正式运行使用 Java 8、Maven offline 和 `strace -f -tt -yy -e trace=connect`，命令只执行
+`M6aFlywayIT,MarketingAdminIsolationIT`。完整证据保存在
+`/tmp/m6a-r0-20260822c.MOFKLl/`：25 次 connect 中 19 次 TCP 全部是
+`::ffff:127.0.0.1:24318`，6 次是本机 nscd Unix socket；没有 `9876`、`10911`、`9200`、
+`3306`、`6379` 或其他 AF_INET/AF_INET6 目标。Maven/Surefire 日志没有 producer、consumer
+启动、client register 或 NameServer 连接标记。
+
+`MarketingAdminIsolationIT` 的实际 Spring bean absence 断言通过：不存在
+`DefaultMQProducer`、`DefaultLitePullConsumer`、`DefaultMQPushConsumer`、
+`DefaultRocketMQListenerContainer`、`RocketMQTemplate`、`RedisConnectionFactory` 和
+`RestHighLevelClient`。测试结果为 `M6aFlywayIT 1/1`、`MarketingAdminIsolationIT 1/1`，
+事务回滚后 M6A 专用 merchant、admin、shop、voucher、voucher order、tag、member、campaign、
+grant fixture 均为 0；V1 基线数据不计为 M6A fixture。fresh V1→V9 和 upgrade V8→V9 均为
+成功 history=9，且 target marker=1。
+
+因此追加结论：`m6a_20260822c R0 PASS / historical blockers retained`。`d026db3` 的原始
+BLOCKED 结论和 `m6a_20260822b` 的失败均保留，不改判为 PASS；当前阶段恢复为
+`M6A IN PROGRESS / M6B/M6C not started and not authorized`。
