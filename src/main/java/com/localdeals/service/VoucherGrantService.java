@@ -2,6 +2,7 @@ package com.localdeals.service;
 
 import com.localdeals.dto.VoucherGrantCommand;
 import com.localdeals.entity.VoucherGrant;
+import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.mapper.VoucherGrantMapper;
@@ -59,7 +60,10 @@ public class VoucherGrantService {
             throw known;
         } catch (DataAccessException unavailable) {
             result = LocalDealsMetrics.GrantResult.UNAVAILABLE;
-            throw unavailable;
+            ApiStatusException apiError = new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    ApiErrorCodes.DATABASE_UNAVAILABLE, "数据暂不可用，请稍后重试");
+            apiError.initCause(unavailable);
+            throw apiError;
         } catch (RuntimeException failure) {
             result = LocalDealsMetrics.GrantResult.FAILURE;
             throw failure;
