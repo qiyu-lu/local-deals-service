@@ -1,6 +1,7 @@
 package com.localdeals.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.localdeals.dto.VoucherCampaignUserView;
 import com.localdeals.entity.VoucherCampaign;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -63,19 +64,28 @@ public interface VoucherCampaignMapper extends BaseMapper<VoucherCampaign> {
     @Select("SELECT CURRENT_TIMESTAMP")
     LocalDateTime currentDatabaseTime();
 
-    @Select("SELECT c.*,v.title AS voucher_title," +
-            "CASE WHEN g.id IS NULL THEN 0 ELSE 1 END AS already_granted," +
-            "CASE WHEN c.eligibility_type='ALL' THEN 1 " +
-            "WHEN EXISTS (SELECT 1 FROM tb_marketing_tag_member tm " +
+    @Select("SELECT c.id,c.voucher_id,c.name AS campaign_name,v.title AS voucher_title," +
+            "v.pay_value,v.actual_value,c.begin_time,c.end_time,c.rule_version," +
+            "CASE WHEN g.id IS NOT NULL THEN 'ALREADY_GRANTED' " +
+            "WHEN c.begin_time > CURRENT_TIMESTAMP THEN 'NOT_STARTED' " +
+            "WHEN c.end_time <= CURRENT_TIMESTAMP THEN 'ENDED' " +
+            "WHEN c.granted_count >= c.quota_total THEN 'QUOTA_EXHAUSTED' " +
+            "WHEN c.eligibility_type='MANUAL_TAG' AND NOT EXISTS (" +
+            "SELECT 1 FROM tb_marketing_tag_member tm " +
             "JOIN tb_marketing_tag t ON t.id=tm.tag_id AND t.merchant_id=tm.merchant_id " +
             "WHERE tm.merchant_id=c.merchant_id AND tm.tag_id=c.required_tag_id " +
             "AND tm.user_id=#{userId} AND tm.status='ACTIVE' AND t.status='ACTIVE' " +
-            "AND (tm.expire_time IS NULL OR tm.expire_time > CURRENT_TIMESTAMP)) THEN 1 ELSE 0 END " +
-            "AS tag_eligible FROM tb_voucher_campaign c " +
+            "AND (tm.expire_time IS NULL OR tm.expire_time > CURRENT_TIMESTAMP)) " +
+            "THEN 'INELIGIBLE' ELSE 'CLAIMABLE' END AS claim_state," +
+            "CASE WHEN g.id IS NULL THEN 0 ELSE 1 END AS already_granted " +
+            "FROM tb_voucher_campaign c " +
             "JOIN tb_voucher v ON v.id=c.voucher_id AND v.type=0 AND v.status=1 " +
             "JOIN tb_shop s ON s.id=v.shop_id AND s.id=#{shopId} AND s.merchant_id=c.merchant_id " +
-            "LEFT JOIN tb_voucher_grant g ON g.campaign_id=c.id AND g.user_id=#{userId} " +
-            "WHERE c.status <> 'CLOSED' ORDER BY c.id DESC")
-    List<VoucherCampaign> selectForUserShop(@Param("shopId") Long shopId,
+            "LEFT JOIN tb_voucher_grant g ON g.campaign_id=c.id " +
+            "AND g.merchant_id=c.merchant_id AND g.voucher_id=c.voucher_id " +
+            "AND g.user_id=#{userId} " +
+            "WHERE c.status='ACTIVE' AND c.grant_mode IN ('CLAIM','BOTH') " +
+            "ORDER BY c.id DESC")
+    List<VoucherCampaignUserView> selectForUserShop(@Param("shopId") Long shopId,
             @Param("userId") Long userId);
 }
