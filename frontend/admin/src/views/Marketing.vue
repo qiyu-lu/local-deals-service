@@ -84,6 +84,7 @@
               <el-option label="用户领取 + 管理员发放" value="BOTH" />
               <el-option label="用户领取" value="CLAIM" />
               <el-option label="管理员发放" value="ADMIN" />
+              <el-option label="每日签到奖励（TASK）" value="TASK" />
             </el-select>
           </el-form-item>
           <el-form-item label="资格类型">
@@ -115,6 +116,9 @@
 
         <el-table :data="campaigns" size="small" border class="campaign-table">
           <el-table-column prop="name" label="活动" min-width="150" />
+          <el-table-column label="模式" width="150">
+            <template #default="{ row }">{{ grantModeText(row.grantMode) }}</template>
+          </el-table-column>
           <el-table-column prop="status" label="状态" width="90" />
           <el-table-column label="额度" width="100">
             <template #default="{ row }">{{ row.grantedCount ?? 0 }} / {{ row.quotaTotal }}</template>
@@ -141,12 +145,12 @@
       </el-card>
     </div>
 
-    <el-card v-if="canWrite" shadow="never" class="grant-card">
+    <el-card v-if="canWrite && grantableCampaigns.length" shadow="never" class="grant-card">
       <template #header><span class="card-title">单用户管理员发放</span></template>
       <el-form :model="grantForm" inline @submit.prevent>
         <el-form-item label="活动">
           <el-select v-model="grantForm.campaignId" placeholder="选择活动" style="width:240px">
-            <el-option v-for="campaign in campaigns" :key="campaign.id" :label="campaign.name" :value="campaign.id" />
+            <el-option v-for="campaign in grantableCampaigns" :key="campaign.id" :label="campaign.name" :value="campaign.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="用户 ID"><el-input v-model="grantForm.userId" /></el-form-item>
@@ -198,6 +202,7 @@ const campaignForm = ref({
 })
 const grantForm = ref({ campaignId: '', userId: '' })
 const activeTags = computed(() => tags.value.filter(tag => tag.status === 'ACTIVE'))
+const grantableCampaigns = computed(() => campaigns.value.filter(campaign => campaign.grantMode !== 'TASK'))
 
 function listPayload(result) {
   const value = resultData(result)
@@ -210,6 +215,16 @@ function scopeParams() {
 
 function scopePayload(payload) {
   return scopeMerchantId.value ? { ...payload, merchantId: scopeMerchantId.value } : payload
+}
+
+function grantModeText(mode) {
+  const labels = {
+    CLAIM: '用户领取',
+    ADMIN: '管理员发放',
+    BOTH: '用户领取 + 管理员',
+    TASK: '每日签到奖励'
+  }
+  return labels[mode] || mode || ''
 }
 
 async function loadAll() {

@@ -19,6 +19,7 @@
     .campaign-subtitle, .campaign-time, .campaign-reason { margin-top: 4px; color: #888; font-size: 12px; }
     .campaign-price { margin-top: 6px; color: #f63; font-size: 16px; }
     .campaign-status { color: #f63; font-size: 13px; }
+    .campaign-task-badge { display: inline-block; margin-left: 6px; color: #0f766e; font-size: 12px; }
     .campaign-claim-btn { border: 0; cursor: pointer; }
     .campaign-claim-btn:disabled { cursor: not-allowed; opacity: .55; }
     .voucher-note { color: #999; font-size: 12px; }
@@ -104,7 +105,10 @@
     </div>
     <div class="campaign-box" v-for="campaign in campaigns" :key="campaign.id">
       <div class="campaign-main">
-        <div class="campaign-name">{{campaign.campaignName}}</div>
+        <div class="campaign-name">
+          {{campaign.campaignName}}
+          <span v-if="campaign.grantMode === 'TASK'" class="campaign-task-badge">每日签到奖励</span>
+        </div>
         <div class="campaign-subtitle">{{campaign.voucherTitle}}</div>
         <div class="campaign-price">
           ￥{{util.formatPrice(campaign.payValue)}}
@@ -121,7 +125,7 @@
           class="voucher-btn campaign-claim-btn"
           :disabled="claimingCampaignId === String(campaign.id)"
           @click="claimCampaign(campaign)"
-        >{{claimingCampaignId === String(campaign.id) ? '领取中...' : '立即领取'}}</button>
+        >{{claimingCampaignId === String(campaign.id) ? '处理中...' : (campaign.grantMode === 'TASK' ? '签到并领取' : '立即领取')}}</button>
       </div>
     </div>
   </div>
@@ -239,9 +243,14 @@
         if (!token || campaign.claimState !== 'CLAIMABLE' || this.claimingCampaignId === campaignId) return;
         this.claimingCampaignId = campaignId;
         const shopId = util.getUrlParam("id");
-        return axios.post("/voucher-campaigns/" + encodeURIComponent(campaignId) + "/claim", {
+        const request = {
           expectedRuleVersion: campaign.ruleVersion
-        })
+        };
+        const reward = campaign.grantMode === 'TASK'
+          ? axios.post("/user/sign").then(() => axios.post(
+            "/voucher-campaigns/" + encodeURIComponent(campaignId) + "/task-reward", request))
+          : axios.post("/voucher-campaigns/" + encodeURIComponent(campaignId) + "/claim", request);
+        return reward
           .then(() => {
             this.$message.success("领取成功");
             return this.queryCampaigns(shopId);
@@ -260,6 +269,7 @@
         const labels = {
           ALREADY_GRANTED: "已领取",
           CLAIMABLE: "可领取",
+          TASK: "签到后可领取",
           NOT_STARTED: "未开始",
           ENDED: "已结束",
           INELIGIBLE: "暂不符合条件",
