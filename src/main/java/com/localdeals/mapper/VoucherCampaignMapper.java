@@ -60,6 +60,9 @@ public interface VoucherCampaignMapper extends BaseMapper<VoucherCampaign> {
             @Param("merchantId") Long merchantId, @Param("voucherId") Long voucherId,
             @Param("ruleVersion") Long ruleVersion);
 
+    @Select("SELECT CURRENT_TIMESTAMP")
+    LocalDateTime currentDatabaseTime();
+
     @Select("SELECT c.*,v.title AS voucher_title," +
             "CASE WHEN g.id IS NULL THEN 0 ELSE 1 END AS already_granted," +
             "CASE WHEN c.eligibility_type='ALL' THEN 1 " +
