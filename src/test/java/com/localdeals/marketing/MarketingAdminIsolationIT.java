@@ -34,6 +34,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +57,11 @@ class MarketingAdminIsolationIT {
     @Autowired private VoucherMapper voucherMapper;
     @Autowired private AdminAccountMapper accountMapper;
     @Autowired private JdbcTemplate jdbcTemplate;
+
+    @DynamicPropertySource
+    static void registerM6aDatasource(DynamicPropertyRegistry registry) {
+        M6aDatasourceGuard.register(registry);
+    }
 
     @AfterEach
     void clearPrincipal() {

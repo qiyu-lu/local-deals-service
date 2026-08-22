@@ -9,6 +9,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.io.ByteArrayOutputStream;
@@ -27,6 +29,11 @@ class M6aMysqlStopFailureIT {
     private static final String MYSQL_CONTAINER = "m6a-m6a_20260822c-mysql";
     private static final long CAMPAIGN_ID = 1L;
     private static final long USER_ID = 9_999_991L;
+
+    @DynamicPropertySource
+    static void registerM6aDatasource(DynamicPropertyRegistry registry) {
+        M6aDatasourceGuard.register(registry);
+    }
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private VoucherGrantService grantService;

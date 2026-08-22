@@ -4,6 +4,9 @@ import com.localdeals.auth.AdminPermissionCodes;
 import com.localdeals.config.WebConfig;
 import com.localdeals.config.WebExceptionAdvice;
 import com.localdeals.dto.AdminPrincipal;
+import com.localdeals.dto.VoucherCampaignUserView;
+import com.localdeals.dto.VoucherGrantClaimRequest;
+import com.localdeals.dto.VoucherGrantUserView;
 import com.localdeals.service.AdminSessionService;
 import com.localdeals.service.MarketingAdminService;
 import com.localdeals.service.VoucherCampaignUserService;
@@ -27,6 +30,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -92,16 +97,80 @@ class MarketingMvcSecurityTest {
     void userCampaignEndpointsRequireConsumerLoginAndDoNotAcceptAdminScope() throws Exception {
         mockMvc.perform(get("/voucher-campaigns/shop/1"))
                 .andExpect(status().isUnauthorized());
+        VoucherCampaignUserView view = new VoucherCampaignUserView();
+        view.setId(7L);
+        view.setVoucherId(8L);
+        view.setCampaignName("专享活动");
+        view.setVoucherTitle("代金券");
+        view.setRuleVersion(2L);
+        view.setClaimState("CLAIMABLE");
+        view.setAlreadyGranted(false);
+        when(campaignUserService.listForShop(1L, 900001L))
+                .thenReturn(Collections.singletonList(view));
+        VoucherGrantUserView grantView = new VoucherGrantUserView();
+        grantView.setId(11L);
+        grantView.setCampaignId(7L);
+        grantView.setVoucherId(8L);
+        grantView.setRuleVersion(2L);
+        when(campaignUserService.claim(eq(7L), any(VoucherGrantClaimRequest.class), eq(900001L)))
+                .thenReturn(grantView);
+        when(campaignUserService.listMine(900001L))
+                .thenReturn(Collections.singletonList(grantView));
         mockMvc.perform(get("/voucher-campaigns/shop/1")
                         .header("Authorization", USER_TOKEN))
                 .andExpect(status().isOk());
+        mockMvc.perform(get("/voucher-campaigns/shop/1")
+                        .header("Authorization", USER_TOKEN))
+                .andExpect(jsonPath("$.data[0].id").value("7"))
+                .andExpect(jsonPath("$.data[0].voucherId").value("8"))
+                .andExpect(jsonPath("$.data[0].claimState").value("CLAIMABLE"))
+                .andExpect(jsonPath("$.data[0].requiredTagId").doesNotExist())
+                .andExpect(jsonPath("$.data[0].tagEligible").doesNotExist())
+                .andExpect(jsonPath("$.data[0].createdBy").doesNotExist())
+                .andExpect(jsonPath("$.data[0].eligibilityType").doesNotExist());
         mockMvc.perform(post("/voucher-campaigns/7/claim")
                         .header("Authorization", USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedRuleVersion\":\"1\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.merchantId").doesNotExist())
+                .andExpect(jsonPath("$.data.userId").doesNotExist())
+                .andExpect(jsonPath("$.data.source").doesNotExist())
+                .andExpect(jsonPath("$.data.operatorId").doesNotExist());
         mockMvc.perform(get("/voucher-grants/mine")
                         .header("Authorization", USER_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].campaignId").value("7"))
+                .andExpect(jsonPath("$.data[0].merchantId").doesNotExist())
+                .andExpect(jsonPath("$.data[0].userId").doesNotExist())
+                .andExpect(jsonPath("$.data[0].source").doesNotExist())
+                .andExpect(jsonPath("$.data[0].operatorId").doesNotExist());
+    }
+
+    @Test
+    void tagMembersAreReadableByReadOnlyStaffButWritableOnlyWithWritePermission() throws Exception {
+        when(marketingAdminService.listMembers(7L, null)).thenReturn(Collections.emptyList());
+        mockMvc.perform(get("/admin/marketing/tags/7/members")
+                        .header("Authorization", "Bearer " + READ_TOKEN))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/admin/marketing/tags/7/members/900001")
+                        .header("Authorization", "Bearer " + READ_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expireTime\":null}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/admin/marketing/tags/7/members/900001")
+                        .header("Authorization", "Bearer " + READ_TOKEN))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/marketing/tags/7/members/900001")
+                        .header("Authorization", "Bearer " + WRITE_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"merchantId\":\"1\",\"expireTime\":null}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/admin/marketing/tags/7/members/900001")
+                        .header("Authorization", "Bearer " + WRITE_TOKEN)
+                        .param("merchantId", "1"))
                 .andExpect(status().isOk());
     }
 

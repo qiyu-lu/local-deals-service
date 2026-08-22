@@ -14,6 +14,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
@@ -40,6 +42,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MarketingGrantConcurrencyIT {
     private static final long MERCHANT_ID = 1L;
     private static final long CLAIM_USER_ID = 1L;
+
+    @DynamicPropertySource
+    static void registerM6aDatasource(DynamicPropertyRegistry registry) {
+        M6aDatasourceGuard.register(registry);
+    }
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private VoucherGrantService grantService;

@@ -11,6 +11,7 @@ import com.localdeals.mapper.VoucherCampaignMapper;
 import com.localdeals.mapper.VoucherGrantMapper;
 import com.localdeals.mapper.VoucherMapper;
 import com.localdeals.service.MarketingAdminService;
+import com.localdeals.service.VoucherCampaignUserService;
 import com.localdeals.service.VoucherGrantService;
 import com.localdeals.service.VoucherGrantTransactionService;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -39,7 +40,7 @@ import org.springframework.context.annotation.Import;
         MybatisPlusAutoConfiguration.class
 })
 @Import({MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
-        VoucherGrantTransactionService.class})
+        VoucherGrantTransactionService.class, VoucherCampaignUserService.class})
 public class M6aPersistenceTestConfiguration {
 
     @Bean
