@@ -11,7 +11,17 @@
   <link href="./css/main.css" rel="stylesheet">
 
   <style type="text/css">
-
+    .campaign-voucher { margin-top: 12px; }
+    .campaign-heading { display: flex; justify-content: space-between; align-items: center; }
+    .campaign-box { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #f0f0f0; }
+    .campaign-main { flex: 1; min-width: 0; }
+    .campaign-name { font-weight: bold; color: #222; }
+    .campaign-subtitle, .campaign-time, .campaign-reason { margin-top: 4px; color: #888; font-size: 12px; }
+    .campaign-price { margin-top: 6px; color: #f63; font-size: 16px; }
+    .campaign-status { color: #f63; font-size: 13px; }
+    .campaign-claim-btn { border: 0; cursor: pointer; }
+    .campaign-claim-btn:disabled { cursor: not-allowed; opacity: .55; }
+    .voucher-note { color: #999; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -81,7 +91,37 @@
           <div class="seckill-stock">剩余 <span>{{v.stock}}</span> 张</div>
           <div class="seckill-time">{{formatTime(v)}}</div>
         </div>
-        <div class="voucher-btn" v-else>抢购</div>
+        <div class="voucher-note" v-else>普通代金券</div>
+      </div>
+    </div>
+  </div>
+  <div v-if="campaigns.length" class="shop-voucher campaign-voucher">
+    <div class="campaign-heading">
+      <div>
+        <span class="voucher-icon">享</span>
+        <span style="font-weight: bold;">专享活动</span>
+      </div>
+    </div>
+    <div class="campaign-box" v-for="campaign in campaigns" :key="campaign.id">
+      <div class="campaign-main">
+        <div class="campaign-name">{{campaign.campaignName}}</div>
+        <div class="campaign-subtitle">{{campaign.voucherTitle}}</div>
+        <div class="campaign-price">
+          ￥{{util.formatPrice(campaign.payValue)}}
+          <span v-if="campaign.actualValue"> / 原价 ￥{{util.formatPrice(campaign.actualValue)}}</span>
+        </div>
+        <div class="campaign-time">{{formatCampaignTime(campaign)}}</div>
+        <div v-if="campaign.claimReason" class="campaign-reason">{{campaign.claimReason}}</div>
+      </div>
+      <div class="voucher-right">
+        <div class="campaign-status">{{claimStateText(campaign.claimState)}}</div>
+        <button
+          v-if="campaign.claimState === 'CLAIMABLE'"
+          type="button"
+          class="voucher-btn campaign-claim-btn"
+          :disabled="claimingCampaignId === String(campaign.id)"
+          @click="claimCampaign(campaign)"
+        >{{claimingCampaignId === String(campaign.id) ? '领取中...' : '立即领取'}}</button>
       </div>
     </div>
   </div>
@@ -131,6 +171,8 @@
       util,
       shop: {},
       vouchers: [],
+      campaigns: [],
+      claimingCampaignId: null,
       shopBlogs: [],
       seckillSocket: null,
       seckillSocketTimer: null,
@@ -144,6 +186,7 @@
       let shopId = util.getUrlParam("id");
       this.queryShopById(shopId);
       this.queryVoucher(shopId);
+      if (token) this.queryCampaigns(shopId);
       this.queryShopBlogs(shopId);
     },
     mounted() {
@@ -179,6 +222,59 @@
           this.vouchers = data;
         })
         .catch(this.$message.error)
+      },
+      queryCampaigns(shopId) {
+        if (!token) return Promise.resolve();
+        return axios.get("/voucher-campaigns/shop/" + encodeURIComponent(shopId))
+          .then(({data}) => {
+            this.campaigns = data || [];
+          })
+          .catch(err => {
+            this.campaigns = [];
+            this.$message.error(err || "专享活动加载失败");
+          });
+      },
+      claimCampaign(campaign) {
+        const campaignId = String(campaign.id);
+        if (!token || campaign.claimState !== 'CLAIMABLE' || this.claimingCampaignId === campaignId) return;
+        this.claimingCampaignId = campaignId;
+        const shopId = util.getUrlParam("id");
+        return axios.post("/voucher-campaigns/" + encodeURIComponent(campaignId) + "/claim", {
+          expectedRuleVersion: campaign.ruleVersion
+        })
+          .then(() => {
+            this.$message.success("领取成功");
+            return this.queryCampaigns(shopId);
+          })
+          .catch(err => {
+            this.$message.error(err || "领取失败");
+            return this.queryCampaigns(shopId);
+          })
+          .then(() => {
+            this.claimingCampaignId = null;
+          }, () => {
+            this.claimingCampaignId = null;
+          });
+      },
+      claimStateText(state) {
+        const labels = {
+          ALREADY_GRANTED: "已领取",
+          CLAIMABLE: "可领取",
+          NOT_STARTED: "未开始",
+          ENDED: "已结束",
+          INELIGIBLE: "暂不符合条件",
+          QUOTA_EXHAUSTED: "额度已用尽"
+        };
+        return labels[state] || "暂不可领取";
+      },
+      formatCampaignTime(campaign) {
+        return this.formatDateTime(campaign.beginTime) + " ~ " + this.formatDateTime(campaign.endTime);
+      },
+      formatDateTime(value) {
+        const date = new Date(value);
+        if (isNaN(date.getTime())) return value || "";
+        return date.getFullYear() + "-" + (date.getMonth() + 1) + "-" + date.getDate() + " " +
+          date.getHours() + ":" + this.formatMinutes(date.getMinutes());
       },
       formatTime(v){
         let b = new Date(v.beginTime);

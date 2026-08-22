@@ -31,11 +31,47 @@
             <el-button type="primary" @click="submitTag">新增</el-button>
           </el-form-item>
         </el-form>
-        <el-table :data="tags" size="small" border>
+        <el-table
+          :data="tags"
+          size="small"
+          border
+          row-key="id"
+          highlight-current-row
+          @row-click="selectTag"
+        >
           <el-table-column prop="code" label="编码" />
           <el-table-column prop="name" label="名称" />
           <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column label="成员" width="80">
+            <template #default="{ row }">
+              <el-button link type="primary" @click.stop="selectTag(row)">查看</el-button>
+            </template>
+          </el-table-column>
         </el-table>
+        <div v-if="selectedTag" class="member-panel">
+          <div class="member-heading">
+            <span>成员：{{ selectedTag.name }}（{{ selectedTag.code }}）</span>
+            <el-button link @click="loadMembers()">刷新</el-button>
+          </div>
+          <el-form v-if="canWrite" inline @submit.prevent="submitMember">
+            <el-form-item label="用户 ID">
+              <el-input v-model="memberUserId" placeholder="已有业务关系的用户" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="submitMember">添加成员</el-button>
+            </el-form-item>
+          </el-form>
+          <el-table :data="members" size="small" border>
+            <el-table-column prop="userId" label="用户 ID" />
+            <el-table-column prop="status" label="状态" width="90" />
+            <el-table-column prop="expireTime" label="过期时间" min-width="150" />
+            <el-table-column v-if="canWrite" label="操作" width="70">
+              <template #default="{ row }">
+                <el-button link type="danger" @click="removeMember(row)">移除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
       </el-card>
 
       <el-card shadow="never">
@@ -56,8 +92,15 @@
               <el-option label="人工标签" value="MANUAL_TAG" />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="campaignForm.eligibilityType === 'MANUAL_TAG'" label="标签 ID">
-            <el-input v-model="campaignForm.requiredTagId" />
+          <el-form-item v-if="campaignForm.eligibilityType === 'MANUAL_TAG'" label="标签">
+            <el-select v-model="campaignForm.requiredTagId" placeholder="选择标签" style="width:100%">
+              <el-option
+                v-for="tag in activeTags"
+                :key="tag.id"
+                :label="`${tag.name}（${tag.code}）`"
+                :value="tag.id"
+              />
+            </el-select>
           </el-form-item>
           <el-form-item label="时间窗">
             <div class="time-row">
@@ -122,9 +165,12 @@ import { Refresh } from '@element-plus/icons-vue'
 import {
   createMarketingCampaign,
   createMarketingTag,
+  addMarketingTagMember,
+  getMarketingTagMembers,
   getMarketingCampaigns,
   getMarketingTags,
   grantMarketingCampaign,
+  removeMarketingTagMember,
   updateMarketingCampaignStatus,
   resultData
 } from '../api'
@@ -136,6 +182,9 @@ const isPlatform = computed(() => principal.value?.scopeType === 'PLATFORM')
 const scopeMerchantId = ref('')
 const tags = ref([])
 const campaigns = ref([])
+const selectedTag = ref(null)
+const members = ref([])
+const memberUserId = ref('')
 const tagForm = ref({ code: '', name: '' })
 const campaignForm = ref({
   voucherId: '',
@@ -148,6 +197,7 @@ const campaignForm = ref({
   quotaTotal: 10
 })
 const grantForm = ref({ campaignId: '', userId: '' })
+const activeTags = computed(() => tags.value.filter(tag => tag.status === 'ACTIVE'))
 
 function listPayload(result) {
   const value = resultData(result)
@@ -166,6 +216,8 @@ async function loadAll() {
   if (isPlatform.value && !scopeMerchantId.value) {
     tags.value = []
     campaigns.value = []
+    selectedTag.value = null
+    members.value = []
     return
   }
   try {
@@ -175,9 +227,66 @@ async function loadAll() {
     ])
     tags.value = listPayload(tagResult)
     campaigns.value = listPayload(campaignResult)
+    if (selectedTag.value) {
+      const refreshed = tags.value.find(tag => String(tag.id) === String(selectedTag.value.id))
+      if (refreshed) {
+        selectedTag.value = refreshed
+        await loadMembers(refreshed)
+      } else {
+        selectedTag.value = null
+        members.value = []
+      }
+    }
   } catch {
     tags.value = []
     campaigns.value = []
+    selectedTag.value = null
+    members.value = []
+  }
+}
+
+async function selectTag(tag) {
+  selectedTag.value = tag
+  memberUserId.value = ''
+  await loadMembers(tag)
+}
+
+async function loadMembers(tag = selectedTag.value) {
+  if (!tag || (isPlatform.value && !scopeMerchantId.value)) {
+    members.value = []
+    return
+  }
+  try {
+    members.value = listPayload(await getMarketingTagMembers(tag.id, scopeParams()))
+  } catch {
+    members.value = []
+  }
+}
+
+async function submitMember() {
+  if (!selectedTag.value || !String(memberUserId.value).trim()) {
+    ElMessage.warning('请选择标签并填写用户 ID')
+    return
+  }
+  try {
+    await addMarketingTagMember(selectedTag.value.id, String(memberUserId.value).trim(),
+      scopePayload({ expireTime: null }))
+    memberUserId.value = ''
+    ElMessage.success('标签成员已添加')
+    await loadMembers()
+  } catch {
+    // The shared request interceptor already exposes the server error.
+  }
+}
+
+async function removeMember(member) {
+  if (!selectedTag.value || !member?.userId) return
+  try {
+    await removeMarketingTagMember(selectedTag.value.id, member.userId, scopeParams())
+    ElMessage.success('标签成员已移除')
+    await loadMembers()
+  } catch {
+    // The shared request interceptor already exposes the server error.
   }
 }
 
@@ -196,6 +305,10 @@ async function submitCampaign() {
   const form = campaignForm.value
   if (!form.voucherId || !form.name || !form.beginTime || !form.endTime) {
     ElMessage.warning('请完整填写券、名称和时间窗')
+    return
+  }
+  if (form.eligibilityType === 'MANUAL_TAG' && !form.requiredTagId) {
+    ElMessage.warning('请选择人工标签')
     return
   }
   await createMarketingCampaign(scopePayload({
@@ -253,5 +366,7 @@ onMounted(loadAll)
 .time-row .el-input { min-width: 0; }
 .campaign-table { margin-top: 18px; }
 .grant-card { margin-top: 16px; }
+.member-panel { margin-top: 16px; padding-top: 12px; border-top: 1px solid #ebeef5; }
+.member-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
 </style>

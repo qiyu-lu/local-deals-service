@@ -98,6 +98,18 @@ export function createMarketingTag(data) {
   return request.post('/admin/marketing/tags', data)
 }
 
+export function getMarketingTagMembers(tagId, params) {
+  return request.get(`/admin/marketing/tags/${tagId}/members`, { params })
+}
+
+export function addMarketingTagMember(tagId, userId, data) {
+  return request.post(`/admin/marketing/tags/${tagId}/members/${userId}`, data)
+}
+
+export function removeMarketingTagMember(tagId, userId, params) {
+  return request.delete(`/admin/marketing/tags/${tagId}/members/${userId}`, { params })
+}
+
 export function getMarketingCampaigns(params) {
   return request.get('/admin/marketing/campaigns', { params })
 }
