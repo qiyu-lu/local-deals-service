@@ -169,6 +169,9 @@ BLOCKED 结论和 `m6a_20260822b` 的失败均保留，不改判为 PASS；当�
 
 本节记录 R0 通过后继续实施的当前状态；第 8、9 节的历史 BLOCKED 记录不改写。
 
+机器可读结果见 `docs/m6a-targeted-grant-results.md` 和
+`docs/m6a-targeted-grant-summary.csv`。
+
 ### 11.1 契约修正与提交链
 
 以下偏差已在当前提交链中修正：

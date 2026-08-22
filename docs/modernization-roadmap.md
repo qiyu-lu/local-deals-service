@@ -453,7 +453,9 @@ BLOCKED 结论和 `m6a_20260822b` 失败仍保留，不能追溯改判为 PASS�
 R0 后已完成并分段提交标签/活动、统一 grant ledger、真实 MySQL 并发不变量、Controller、
 最小前端、低基数指标和 MySQL/Redis 故障路径；Java 8 安全单元回归 307/307，前端 build
 通过。未执行会连接共享 RocketMQ 或默认 MySQL/Redis/ES 的旧外部 IT，故不把这组证据表述为
-无条件全量外部回归。c 的专用容器和网络已按精确 run-id 清理，未执行 broad prune，未 push。
+无条件全量外部回归。详细结果见 `docs/m6a-targeted-grant-results.md`，机器可读摘要见
+`docs/m6a-targeted-grant-summary.csv`。c 的专用容器和网络已按精确 run-id 清理，未执行
+broad prune，未 push。
 
 ## 10. 阶段 M7：故障演练和展示收口
 
