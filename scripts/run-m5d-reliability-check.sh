@@ -105,7 +105,11 @@ wait_for_app() {
 
 start_application() {
   local instance="$1" app_port="$2" management_port="$3"
-  local log="${ARTIFACT_DIR}/application-${instance}.log"
+  local log_suffix="$instance"
+  if [[ "$ONLY_F5" == "true" ]]; then
+    log_suffix="f5-${instance}"
+  fi
+  local log="${ARTIFACT_DIR}/application-${log_suffix}.log"
   LOCAL_DEALS_DATASOURCE_URL="jdbc:mysql://127.0.0.1:${M5D_MYSQL_PORT}/${SCHEMA}?useSSL=false&serverTimezone=UTC" \
   LOCAL_DEALS_DATASOURCE_USERNAME=root \
   LOCAL_DEALS_DATASOURCE_PASSWORD="$M5D_MYSQL_PASSWORD" \
