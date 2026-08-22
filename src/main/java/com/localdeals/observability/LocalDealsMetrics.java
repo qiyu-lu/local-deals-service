@@ -46,7 +46,7 @@ public class LocalDealsMetrics {
     public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
     public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
     public enum SeckillDbPersistResult { SUCCESS, FAILURE }
-    public enum GrantSource { USER_CLAIM, ADMIN_GRANT }
+    public enum GrantSource { USER_CLAIM, ADMIN_GRANT, TASK_REWARD }
     public enum GrantResult {
         GRANTED, IDEMPOTENT, INELIGIBLE, QUOTA_EXHAUSTED, RULE_CHANGED,
         INACTIVE, UNAVAILABLE, FAILURE
@@ -355,9 +355,11 @@ public class LocalDealsMetrics {
     }
 
     public void recordGrant(VoucherGrantCommand command, GrantResult result) {
-        GrantSource source = VoucherGrantCommand.ADMIN_GRANT.equals(
-                command == null ? null : command.getSource())
-                ? GrantSource.ADMIN_GRANT : GrantSource.USER_CLAIM;
+        String sourceValue = command == null ? null : command.getSource();
+        GrantSource source = VoucherGrantCommand.ADMIN_GRANT.equals(sourceValue)
+                ? GrantSource.ADMIN_GRANT
+                : VoucherGrantCommand.TASK_REWARD.equals(sourceValue)
+                ? GrantSource.TASK_REWARD : GrantSource.USER_CLAIM;
         safeIncrement(grantCommands.get(key(source, result)));
     }
 

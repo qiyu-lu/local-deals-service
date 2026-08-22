@@ -30,7 +30,8 @@ import java.util.regex.Pattern;
 @Service
 public class MarketingAdminService {
     private static final Pattern TAG_CODE = Pattern.compile("[A-Z0-9_-]{2,64}");
-    private static final Set<String> GRANT_MODES = new HashSet<>(Arrays.asList("CLAIM", "ADMIN", "BOTH"));
+    private static final Set<String> GRANT_MODES = new HashSet<>(Arrays.asList(
+            "CLAIM", "ADMIN", "BOTH", "TASK"));
     private static final Set<String> ELIGIBILITY_TYPES = new HashSet<>(Arrays.asList("ALL", "MANUAL_TAG"));
     private static final Set<String> STATUSES = new HashSet<>(Arrays.asList("DRAFT", "ACTIVE", "PAUSED", "CLOSED"));
 

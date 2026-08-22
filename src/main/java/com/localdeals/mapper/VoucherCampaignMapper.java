@@ -65,7 +65,7 @@ public interface VoucherCampaignMapper extends BaseMapper<VoucherCampaign> {
     LocalDateTime currentDatabaseTime();
 
     @Select("SELECT c.id,c.voucher_id,c.name AS campaign_name,v.title AS voucher_title," +
-            "v.pay_value,v.actual_value,c.begin_time,c.end_time,c.rule_version," +
+            "c.grant_mode,v.pay_value,v.actual_value,c.begin_time,c.end_time,c.rule_version," +
             "CASE WHEN g.id IS NOT NULL THEN 'ALREADY_GRANTED' " +
             "WHEN c.begin_time > CURRENT_TIMESTAMP THEN 'NOT_STARTED' " +
             "WHEN c.end_time <= CURRENT_TIMESTAMP THEN 'ENDED' " +
@@ -84,8 +84,10 @@ public interface VoucherCampaignMapper extends BaseMapper<VoucherCampaign> {
             "LEFT JOIN tb_voucher_grant g ON g.campaign_id=c.id " +
             "AND g.merchant_id=c.merchant_id AND g.voucher_id=c.voucher_id " +
             "AND g.user_id=#{userId} " +
-            "WHERE c.status='ACTIVE' AND c.grant_mode IN ('CLAIM','BOTH') " +
+            "AND g.idempotency_key=CASE WHEN c.grant_mode='TASK' " +
+            "THEN #{idempotencyKey} ELSE 'ONCE' END " +
+            "WHERE c.status='ACTIVE' AND c.grant_mode IN ('CLAIM','BOTH','TASK') " +
             "ORDER BY c.id DESC")
     List<VoucherCampaignUserView> selectForUserShop(@Param("shopId") Long shopId,
-            @Param("userId") Long userId);
+            @Param("userId") Long userId, @Param("idempotencyKey") String idempotencyKey);
 }

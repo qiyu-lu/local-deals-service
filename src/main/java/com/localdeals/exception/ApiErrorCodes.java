@@ -19,6 +19,7 @@ public final class ApiErrorCodes {
     public static final String SEARCH_OVERLOADED = "SEARCH_OVERLOADED";
     public static final String DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE";
     public static final String SEARCH_UNAVAILABLE = "SEARCH_UNAVAILABLE";
+    public static final String TASK_NOT_COMPLETED = "TASK_NOT_COMPLETED";
 
     private ApiErrorCodes() {
     }

@@ -60,6 +60,8 @@ management:
         readiness:
           include: db,redis
 local-deals:
+  # Shared business-day boundary for DAILY_SIGN_IN and TASK_REWARD keys.
+  business-time-zone: "${LOCAL_DEALS_BUSINESS_TIME_ZONE:Asia/Shanghai}"
   client-ip:
     # Proxy headers are trusted only when the direct peer is in this explicit list.
     trusted-proxies: "${LOCAL_DEALS_TRUSTED_PROXIES:${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}}"

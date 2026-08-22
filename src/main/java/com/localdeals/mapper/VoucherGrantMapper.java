@@ -9,14 +9,27 @@ import java.util.List;
 
 public interface VoucherGrantMapper extends BaseMapper<VoucherGrant> {
     @Select("SELECT * FROM tb_voucher_grant WHERE campaign_id=#{campaignId} " +
-            "AND user_id=#{userId} LIMIT 1")
+            "AND user_id=#{userId} AND idempotency_key='ONCE' LIMIT 1")
     VoucherGrant selectByCampaignAndUser(@Param("campaignId") Long campaignId,
             @Param("userId") Long userId);
 
     @Select("SELECT * FROM tb_voucher_grant WHERE campaign_id=#{campaignId} " +
-            "AND merchant_id=#{merchantId} AND user_id=#{userId} LIMIT 1")
+            "AND merchant_id=#{merchantId} AND user_id=#{userId} " +
+            "AND idempotency_key='ONCE' LIMIT 1")
     VoucherGrant selectByCampaignAndMerchantAndUser(@Param("campaignId") Long campaignId,
             @Param("merchantId") Long merchantId, @Param("userId") Long userId);
+
+    @Select("SELECT * FROM tb_voucher_grant WHERE campaign_id=#{campaignId} " +
+            "AND user_id=#{userId} AND idempotency_key=#{idempotencyKey} LIMIT 1")
+    VoucherGrant selectByCampaignAndUserAndKey(@Param("campaignId") Long campaignId,
+            @Param("userId") Long userId, @Param("idempotencyKey") String idempotencyKey);
+
+    @Select("SELECT * FROM tb_voucher_grant WHERE campaign_id=#{campaignId} " +
+            "AND merchant_id=#{merchantId} AND user_id=#{userId} " +
+            "AND idempotency_key=#{idempotencyKey} LIMIT 1")
+    VoucherGrant selectByCampaignAndMerchantAndUserAndKey(@Param("campaignId") Long campaignId,
+            @Param("merchantId") Long merchantId, @Param("userId") Long userId,
+            @Param("idempotencyKey") String idempotencyKey);
 
     @Select("SELECT g.* FROM tb_voucher_grant g WHERE g.campaign_id=#{campaignId} " +
             "AND g.merchant_id=#{merchantId} " +

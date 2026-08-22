@@ -8,27 +8,30 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.localdeals.dto.LoginFormDTO;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.UserDTO;
+import com.localdeals.entity.SignRecord;
 import com.localdeals.entity.User;
 import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.exception.ApiStatusException;
+import com.localdeals.mapper.SignMapper;
 import com.localdeals.mapper.UserMapper;
 import com.localdeals.observability.LocalDealsMetrics;
+import com.localdeals.service.BusinessDateProvider;
 import com.localdeals.service.IUserService;
 import com.localdeals.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
-
-import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -67,13 +70,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     private final StringRedisTemplate stringRedisTemplate;
     private final LocalDealsMetrics metrics;
+    private final SignMapper signMapper;
+    private final BusinessDateProvider businessDateProvider;
 
     @Value("${local-deals.auth.log-verification-code:false}")
     private boolean logVerificationCode;
 
     public UserServiceImpl(StringRedisTemplate stringRedisTemplate, LocalDealsMetrics metrics) {
+        this(stringRedisTemplate, metrics, null, null);
+    }
+
+    @Autowired
+    public UserServiceImpl(StringRedisTemplate stringRedisTemplate, LocalDealsMetrics metrics,
+            SignMapper signMapper, BusinessDateProvider businessDateProvider) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.metrics = metrics;
+        this.signMapper = signMapper;
+        this.businessDateProvider = businessDateProvider;
     }
 
     @Override
@@ -219,61 +232,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     @Override
     public Result sign() {
-        //获取当前登录用户
         Long userId = UserHolder.getUser().getId();
-        //获取日期
-        LocalDateTime now = LocalDateTime.now();
-        //拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
-        //获取今天是本月的第几天，来设置第几位的状态
-        int dayOfMonth = now.getDayOfMonth();
-        //写入reids
-        stringRedisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
+        LocalDate today = businessDateProvider.today();
+        SignRecord sign = new SignRecord();
+        sign.setUserId(userId);
+        sign.setYear(today.getYear());
+        sign.setMonth(today.getMonthValue());
+        sign.setDate(today);
+        try {
+            signMapper.insert(sign);
+        } catch (DuplicateKeyException alreadySigned) {
+            // The MySQL unique key is the idempotency boundary for today's sign-in.
+        }
         return Result.ok();
     }
 
     @Override
     public Result signCount() {
-        //获取当前登录用户
         Long userId = UserHolder.getUser().getId();
-        //获取日期
-        LocalDateTime now = LocalDateTime.now();
-        //拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
-        //获取今天是本月的第几天，来设置第几位的状态
-        int dayOfMonth = now.getDayOfMonth();
-        //获取本月截止今天为止的所有签到记录
-        List<Long> result = stringRedisTemplate.opsForValue()
-                .bitField(
-                        key,
-                        BitFieldSubCommands.create()
-                                .get(BitFieldSubCommands.BitFieldType
-                                        .unsigned(dayOfMonth)).valueAt(0)
-                );
-        if(result == null || result.isEmpty()){
-            return Result.ok(0);
-        }
-        Long num = result.get(0);
-        if(num == null || num == 0){
-            return Result.ok(0);
-        }
-        //循环遍历
+        LocalDate today = businessDateProvider.today();
+        List<LocalDate> dates = signMapper.selectDatesUntil(userId, today);
         int count = 0;
-        while(true){
-            //让这个数字与1做与运算，得到最后一位的bit位
-            //判断最后一位是否为0
-            //如果为0，未签到，结束
-            //不为0，已经签到继续，计数器加 1
-            //右移继续判断
-            if((num & 1) == 0){
-                break;
-            }
-            else{
-                count++;
-            }
-            num = num >>> 1;
+        LocalDate expected = today;
+        for (LocalDate date : dates) {
+            if (!expected.equals(date)) break;
+            count++;
+            expected = expected.minusDays(1);
         }
         return Result.ok(count);
     }

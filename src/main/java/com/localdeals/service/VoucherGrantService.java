@@ -6,12 +6,15 @@ import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.mapper.VoucherGrantMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.ZoneId;
 import java.util.List;
 
 @Service
@@ -19,13 +22,24 @@ public class VoucherGrantService {
     private final VoucherGrantMapper grantMapper;
     private final VoucherGrantTransactionService transactionService;
     private final ObjectProvider<LocalDealsMetrics> metricsProvider;
+    private final BusinessDateProvider businessDateProvider;
 
     public VoucherGrantService(VoucherGrantMapper grantMapper,
             VoucherGrantTransactionService transactionService,
             ObjectProvider<LocalDealsMetrics> metricsProvider) {
+        this(grantMapper, transactionService, metricsProvider,
+                new BusinessDateProvider(Clock.systemUTC(), ZoneId.of("Asia/Shanghai")));
+    }
+
+    @Autowired
+    public VoucherGrantService(VoucherGrantMapper grantMapper,
+            VoucherGrantTransactionService transactionService,
+            ObjectProvider<LocalDealsMetrics> metricsProvider,
+            BusinessDateProvider businessDateProvider) {
         this.grantMapper = grantMapper;
         this.transactionService = transactionService;
         this.metricsProvider = metricsProvider;
+        this.businessDateProvider = businessDateProvider;
     }
 
     /**
@@ -37,6 +51,7 @@ public class VoucherGrantService {
         long started = System.nanoTime();
         LocalDealsMetrics.GrantResult result = LocalDealsMetrics.GrantResult.FAILURE;
         try {
+            prepareServerOwnedFields(command);
             validateCommand(command);
             VoucherGrant existing = findExisting(command);
             if (existing != null) {
@@ -89,6 +104,10 @@ public class VoucherGrantService {
     }
 
     private VoucherGrant findExisting(VoucherGrantCommand command) {
+        if (VoucherGrantCommand.TASK_REWARD.equals(command.getSource())) {
+            return grantMapper.selectByCampaignAndUserAndKey(command.getCampaignId(),
+                    command.getUserId(), command.getIdempotencyKey());
+        }
         if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource())) {
             return grantMapper.selectByCampaignAndMerchantAndUser(command.getCampaignId(),
                     command.getMerchantId(), command.getUserId());
@@ -103,7 +122,8 @@ public class VoucherGrantService {
         }
         String source = command.getSource();
         if (!VoucherGrantCommand.USER_CLAIM.equals(source) &&
-                !VoucherGrantCommand.ADMIN_GRANT.equals(source)) {
+                !VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
+                !VoucherGrantCommand.TASK_REWARD.equals(source)) {
             throw new IllegalArgumentException("发放来源不合法");
         }
         if (VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
@@ -113,6 +133,24 @@ public class VoucherGrantService {
         if (VoucherGrantCommand.USER_CLAIM.equals(source) && command.getOperatorId() != null) {
             throw new IllegalArgumentException("用户领取不能指定管理员操作人");
         }
+        if (VoucherGrantCommand.TASK_REWARD.equals(source) &&
+                (command.getMerchantId() != null || command.getOperatorId() != null ||
+                        command.getTaskDate() == null || command.getIdempotencyKey() == null)) {
+            throw new IllegalArgumentException("每日任务奖励参数不合法");
+        }
+    }
+
+    private void prepareServerOwnedFields(VoucherGrantCommand command) {
+        if (command == null) return;
+        if (VoucherGrantCommand.TASK_REWARD.equals(command.getSource())) {
+            java.time.LocalDate taskDate = businessDateProvider.today();
+            command.setTaskDate(taskDate);
+            command.setIdempotencyKey("TASK_REWARD:DAILY_SIGN_IN:" + taskDate);
+        } else {
+            // M6A's USER_CLAIM and ADMIN_GRANT share the same permanent grant.
+            command.setIdempotencyKey(VoucherGrantCommand.ONCE);
+            command.setTaskDate(null);
+        }
     }
 
     private LocalDealsMetrics.GrantResult metricResult(ApiStatusException exception) {
@@ -120,6 +158,9 @@ public class VoucherGrantService {
             return LocalDealsMetrics.GrantResult.UNAVAILABLE;
         }
         if ("CAMPAIGN_INELIGIBLE".equals(exception.getCode())) {
+            return LocalDealsMetrics.GrantResult.INELIGIBLE;
+        }
+        if (ApiErrorCodes.TASK_NOT_COMPLETED.equals(exception.getCode())) {
             return LocalDealsMetrics.GrantResult.INELIGIBLE;
         }
         if ("CAMPAIGN_QUOTA_EXHAUSTED".equals(exception.getCode())) {

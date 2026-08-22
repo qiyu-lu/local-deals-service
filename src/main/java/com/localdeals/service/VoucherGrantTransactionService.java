@@ -5,9 +5,11 @@ import com.localdeals.entity.MarketingTag;
 import com.localdeals.entity.MarketingTagMember;
 import com.localdeals.entity.VoucherCampaign;
 import com.localdeals.entity.VoucherGrant;
+import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.MarketingTagMapper;
 import com.localdeals.mapper.MarketingTagMemberMapper;
+import com.localdeals.mapper.SignMapper;
 import com.localdeals.mapper.VoucherCampaignMapper;
 import com.localdeals.mapper.VoucherGrantMapper;
 import org.springframework.http.HttpStatus;
@@ -23,18 +25,24 @@ public class VoucherGrantTransactionService {
     private final VoucherGrantMapper grantMapper;
     private final MarketingTagMapper tagMapper;
     private final MarketingTagMemberMapper memberMapper;
+    private final SignMapper signMapper;
 
     public VoucherGrantTransactionService(VoucherCampaignMapper campaignMapper,
             VoucherGrantMapper grantMapper, MarketingTagMapper tagMapper,
-            MarketingTagMemberMapper memberMapper) {
+            MarketingTagMemberMapper memberMapper, SignMapper signMapper) {
         this.campaignMapper = campaignMapper;
         this.grantMapper = grantMapper;
         this.tagMapper = tagMapper;
         this.memberMapper = memberMapper;
+        this.signMapper = signMapper;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public VoucherGrant grant(VoucherGrantCommand command) {
+        if (VoucherGrantCommand.TASK_REWARD.equals(command.getSource()) &&
+                signMapper.countByUserAndDate(command.getUserId(), command.getTaskDate()) == 0) {
+            throw conflict(ApiErrorCodes.TASK_NOT_COMPLETED, "请先完成今日签到");
+        }
         VoucherGrant existing = selectExisting(command);
         if (existing != null) return existing;
 
@@ -69,6 +77,7 @@ public class VoucherGrantTransactionService {
         grant.setVoucherId(campaign.getVoucherId());
         grant.setUserId(command.getUserId());
         grant.setSource(command.getSource());
+        grant.setIdempotencyKey(command.getIdempotencyKey());
         grant.setRuleVersion(campaign.getRuleVersion());
         grant.setOperatorId(command.getOperatorId());
         if (grantMapper.insert(grant) != 1) throw new IllegalStateException("发券流水写入失败");
@@ -76,6 +85,10 @@ public class VoucherGrantTransactionService {
     }
 
     private VoucherGrant selectExisting(VoucherGrantCommand command) {
+        if (VoucherGrantCommand.TASK_REWARD.equals(command.getSource())) {
+            return grantMapper.selectByCampaignAndUserAndKey(command.getCampaignId(),
+                    command.getUserId(), command.getIdempotencyKey());
+        }
         if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource())) {
             return grantMapper.selectByCampaignAndMerchantAndUser(command.getCampaignId(),
                     command.getMerchantId(), command.getUserId());
@@ -98,6 +111,10 @@ public class VoucherGrantTransactionService {
         if (VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
                 !"ADMIN".equals(campaign.getGrantMode()) && !"BOTH".equals(campaign.getGrantMode())) {
             throw conflict("CAMPAIGN_GRANT_MODE_UNSUPPORTED", "活动不支持管理员发放");
+        }
+        if (VoucherGrantCommand.TASK_REWARD.equals(source) &&
+                !"TASK".equals(campaign.getGrantMode())) {
+            throw conflict("CAMPAIGN_GRANT_MODE_UNSUPPORTED", "活动不支持每日任务奖励");
         }
     }
 

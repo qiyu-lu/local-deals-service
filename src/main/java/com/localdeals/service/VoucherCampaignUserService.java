@@ -6,6 +6,7 @@ import com.localdeals.dto.VoucherGrantUserView;
 import com.localdeals.dto.VoucherCampaignUserView;
 import com.localdeals.entity.VoucherGrant;
 import com.localdeals.mapper.VoucherCampaignMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -15,17 +16,27 @@ import java.util.List;
 public class VoucherCampaignUserService {
     private final VoucherCampaignMapper campaignMapper;
     private final VoucherGrantService grantService;
+    private final BusinessDateProvider businessDateProvider;
 
     public VoucherCampaignUserService(VoucherCampaignMapper campaignMapper,
             VoucherGrantService grantService) {
+        this(campaignMapper, grantService,
+                new BusinessDateProvider(java.time.Clock.systemUTC(), java.time.ZoneId.of("Asia/Shanghai")));
+    }
+
+    @Autowired
+    public VoucherCampaignUserService(VoucherCampaignMapper campaignMapper,
+            VoucherGrantService grantService, BusinessDateProvider businessDateProvider) {
         this.campaignMapper = campaignMapper;
         this.grantService = grantService;
+        this.businessDateProvider = businessDateProvider;
     }
 
     public List<VoucherCampaignUserView> listForShop(Long shopId, Long userId) {
         requireId(shopId, "店铺不能为空");
         requireId(userId, "用户不能为空");
-        List<VoucherCampaignUserView> views = campaignMapper.selectForUserShop(shopId, userId);
+        List<VoucherCampaignUserView> views = campaignMapper.selectForUserShop(shopId, userId,
+                businessDateProvider.dailySignInIdempotencyKey());
         for (VoucherCampaignUserView view : views) {
             view.setClaimReason(claimReason(view.getClaimState()));
         }
@@ -44,6 +55,21 @@ public class VoucherCampaignUserService {
         command.setUserId(userId);
         command.setExpectedRuleVersion(request.getExpectedRuleVersion());
         command.setSource(VoucherGrantCommand.USER_CLAIM);
+        return toUserView(grantService.grant(command));
+    }
+
+    public VoucherGrantUserView taskReward(Long campaignId, VoucherGrantClaimRequest request, Long userId) {
+        requireId(campaignId, "活动不能为空");
+        requireId(userId, "用户不能为空");
+        if (request == null || request.getExpectedRuleVersion() == null ||
+                request.getExpectedRuleVersion() < 1) {
+            throw new IllegalArgumentException("expected ruleVersion 不能为空");
+        }
+        VoucherGrantCommand command = new VoucherGrantCommand();
+        command.setCampaignId(campaignId);
+        command.setUserId(userId);
+        command.setExpectedRuleVersion(request.getExpectedRuleVersion());
+        command.setSource(VoucherGrantCommand.TASK_REWARD);
         return toUserView(grantService.grant(command));
     }
 

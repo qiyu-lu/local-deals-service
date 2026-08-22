@@ -20,6 +20,7 @@ public class VoucherCampaignUserView {
     private Long voucherId;
     private String campaignName;
     private String voucherTitle;
+    private String grantMode;
     private Long payValue;
     private Long actualValue;
     private LocalDateTime beginTime;

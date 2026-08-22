@@ -34,6 +34,12 @@ public class VoucherCampaignController {
         return Result.ok(userService.claim(campaignId, request, currentUserId()));
     }
 
+    @PostMapping("/{campaignId}/task-reward")
+    public Result taskReward(@PathVariable("campaignId") Long campaignId,
+            @RequestBody VoucherGrantClaimRequest request) {
+        return Result.ok(userService.taskReward(campaignId, request, currentUserId()));
+    }
+
     private Long currentUserId() {
         UserDTO user = UserHolder.getUser();
         if (user == null || user.getId() == null) {
