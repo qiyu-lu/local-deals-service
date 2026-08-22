@@ -4,11 +4,13 @@ import com.localdeals.dto.AdminPrincipal;
 import com.localdeals.dto.MarketingTagMemberRequest;
 import com.localdeals.dto.MarketingTagRequest;
 import com.localdeals.dto.VoucherCampaignRequest;
+import com.localdeals.dto.VoucherCampaignStatusRequest;
 import com.localdeals.entity.AdminAccount;
 import com.localdeals.entity.MarketingTag;
 import com.localdeals.entity.Merchant;
 import com.localdeals.entity.Shop;
 import com.localdeals.entity.Voucher;
+import com.localdeals.entity.VoucherCampaign;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.AdminAccountMapper;
 import com.localdeals.mapper.MarketingTagMapper;
@@ -97,8 +99,38 @@ class MarketingAdminIsolationIT {
                 .isInstanceOf(ApiStatusException.class)
                 .hasMessage("用户与当前商户尚无业务关系");
 
-        assertThat(service.createCampaign(campaignRequest(null, voucherA.getId(), tagA.getId()))
-                .getMerchantId()).isEqualTo(merchantA.getId());
+        VoucherCampaign campaign = service.createCampaign(campaignRequest(null, voucherA.getId(), tagA.getId()));
+        assertThat(campaign.getMerchantId()).isEqualTo(merchantA.getId());
+        VoucherCampaignRequest update = campaignRequest(null, voucherA.getId(), tagA.getId());
+        update.setExpectedStatus("DRAFT");
+        update.setExpectedRuleVersion(campaign.getRuleVersion());
+        update.setName("M6A targeted campaign v2");
+        VoucherCampaign updated = service.updateCampaign(campaign.getId(), update);
+        assertThat(updated.getRuleVersion()).isEqualTo(2L);
+        VoucherCampaignRequest staleUpdate = campaignRequest(null, voucherA.getId(), tagA.getId());
+        staleUpdate.setExpectedStatus("DRAFT");
+        staleUpdate.setExpectedRuleVersion(campaign.getRuleVersion());
+        assertThatThrownBy(() -> service.updateCampaign(campaign.getId(), staleUpdate))
+                .isInstanceOf(ApiStatusException.class)
+                .hasMessage("活动已变化或新额度小于已发放数量");
+        VoucherCampaignStatusRequest activate = new VoucherCampaignStatusRequest();
+        activate.setMerchantId(null);
+        activate.setExpectedStatus("DRAFT");
+        activate.setExpectedRuleVersion(updated.getRuleVersion());
+        activate.setStatus("ACTIVE");
+        VoucherCampaign active = service.changeStatus(campaign.getId(), activate);
+        assertThat(active.getStatus()).isEqualTo("ACTIVE");
+        VoucherCampaignRequest activeUpdate = campaignRequest(null, voucherA.getId(), tagA.getId());
+        activeUpdate.setExpectedStatus("ACTIVE");
+        activeUpdate.setExpectedRuleVersion(active.getRuleVersion());
+        assertThatThrownBy(() -> service.updateCampaign(campaign.getId(), activeUpdate))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("expected status 只允许 DRAFT 或 PAUSED");
+        VoucherCampaignStatusRequest pause = new VoucherCampaignStatusRequest();
+        pause.setExpectedStatus("ACTIVE");
+        pause.setExpectedRuleVersion(active.getRuleVersion());
+        pause.setStatus("PAUSED");
+        assertThat(service.changeStatus(campaign.getId(), pause).getStatus()).isEqualTo("PAUSED");
         assertThatThrownBy(() -> service.createCampaign(
                 campaignRequest(null, voucherB.getId(), tagA.getId())))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -8,8 +8,11 @@ import com.localdeals.mapper.MarketingTagMemberMapper;
 import com.localdeals.mapper.MerchantMapper;
 import com.localdeals.mapper.ShopMapper;
 import com.localdeals.mapper.VoucherCampaignMapper;
+import com.localdeals.mapper.VoucherGrantMapper;
 import com.localdeals.mapper.VoucherMapper;
 import com.localdeals.service.MarketingAdminService;
+import com.localdeals.service.VoucherGrantService;
+import com.localdeals.service.VoucherGrantTransactionService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.mapper.MapperFactoryBean;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -19,6 +22,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerA
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.context.annotation.Import;
 
 /**
@@ -26,6 +30,7 @@ import org.springframework.context.annotation.Import;
  * application's component scan or its RocketMQ/Redis/ES/WebSocket setup.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableTransactionManagement
 @ImportAutoConfiguration(classes = {
         DataSourceAutoConfiguration.class,
         DataSourceTransactionManagerAutoConfiguration.class,
@@ -33,7 +38,8 @@ import org.springframework.context.annotation.Import;
         FlywayAutoConfiguration.class,
         MybatisPlusAutoConfiguration.class
 })
-@Import({MybatisConfig.class, MarketingAdminService.class})
+@Import({MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
+        VoucherGrantTransactionService.class})
 public class M6aPersistenceTestConfiguration {
 
     @Bean
@@ -70,6 +76,11 @@ public class M6aPersistenceTestConfiguration {
     @Bean
     public MapperFactoryBean<VoucherMapper> voucherMapper(SqlSessionFactory sqlSessionFactory) {
         return mapper(VoucherMapper.class, sqlSessionFactory);
+    }
+
+    @Bean
+    public MapperFactoryBean<VoucherGrantMapper> voucherGrantMapper(SqlSessionFactory sqlSessionFactory) {
+        return mapper(VoucherGrantMapper.class, sqlSessionFactory);
     }
 
     private <T> MapperFactoryBean<T> mapper(Class<T> mapperType, SqlSessionFactory sqlSessionFactory) {
