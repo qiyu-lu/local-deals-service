@@ -78,6 +78,7 @@ export function firstPermittedRoute() {
     ['dashboard:read', '/'],
     ['shop:read', '/shops'],
     ['voucher:read', '/vouchers'],
+    ['marketing:read', '/marketing'],
     ['order:realtime', '/realtime']
   ]
   return candidates.find(([permission]) => hasAdminPermission(permission))?.[1] || '/forbidden'
@@ -91,4 +92,3 @@ export function useAdminSession() {
     hasPermission: hasAdminPermission
   }
 }
-

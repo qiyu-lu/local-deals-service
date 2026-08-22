@@ -2,8 +2,13 @@ package com.localdeals.service;
 
 import com.localdeals.dto.VoucherGrantCommand;
 import com.localdeals.entity.VoucherGrant;
+import com.localdeals.exception.ApiStatusException;
+import com.localdeals.observability.LocalDealsMetrics;
 import com.localdeals.mapper.VoucherGrantMapper;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -12,11 +17,14 @@ import java.util.List;
 public class VoucherGrantService {
     private final VoucherGrantMapper grantMapper;
     private final VoucherGrantTransactionService transactionService;
+    private final ObjectProvider<LocalDealsMetrics> metricsProvider;
 
     public VoucherGrantService(VoucherGrantMapper grantMapper,
-            VoucherGrantTransactionService transactionService) {
+            VoucherGrantTransactionService transactionService,
+            ObjectProvider<LocalDealsMetrics> metricsProvider) {
         this.grantMapper = grantMapper;
         this.transactionService = transactionService;
+        this.metricsProvider = metricsProvider;
     }
 
     /**
@@ -25,15 +33,42 @@ public class VoucherGrantService {
      * before the idempotent re-read.
      */
     public VoucherGrant grant(VoucherGrantCommand command) {
-        validateCommand(command);
-        VoucherGrant existing = findExisting(command);
-        if (existing != null) return existing;
+        long started = System.nanoTime();
+        LocalDealsMetrics.GrantResult result = LocalDealsMetrics.GrantResult.FAILURE;
         try {
-            return transactionService.grant(command);
-        } catch (DuplicateKeyException duplicate) {
-            VoucherGrant raced = findExisting(command);
-            if (raced != null) return raced;
-            throw duplicate;
+            validateCommand(command);
+            VoucherGrant existing = findExisting(command);
+            if (existing != null) {
+                result = LocalDealsMetrics.GrantResult.IDEMPOTENT;
+                return existing;
+            }
+            try {
+                VoucherGrant granted = transactionService.grant(command);
+                result = LocalDealsMetrics.GrantResult.GRANTED;
+                return granted;
+            } catch (DuplicateKeyException duplicate) {
+                VoucherGrant raced = findExisting(command);
+                if (raced != null) {
+                    result = LocalDealsMetrics.GrantResult.IDEMPOTENT;
+                    return raced;
+                }
+                throw duplicate;
+            }
+        } catch (ApiStatusException known) {
+            result = metricResult(known);
+            throw known;
+        } catch (DataAccessException unavailable) {
+            result = LocalDealsMetrics.GrantResult.UNAVAILABLE;
+            throw unavailable;
+        } catch (RuntimeException failure) {
+            result = LocalDealsMetrics.GrantResult.FAILURE;
+            throw failure;
+        } finally {
+            LocalDealsMetrics metrics = metricsProvider.getIfAvailable();
+            if (metrics != null) {
+                metrics.recordGrant(command, result);
+                metrics.recordGrantDuration(System.nanoTime() - started);
+            }
         }
     }
 
@@ -74,5 +109,26 @@ public class VoucherGrantService {
         if (VoucherGrantCommand.USER_CLAIM.equals(source) && command.getOperatorId() != null) {
             throw new IllegalArgumentException("用户领取不能指定管理员操作人");
         }
+    }
+
+    private LocalDealsMetrics.GrantResult metricResult(ApiStatusException exception) {
+        if (exception.getStatus() == HttpStatus.SERVICE_UNAVAILABLE) {
+            return LocalDealsMetrics.GrantResult.UNAVAILABLE;
+        }
+        if ("CAMPAIGN_INELIGIBLE".equals(exception.getCode())) {
+            return LocalDealsMetrics.GrantResult.INELIGIBLE;
+        }
+        if ("CAMPAIGN_QUOTA_EXHAUSTED".equals(exception.getCode())) {
+            return LocalDealsMetrics.GrantResult.QUOTA_EXHAUSTED;
+        }
+        if ("CAMPAIGN_RULE_CHANGED".equals(exception.getCode())) {
+            return LocalDealsMetrics.GrantResult.RULE_CHANGED;
+        }
+        if ("CAMPAIGN_NOT_ACTIVE".equals(exception.getCode()) ||
+                "CAMPAIGN_NOT_STARTED".equals(exception.getCode()) ||
+                "CAMPAIGN_ENDED".equals(exception.getCode())) {
+            return LocalDealsMetrics.GrantResult.INACTIVE;
+        }
+        return LocalDealsMetrics.GrantResult.FAILURE;
     }
 }

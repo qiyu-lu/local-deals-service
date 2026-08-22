@@ -90,4 +90,28 @@ export function createAdminSeckillVoucher(shopId, data) {
   return request.post(`/admin/shops/${shopId}/vouchers/seckill`, data)
 }
 
+export function getMarketingTags(params) {
+  return request.get('/admin/marketing/tags', { params })
+}
+
+export function createMarketingTag(data) {
+  return request.post('/admin/marketing/tags', data)
+}
+
+export function getMarketingCampaigns(params) {
+  return request.get('/admin/marketing/campaigns', { params })
+}
+
+export function createMarketingCampaign(data) {
+  return request.post('/admin/marketing/campaigns', data)
+}
+
+export function updateMarketingCampaignStatus(id, data) {
+  return request.put(`/admin/marketing/campaigns/${id}/status`, data)
+}
+
+export function grantMarketingCampaign(id, data) {
+  return request.post(`/admin/marketing/campaigns/${id}/grants`, data)
+}
+
 export default request

@@ -2,6 +2,7 @@ package com.localdeals.observability;
 
 import com.localdeals.service.BlogHotRankReadResult;
 import com.localdeals.service.BlogHotRankService;
+import com.localdeals.dto.VoucherGrantCommand;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
@@ -45,6 +46,11 @@ public class LocalDealsMetrics {
     public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
     public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
     public enum SeckillDbPersistResult { SUCCESS, FAILURE }
+    public enum GrantSource { USER_CLAIM, ADMIN_GRANT }
+    public enum GrantResult {
+        GRANTED, IDEMPOTENT, INELIGIBLE, QUOTA_EXHAUSTED, RULE_CHANGED,
+        INACTIVE, UNAVAILABLE, FAILURE
+    }
     public enum MqConsumeOutcome {
         PERSISTED,
         ALREADY_SUCCESS,
@@ -87,6 +93,8 @@ public class LocalDealsMetrics {
             new EnumMap<>(MqConsumeOutcome.class);
     private final Map<SeckillDbPersistResult, Timer> seckillDbPersistDurations =
             new EnumMap<>(SeckillDbPersistResult.class);
+    private final Map<String, Counter> grantCommands = new HashMap<>();
+    private final Timer grantDuration;
     private final Map<String, Counter> trafficDecisions = new HashMap<>();
     private final Map<TrafficResource, AtomicInteger> trafficInflight =
             new EnumMap<>(TrafficResource.class);
@@ -246,6 +254,17 @@ public class LocalDealsMetrics {
                             .publishPercentileHistogram()
                             .register(registry));
         }
+        for (GrantSource source : GrantSource.values()) {
+            for (GrantResult result : GrantResult.values()) {
+                grantCommands.put(key(source, result),
+                        Counter.builder("local_deals.marketing.grant")
+                                .description("Targeted voucher grant facade outcomes")
+                                .tags("source", metricValue(source), "result", metricValue(result))
+                                .register(registry));
+            }
+        }
+        grantDuration = histogramTimer(registry, "local_deals.marketing.grant.duration",
+                "Targeted voucher grant facade duration");
         registerTrafficDecision(registry, TrafficResource.SECKILL,
                 TrafficResult.ALLOWED, TrafficReason.NONE);
         registerTrafficDecision(registry, TrafficResource.SECKILL,
@@ -333,6 +352,17 @@ public class LocalDealsMetrics {
 
     public void recordSeckillDbPersist(SeckillDbPersistResult result, long nanos) {
         safeRecord(seckillDbPersistDurations.get(result), nanos);
+    }
+
+    public void recordGrant(VoucherGrantCommand command, GrantResult result) {
+        GrantSource source = VoucherGrantCommand.ADMIN_GRANT.equals(
+                command == null ? null : command.getSource())
+                ? GrantSource.ADMIN_GRANT : GrantSource.USER_CLAIM;
+        safeIncrement(grantCommands.get(key(source, result)));
+    }
+
+    public void recordGrantDuration(long nanos) {
+        safeRecord(grantDuration, nanos);
     }
 
     public void recordTraffic(TrafficResource resource, TrafficResult result, TrafficReason reason) {

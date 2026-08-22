@@ -2,6 +2,7 @@ package com.localdeals.observability;
 
 import com.localdeals.service.BlogHotRankReadResult;
 import com.localdeals.service.BlogHotRankService;
+import com.localdeals.dto.VoucherGrantCommand;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -163,5 +164,24 @@ class LocalDealsMetricsTest {
                 .counter().count()).isEqualTo(1D);
         assertThat(registry.get("local_deals.traffic.inflight")
                 .tag("resource", "search").gauge().value()).isEqualTo(3D);
+    }
+
+    @Test
+    void grantMetersUseOnlyFiniteSourceAndResultVocabulary() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        LocalDealsMetrics metrics = new LocalDealsMetrics(registry);
+        VoucherGrantCommand command = new VoucherGrantCommand();
+        command.setSource(VoucherGrantCommand.USER_CLAIM);
+
+        metrics.recordGrant(command, LocalDealsMetrics.GrantResult.GRANTED);
+        metrics.recordGrantDuration(1_000L);
+
+        assertThat(registry.get("local_deals.marketing.grant").counters()).hasSize(
+                LocalDealsMetrics.GrantSource.values().length *
+                        LocalDealsMetrics.GrantResult.values().length);
+        assertThat(registry.get("local_deals.marketing.grant")
+                .tags("source", "user_claim", "result", "granted").counter().count())
+                .isEqualTo(1D);
+        assertThat(registry.find("local_deals.marketing.grant.duration").timer()).isNotNull();
     }
 }

@@ -39,6 +39,12 @@ const routes = [
         meta: { permission: 'voucher:read' }
       },
       {
+        path: 'marketing',
+        name: 'Marketing',
+        component: () => import('../views/Marketing.vue'),
+        meta: { permission: 'marketing:read' }
+      },
+      {
         path: 'realtime',
         name: 'Realtime',
         component: () => import('../views/Realtime.vue'),

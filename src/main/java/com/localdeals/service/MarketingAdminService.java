@@ -49,6 +49,13 @@ public class MarketingAdminService {
         return tagMapper.selectAllScoped(resolveMerchant(requestedMerchantId));
     }
 
+    public List<MarketingTagMember> listMembers(Long tagId, Long requestedMerchantId) {
+        if (tagId == null) throw new IllegalArgumentException("标签不能为空");
+        Long merchantId = resolveMerchant(requestedMerchantId);
+        if (tagMapper.selectScoped(tagId, merchantId) == null) throw notFound();
+        return memberMapper.selectAllScoped(merchantId, tagId);
+    }
+
     @Transactional
     public MarketingTag createTag(MarketingTagRequest request) {
         if (request == null) throw new IllegalArgumentException("标签信息不能为空");
@@ -107,6 +114,14 @@ public class MarketingAdminService {
 
     public List<VoucherCampaign> listCampaigns(Long requestedMerchantId) {
         return campaignMapper.selectAllScoped(resolveMerchant(requestedMerchantId));
+    }
+
+    public VoucherCampaign getCampaign(Long campaignId, Long requestedMerchantId) {
+        if (campaignId == null) throw new IllegalArgumentException("活动不能为空");
+        Long merchantId = resolveMerchant(requestedMerchantId);
+        VoucherCampaign campaign = campaignMapper.selectScoped(campaignId, merchantId);
+        if (campaign == null) throw notFound();
+        return campaign;
     }
 
     @Transactional

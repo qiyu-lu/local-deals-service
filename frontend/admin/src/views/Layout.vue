@@ -24,6 +24,10 @@
           <el-icon><Ticket /></el-icon>
           <span>秒杀券管理</span>
         </el-menu-item>
+        <el-menu-item v-if="canReadMarketing" index="/marketing">
+          <el-icon><PriceTag /></el-icon>
+          <span>定向发券</span>
+        </el-menu-item>
         <el-menu-item v-if="canReadRealtimeOrders" index="/realtime">
           <el-icon><Connection /></el-icon>
           <span>实时订单</span>
@@ -51,7 +55,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Odometer, Shop, Ticket, Connection } from '@element-plus/icons-vue'
+import { Odometer, Shop, Ticket, Connection, PriceTag } from '@element-plus/icons-vue'
 import { logout } from '../api'
 import { useAdminWs } from '../composables/useAdminWs'
 import { clearAdminSession, useAdminSession } from '../auth/adminSession'
@@ -65,6 +69,7 @@ const activeMenu = computed(() => route.path)
 const canReadDashboard = computed(() => hasPermission('dashboard:read'))
 const canReadShops = computed(() => hasPermission('shop:read'))
 const canReadVouchers = computed(() => hasPermission('voucher:read'))
+const canReadMarketing = computed(() => hasPermission('marketing:read'))
 const canReadRealtimeOrders = computed(() => hasPermission('order:realtime'))
 const scopeLabel = computed(() => principal.value?.scopeType === 'PLATFORM' ? '平台范围' : '商户范围')
 
