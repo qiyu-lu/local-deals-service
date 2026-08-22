@@ -174,6 +174,8 @@ class LocalDealsMetricsTest {
         command.setSource(VoucherGrantCommand.USER_CLAIM);
 
         metrics.recordGrant(command, LocalDealsMetrics.GrantResult.GRANTED);
+        command.setSource(VoucherGrantCommand.TASK_REWARD);
+        metrics.recordGrant(command, LocalDealsMetrics.GrantResult.IDEMPOTENT);
         metrics.recordGrantDuration(1_000L);
 
         assertThat(registry.get("local_deals.marketing.grant").counters()).hasSize(
@@ -181,6 +183,9 @@ class LocalDealsMetricsTest {
                         LocalDealsMetrics.GrantResult.values().length);
         assertThat(registry.get("local_deals.marketing.grant")
                 .tags("source", "user_claim", "result", "granted").counter().count())
+                .isEqualTo(1D);
+        assertThat(registry.get("local_deals.marketing.grant")
+                .tags("source", "task_reward", "result", "idempotent").counter().count())
                 .isEqualTo(1D);
         assertThat(registry.find("local_deals.marketing.grant.duration").timer()).isNotNull();
     }

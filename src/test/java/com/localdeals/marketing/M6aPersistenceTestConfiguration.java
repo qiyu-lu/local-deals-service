@@ -1,12 +1,14 @@
 package com.localdeals.marketing;
 
 import com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration;
+import com.localdeals.config.BusinessDateConfiguration;
 import com.localdeals.config.MybatisConfig;
 import com.localdeals.mapper.AdminAccountMapper;
 import com.localdeals.mapper.MarketingTagMapper;
 import com.localdeals.mapper.MarketingTagMemberMapper;
 import com.localdeals.mapper.MerchantMapper;
 import com.localdeals.mapper.ShopMapper;
+import com.localdeals.mapper.SignMapper;
 import com.localdeals.mapper.VoucherCampaignMapper;
 import com.localdeals.mapper.VoucherGrantMapper;
 import com.localdeals.mapper.VoucherMapper;
@@ -39,7 +41,7 @@ import org.springframework.context.annotation.Import;
         FlywayAutoConfiguration.class,
         MybatisPlusAutoConfiguration.class
 })
-@Import({MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
+@Import({BusinessDateConfiguration.class, MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
         VoucherGrantTransactionService.class, VoucherCampaignUserService.class})
 public class M6aPersistenceTestConfiguration {
 
@@ -67,6 +69,11 @@ public class M6aPersistenceTestConfiguration {
     @Bean
     public MapperFactoryBean<ShopMapper> shopMapper(SqlSessionFactory sqlSessionFactory) {
         return mapper(ShopMapper.class, sqlSessionFactory);
+    }
+
+    @Bean
+    public MapperFactoryBean<SignMapper> signMapper(SqlSessionFactory sqlSessionFactory) {
+        return mapper(SignMapper.class, sqlSessionFactory);
     }
 
     @Bean

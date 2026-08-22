@@ -114,6 +114,8 @@ class MarketingMvcSecurityTest {
         grantView.setRuleVersion(2L);
         when(campaignUserService.claim(eq(7L), any(VoucherGrantClaimRequest.class), eq(900001L)))
                 .thenReturn(grantView);
+        when(campaignUserService.taskReward(eq(7L), any(VoucherGrantClaimRequest.class), eq(900001L)))
+                .thenReturn(grantView);
         when(campaignUserService.listMine(900001L))
                 .thenReturn(Collections.singletonList(grantView));
         mockMvc.perform(get("/voucher-campaigns/shop/1")
@@ -137,6 +139,15 @@ class MarketingMvcSecurityTest {
                 .andExpect(jsonPath("$.data.userId").doesNotExist())
                 .andExpect(jsonPath("$.data.source").doesNotExist())
                 .andExpect(jsonPath("$.data.operatorId").doesNotExist());
+        mockMvc.perform(post("/voucher-campaigns/7/task-reward")
+                        .header("Authorization", USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRuleVersion\":\"1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.merchantId").doesNotExist())
+                .andExpect(jsonPath("$.data.userId").doesNotExist())
+                .andExpect(jsonPath("$.data.operatorId").doesNotExist())
+                .andExpect(jsonPath("$.data.idempotencyKey").doesNotExist());
         mockMvc.perform(get("/voucher-grants/mine")
                         .header("Authorization", USER_TOKEN))
                 .andExpect(status().isOk())
