@@ -473,6 +473,8 @@ d026db3、`m6a_20260822b` 和 `m6a_close_20260822a` BLOCKED 记录保留，不�
 
 ### 9.9 M6B 当前实施边界（2026-08-22）
 
+以下 M6C 未开始的表述是 2026-08-22 的历史边界快照；当前收口结论见 9.11/9.12。
+
 M6B = **每日签到与任务奖励**，实施计划见 `docs/m6b-daily-task-plan.md`。本阶段只实现固定
 任务 `DAILY_SIGN_IN`：签到事实落 MySQL，连续签到从 MySQL 日期记录计算，TASK 活动奖励复用
 M6A 的统一 grant 事务和标签资格；默认业务时区为 `Asia/Shanghai`，日期和幂等键均由服务端生成。
@@ -486,8 +488,32 @@ M6C = **批量发放与通知 Outbox**，本阶段未开始且未经授权；不
 M6B 已完成：V10 fresh V1→V10、upgrade V9→V10、MySQL 签到唯一事实、固定任务每日奖励、
 业务时区、统一 grant 事务、TASK 查询幂等、前端最小闭环和 Java/Node/admin 验证均通过。真实
 隔离证据、并发不变量、fixture 清零、strace 目标和失败尝试见 `docs/m6b-daily-task-results.md`。
-当前阶段标记为 `M6 IN PROGRESS`；M6C（批量发放与通知 Outbox）未开始且未经授权。M5/M6A
-历史 BLOCKED 证据保持原样，不追溯改判。
+当时阶段仍标记为 `M6 IN PROGRESS`，M6C 尚未开始。M5/M6A 历史 BLOCKED 证据保持原样，
+不追溯改判。
+
+### 9.11 M6C 完成结论（2026-08-23）
+
+M6C 已完成，结果见 `docs/m6c-batch-notification-results.md`，机器摘要见
+`docs/m6c-batch-notification-summary.csv`。V11 fresh V1→V11 与 upgrade V10→V11 均通过；
+历史 grant 没有通知回填。批量 Job 只接受 ADMIN/BOTH + MANUAL_TAG，HTTP 线程不扫描人群，
+后台使用 MySQL 行锁、INSERT SELECT 快照和有限 item 批次，统一调用 VoucherGrantService
+并复用 ONCE。Job 支持 requestId 幂等、pause/resume、失败明细和只重试技术 FAILED。
+
+真正新增 grant、granted_count 与通知 Outbox 在同一事务内提交；Redis Pub/Sub/WebSocket 使用
+独立用户频道和 VOUCHER_GRANTED eventId，Redis 停止时保留 PENDING，恢复后可发布并收敛。
+Job/通知 worker 默认关闭。最终隔离 run-id 为 `m6c_20260823h`，只使用专用 MySQL/Redis，
+strace 只允许专用端口和本机 Unix socket；未启动 RocketMQ/ES，也不声称 MQ 通知链路已验证。
+
+M6C 真实 Java IT 为 8/8，M6A/M6B 定向业务回归为 5/5，安全 Java/MVC/指标/WebSocket
+回归为 24/24，Node 契约和 admin build 通过。100 item 实测 target/granted/idempotent/
+skipped/failed=100/100/0/0/0，6 个 worker-equivalent 批次，收敛 722ms；item P99 和入口
+限流数按未测量范围记录为 NA；Redis 恢复时间 25ms，pending/oldest age 来自真实 Outbox 行。
+初轮断言、死锁、REPEATABLE READ 可见性和 strace parser 失败均保留，未改写为 PASS。
+
+### 9.12 M6 收口结论（2026-08-23）
+
+M6A、M6B、M6C 的业务闭环、迁移、权限、前端和隔离回归均已形成结果文档，M6 标记为
+`COMPLETED`。M7 保持 `not started`；核销、支付、退款和技术栈升级不属于本次收口。
 
 ## 10. 阶段 M7：故障演练和展示收口
 
@@ -604,17 +630,19 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-M5 和 M6A 已收口。新会话先核对本阶段提交链、`docs/m6a-targeted-grant-results.md` 和工作区状态；没有
-用户明确授权时不自动进入 M6B/M6C。发布或演示前可复验 M5D，但必须使用新的 run-id 和专用依赖，
-保留 F5 全量预检、consumer-level/Canal E2E 边界以及历史负面证据。
+M5 和 M6 已收口，M7 尚未开始。新会话先核对本阶段提交链、
+`docs/m6c-batch-notification-results.md`、`docs/m6a-targeted-grant-results.md` 和工作区状态；
+没有用户明确授权时不自动进入 M7 或技术栈升级。发布或演示前可复验既有阶段，但必须使用新的
+run-id 和专用依赖，保留 consumer-level/Canal E2E 边界以及历史负面证据。
 
 ### 可复制到新会话的提示词
 
 ```text
-请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md 和
-docs/m6a-targeted-grant-results.md，核对 branch、HEAD、status、diff 与 M6A 提交链，不覆盖用户改动。
-M5A--M5D、M6A 已完成；未经用户明确授权不要实施 M6B/M6C 或技术栈升级。如只复验 M5D，必须使用新的
-run-id 专用依赖，保留严格 F5 门禁、全部负面证据和 consumer-level/Canal E2E 边界。
+请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md、
+docs/m6c-batch-notification-results.md 和 docs/m6a-targeted-grant-results.md，核对 branch、HEAD、
+status、diff 与 M6 提交链，不覆盖用户改动。M5A--M5D、M6A--M6C 已完成，M7 尚未开始；未经用户
+明确授权不要进入 M7、核销/支付/退款或技术栈升级。复验时必须使用新的 run-id 专用依赖，保留
+全部负面证据与 MQ/ES/外部 IT 未验证边界。
 ```
 
 ## 16. 路线完成的判定
