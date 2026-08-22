@@ -1,6 +1,6 @@
 # M6A 商户定向发券最小闭环实施契约
 
-> 状态：实施中
+> 状态：BLOCKED；命中共享依赖停止线，M6A 未完成
 >
 > 起点：`2f83b6b docs(observability): record M5D recovery evidence`
 >
@@ -88,3 +88,17 @@ admin grant 并发仍只有一行；失败、503、无资格和旧规则版本�
 按契约、schema/domain、grant、API/frontend、隔离测试、结果文档拆为可回滚本地提交；每次显式
 暂存并检查 staged diff，不提交生成物或凭据，不 push。命中用户定义的任一停止线时保留原始证据、
 写明 BLOCKED 和副作用并停止，不放宽不变量或扩展范围。
+
+## 8. 阻塞记录（2026-08-22）
+
+首次 `MarketingAdminIsolationIT` 使用了 run-id 专用 MySQL `127.0.0.1:24316` 和 Redis
+`127.0.0.1:27389`，但 Spring RocketMQ 自动配置仍连接默认共享
+`127.0.0.1:9876/10911`。该测试没有调用 MQ、没有发送消息，随后 JVM 已退出；测试事务回滚后
+专用 fresh schema 中 fixture merchant/tag/member/campaign/grant 均为 0，专用 Redis `DBSIZE=0`。
+尽管无已知业务副作用，“连接了无法确认身份的共享端口”仍命中本阶段停止线，因此不通过改配置后
+反复重跑改写结论。
+
+已完成但不构成 M6A 完成：契约提交；V9 草案及 Entity/Mapper/标签活动 service WIP；fresh
+V1->V9 和 V8->V9 各 9 条 migration 通过；真实 MySQL 商户隔离测试 1/1 通过。统一 grant、并发
+不变量、Controller、前端、故障验证、全量测试和结果收口均未执行。专用容器暂不删除，以保留
+迁移现场；当前状态只能是 `M6A BLOCKED / M6 in progress / M6B/M6C not started and not authorized`。
