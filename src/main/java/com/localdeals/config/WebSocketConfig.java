@@ -72,6 +72,22 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 },
                 new PatternTopic(WebSocketNotifier.CHANNEL_PREFIX + "[0-9]*")
         );
+        // Durable voucher-grant notifications use a separate user channel and are only a
+        // prompt; the client refreshes /voucher-grants/mine for the persisted truth.
+        container.addMessageListener(
+                (message, pattern) -> {
+                    String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
+                    String userIdStr = channel.substring(WebSocketNotifier.VOUCHER_GRANT_CHANNEL_PREFIX.length());
+                    try {
+                        Long userId = Long.parseLong(userIdStr);
+                        String body = new String(message.getBody(), StandardCharsets.UTF_8);
+                        webSocketHandler.sendToUser(userId, body);
+                    } catch (NumberFormatException e) {
+                        log.warn("Received voucher grant message on unexpected channel: {}", channel);
+                    }
+                },
+                new PatternTopic(WebSocketNotifier.VOUCHER_GRANT_CHANNEL_PREFIX + "[0-9]*")
+        );
         // 平台实时订单频道。
         container.addMessageListener(
                 (message, pattern) -> {

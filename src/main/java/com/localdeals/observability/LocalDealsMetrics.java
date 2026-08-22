@@ -46,7 +46,7 @@ public class LocalDealsMetrics {
     public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
     public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
     public enum SeckillDbPersistResult { SUCCESS, FAILURE }
-    public enum GrantSource { USER_CLAIM, ADMIN_GRANT, TASK_REWARD }
+    public enum GrantSource { USER_CLAIM, ADMIN_GRANT, TASK_REWARD, BATCH_GRANT }
     public enum GrantResult {
         GRANTED, IDEMPOTENT, INELIGIBLE, QUOTA_EXHAUSTED, RULE_CHANGED,
         INACTIVE, UNAVAILABLE, FAILURE
@@ -105,6 +105,8 @@ public class LocalDealsMetrics {
     private final AtomicReference<Double> seckillDue = nanGauge();
     private final AtomicReference<Double> seckillOldestOverdue = nanGauge();
     private final AtomicReference<Double> seckillQuarantine = nanGauge();
+    private final AtomicReference<Double> voucherGrantOutboxPending = nanGauge();
+    private final AtomicReference<Double> voucherGrantOutboxOldestAge = nanGauge();
 
     public LocalDealsMetrics(MeterRegistry registry) {
         for (LikeOperation operation : LikeOperation.values()) {
@@ -239,6 +241,11 @@ public class LocalDealsMetrics {
                 "Age beyond due time of the oldest due seckill reservation", seckillOldestOverdue);
         gauge(registry, "local_deals.seckill.processing.quarantine", "orders",
                 "Seckill reservations in reconciliation quarantine", seckillQuarantine);
+        gauge(registry, "local_deals.marketing.voucher_grant.outbox.pending", "events",
+                "Pending voucher-grant notification outbox events", voucherGrantOutboxPending);
+        gauge(registry, "local_deals.marketing.voucher_grant.outbox.oldest_age", "seconds",
+                "Age of the oldest pending voucher-grant notification outbox event",
+                voucherGrantOutboxOldestAge);
 
         for (MqConsumeOutcome outcome : MqConsumeOutcome.values()) {
             mqConsumeOutcomes.put(outcome,
@@ -359,7 +366,9 @@ public class LocalDealsMetrics {
         GrantSource source = VoucherGrantCommand.ADMIN_GRANT.equals(sourceValue)
                 ? GrantSource.ADMIN_GRANT
                 : VoucherGrantCommand.TASK_REWARD.equals(sourceValue)
-                ? GrantSource.TASK_REWARD : GrantSource.USER_CLAIM;
+                ? GrantSource.TASK_REWARD
+                : VoucherGrantCommand.BATCH_GRANT.equals(sourceValue)
+                ? GrantSource.BATCH_GRANT : GrantSource.USER_CLAIM;
         safeIncrement(grantCommands.get(key(source, result)));
     }
 
@@ -412,6 +421,16 @@ public class LocalDealsMetrics {
         seckillOldestOverdue.set(Double.NaN);
         seckillQuarantine.set(Double.NaN);
         safeIncrement(seckillCollectors.get(CollectorResult.FAILURE));
+    }
+
+    public void updateVoucherGrantOutboxBacklog(long pending, double oldestAgeSeconds) {
+        voucherGrantOutboxPending.set((double) pending);
+        voucherGrantOutboxOldestAge.set(oldestAgeSeconds);
+    }
+
+    public void failVoucherGrantOutboxCollector() {
+        voucherGrantOutboxPending.set(Double.NaN);
+        voucherGrantOutboxOldestAge.set(Double.NaN);
     }
 
     private static Counter counter(MeterRegistry registry, String name, String description,

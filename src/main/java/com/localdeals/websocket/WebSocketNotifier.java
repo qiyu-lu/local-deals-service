@@ -2,6 +2,7 @@ package com.localdeals.websocket;
 
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import com.localdeals.entity.VoucherGrantNotificationOutbox;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,6 +23,7 @@ import java.util.Map;
 public class WebSocketNotifier {
 
     public static final String CHANNEL_PREFIX = "ws:seckill:";
+    public static final String VOUCHER_GRANT_CHANNEL_PREFIX = "ws:voucher-grant:";
     public static final String ADMIN_PLATFORM_CHANNEL = "ws:seckill:admin:platform";
     public static final String ADMIN_MERCHANT_CHANNEL_PREFIX = "ws:seckill:admin:merchant:";
 
@@ -54,6 +56,23 @@ public class WebSocketNotifier {
         if (merchantId != null) {
             stringRedisTemplate.convertAndSend(ADMIN_MERCHANT_CHANNEL_PREFIX + merchantId, json);
         }
+    }
+
+    /** Publishes the durable grant notification to the independent user channel. */
+    public void notifyVoucherGranted(VoucherGrantNotificationOutbox outbox) {
+        if (outbox == null || outbox.getId() == null || outbox.getGrantId() == null ||
+                outbox.getCampaignId() == null || outbox.getVoucherId() == null || outbox.getUserId() == null) {
+            throw new IllegalArgumentException("优惠券通知字段不完整");
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "VOUCHER_GRANTED");
+        payload.put("eventId", String.valueOf(outbox.getId()));
+        payload.put("grantId", String.valueOf(outbox.getGrantId()));
+        payload.put("campaignId", String.valueOf(outbox.getCampaignId()));
+        payload.put("voucherId", String.valueOf(outbox.getVoucherId()));
+        payload.put("message", "优惠券已发放，已加入我的券包");
+        stringRedisTemplate.convertAndSend(VOUCHER_GRANT_CHANNEL_PREFIX + outbox.getUserId(),
+                JSONUtil.toJsonStr(payload));
     }
 
     private Long resolveMerchantId(Long voucherId) {
