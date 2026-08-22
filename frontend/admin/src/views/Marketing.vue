@@ -159,11 +159,67 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <el-card v-if="batchableCampaigns.length" shadow="never" class="batch-card">
+      <template #header>
+        <div class="member-heading">
+          <span class="card-title">批量发券 Job</span>
+          <span class="voucher-note">仅 MANUAL_TAG + ADMIN/BOTH 活动</span>
+        </div>
+      </template>
+      <el-form v-if="canWrite" :model="batchForm" inline @submit.prevent>
+        <el-form-item label="活动">
+          <el-select v-model="batchForm.campaignId" placeholder="选择活动" style="width:260px">
+            <el-option v-for="campaign in batchableCampaigns" :key="campaign.id"
+              :label="campaign.name" :value="campaign.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="submitBatchJob">创建批量 Job</el-button>
+        </el-form-item>
+      </el-form>
+      <el-table :data="batchJobs" size="small" border row-key="id" @row-click="viewBatchFailures">
+        <el-table-column prop="id" label="Job" width="150" />
+        <el-table-column prop="status" label="状态" width="125" />
+        <el-table-column prop="targetCount" label="目标" width="75" />
+        <el-table-column label="GRANTED" width="90"><template #default="{ row }">{{ row.grantedItemCount || 0 }}</template></el-table-column>
+        <el-table-column label="IDEMPOTENT" width="105"><template #default="{ row }">{{ row.idempotentItemCount || 0 }}</template></el-table-column>
+        <el-table-column label="SKIPPED" width="90"><template #default="{ row }">{{ row.skippedItemCount || 0 }}</template></el-table-column>
+        <el-table-column label="FAILED" width="80"><template #default="{ row }">{{ row.failedItemCount || 0 }}</template></el-table-column>
+        <el-table-column v-if="canWrite" label="操作" min-width="210">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'READY' || row.status === 'RUNNING'" link type="warning" @click.stop="pauseBatch(row)">暂停</el-button>
+            <el-button v-if="row.status === 'PAUSED'" link type="success" @click.stop="resumeBatch(row)">恢复</el-button>
+            <el-button v-if="row.failedItemCount" link type="danger" @click.stop="retryBatch(row)">重试失败</el-button>
+            <el-button link type="primary" @click.stop="viewBatchFailures(row)">失败明细</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-pagination v-if="batchTotal > batchPageSize" class="batch-pagination"
+        layout="prev, pager, next" :page-size="batchPageSize" :total="batchTotal"
+        v-model:current-page="batchPage" @current-change="loadBatchJobs" />
+      <div v-if="selectedBatchJob" class="failure-panel">
+        <div class="member-heading">
+          <span>失败明细：Job {{ selectedBatchJob.id }}</span>
+          <el-button link @click="loadBatchFailures">刷新</el-button>
+        </div>
+        <el-table :data="failedItems" size="small" border>
+          <el-table-column prop="id" label="Item" width="150" />
+          <el-table-column prop="userId" label="用户" width="150" />
+          <el-table-column prop="attempts" label="尝试" width="70" />
+          <el-table-column prop="lastErrorCode" label="错误码" width="160" />
+          <el-table-column prop="lastErrorMessage" label="说明" min-width="220" />
+        </el-table>
+        <el-pagination v-if="failedTotal > failurePageSize" class="batch-pagination"
+          layout="prev, pager, next" :page-size="failurePageSize" :total="failedTotal"
+          v-model:current-page="failurePage" @current-change="loadBatchFailures" />
+      </div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import {
@@ -174,6 +230,12 @@ import {
   getMarketingCampaigns,
   getMarketingTags,
   grantMarketingCampaign,
+  createVoucherBatchJob,
+  getVoucherBatchJobs,
+  getVoucherBatchJobItems,
+  pauseVoucherBatchJob,
+  resumeVoucherBatchJob,
+  retryVoucherBatchJobFailures,
   removeMarketingTagMember,
   updateMarketingCampaignStatus,
   resultData
@@ -201,8 +263,22 @@ const campaignForm = ref({
   quotaTotal: 10
 })
 const grantForm = ref({ campaignId: '', userId: '' })
+const batchForm = ref({ campaignId: '' })
+const batchJobs = ref([])
+const batchTotal = ref(0)
+const batchPage = ref(1)
+const batchPageSize = 10
+const selectedBatchJob = ref(null)
+const failedItems = ref([])
+const failedTotal = ref(0)
+const failurePage = ref(1)
+const failurePageSize = 10
+let batchPollTimer = null
 const activeTags = computed(() => tags.value.filter(tag => tag.status === 'ACTIVE'))
 const grantableCampaigns = computed(() => campaigns.value.filter(campaign => campaign.grantMode !== 'TASK'))
+const batchableCampaigns = computed(() => campaigns.value.filter(campaign =>
+  (campaign.grantMode === 'ADMIN' || campaign.grantMode === 'BOTH') &&
+  campaign.eligibilityType === 'MANUAL_TAG' && campaign.status === 'ACTIVE'))
 
 function listPayload(result) {
   const value = resultData(result)
@@ -233,6 +309,9 @@ async function loadAll() {
     campaigns.value = []
     selectedTag.value = null
     members.value = []
+    batchJobs.value = []
+    batchTotal.value = 0
+    clearBatchPoll()
     return
   }
   try {
@@ -242,6 +321,7 @@ async function loadAll() {
     ])
     tags.value = listPayload(tagResult)
     campaigns.value = listPayload(campaignResult)
+    await loadBatchJobs()
     if (selectedTag.value) {
       const refreshed = tags.value.find(tag => String(tag.id) === String(selectedTag.value.id))
       if (refreshed) {
@@ -257,7 +337,97 @@ async function loadAll() {
     campaigns.value = []
     selectedTag.value = null
     members.value = []
+    batchJobs.value = []
+    batchTotal.value = 0
+    clearBatchPoll()
   }
+}
+
+function isBatchTerminal(job) {
+  return job?.status === 'COMPLETED' || job?.status === 'PARTIAL_FAILED'
+}
+
+function clearBatchPoll() {
+  if (batchPollTimer) {
+    clearTimeout(batchPollTimer)
+    batchPollTimer = null
+  }
+}
+
+function scheduleBatchPoll() {
+  clearBatchPoll()
+  if (!batchJobs.value.some(job => !isBatchTerminal(job))) return
+  batchPollTimer = setTimeout(() => loadBatchJobs(true), 2000)
+}
+
+async function loadBatchJobs(fromPoll = false) {
+  if (isPlatform.value && !scopeMerchantId.value) {
+    clearBatchPoll()
+    return
+  }
+  try {
+    const result = await getVoucherBatchJobs({ ...scopeParams(), page: batchPage.value, size: batchPageSize })
+    const page = resultData(result)
+    batchJobs.value = Array.isArray(page) ? page : (page?.records || page?.list || [])
+    batchTotal.value = Number(result?.total ?? page?.total ?? batchJobs.value.length)
+    scheduleBatchPoll()
+  } catch {
+    if (!fromPoll) clearBatchPoll()
+  }
+}
+
+async function loadBatchFailures() {
+  if (!selectedBatchJob.value) return
+  try {
+    const result = await getVoucherBatchJobItems(selectedBatchJob.value.id, {
+      ...scopeParams(), status: 'FAILED', page: failurePage.value, size: failurePageSize
+    })
+    const page = resultData(result)
+    failedItems.value = Array.isArray(page) ? page : (page?.records || page?.list || [])
+    failedTotal.value = Number(result?.total ?? page?.total ?? failedItems.value.length)
+  } catch {
+    failedItems.value = []
+    failedTotal.value = 0
+  }
+}
+
+async function viewBatchFailures(row) {
+  selectedBatchJob.value = row
+  failurePage.value = 1
+  await loadBatchFailures()
+}
+
+function newRequestId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID()
+  return `batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+async function submitBatchJob() {
+  const row = batchableCampaigns.value.find(campaign => String(campaign.id) === String(batchForm.value.campaignId))
+  if (!row) {
+    ElMessage.warning('请选择符合条件的 MANUAL_TAG 活动')
+    return
+  }
+  try {
+    await createVoucherBatchJob(row.id, scopePayload({
+      requestId: newRequestId(), expectedRuleVersion: row.ruleVersion
+    }))
+    batchForm.value = { campaignId: '' }
+    ElMessage.success('批量 Job 已创建，等待后台 worker')
+    await loadBatchJobs()
+  } catch {}
+}
+
+async function pauseBatch(row) {
+  try { await pauseVoucherBatchJob(row.id, scopeParams()); await loadBatchJobs() } catch {}
+}
+
+async function resumeBatch(row) {
+  try { await resumeVoucherBatchJob(row.id, scopeParams()); await loadBatchJobs() } catch {}
+}
+
+async function retryBatch(row) {
+  try { await retryVoucherBatchJobFailures(row.id, scopeParams()); ElMessage.success('技术失败项已重新排队'); await loadBatchJobs() } catch {}
 }
 
 async function selectTag(tag) {
@@ -368,6 +538,7 @@ async function submitGrant() {
 }
 
 onMounted(loadAll)
+onBeforeUnmount(clearBatchPoll)
 </script>
 
 <style scoped>
@@ -381,6 +552,9 @@ onMounted(loadAll)
 .time-row .el-input { min-width: 0; }
 .campaign-table { margin-top: 18px; }
 .grant-card { margin-top: 16px; }
+.batch-card { margin-top: 16px; }
+.batch-pagination { margin-top: 12px; justify-content: flex-end; }
+.failure-panel { margin-top: 16px; padding-top: 12px; border-top: 1px solid #ebeef5; }
 .member-panel { margin-top: 16px; padding-top: 12px; border-top: 1px solid #ebeef5; }
 .member-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }

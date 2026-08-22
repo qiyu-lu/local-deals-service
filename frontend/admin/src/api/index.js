@@ -126,4 +126,32 @@ export function grantMarketingCampaign(id, data) {
   return request.post(`/admin/marketing/campaigns/${id}/grants`, data)
 }
 
+export function createVoucherBatchJob(campaignId, data) {
+  return request.post(`/admin/marketing/campaigns/${campaignId}/batch-jobs`, data)
+}
+
+export function getVoucherBatchJobs(params) {
+  return request.get('/admin/marketing/batch-jobs', { params })
+}
+
+export function getVoucherBatchJob(id, params) {
+  return request.get(`/admin/marketing/batch-jobs/${id}`, { params })
+}
+
+export function getVoucherBatchJobItems(id, params) {
+  return request.get(`/admin/marketing/batch-jobs/${id}/items`, { params })
+}
+
+export function pauseVoucherBatchJob(id, params) {
+  return request.post(`/admin/marketing/batch-jobs/${id}/pause`, null, { params })
+}
+
+export function resumeVoucherBatchJob(id, params) {
+  return request.post(`/admin/marketing/batch-jobs/${id}/resume`, null, { params })
+}
+
+export function retryVoucherBatchJobFailures(id, params) {
+  return request.post(`/admin/marketing/batch-jobs/${id}/retry-failures`, null, { params })
+}
+
 export default request

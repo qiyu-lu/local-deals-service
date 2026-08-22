@@ -86,6 +86,19 @@
           </div>
         </div>
       </el-tab-pane>
+      <el-tab-pane label="券包" name="5">
+        <div style="padding: 12px;">
+          <div v-if="grantList.length === 0" style="text-align:center;color:#9ca3af;padding:40px 0;">
+            暂无已发放优惠券
+          </div>
+          <div v-for="grant in grantList" :key="grant.id"
+               style="padding:12px 4px;border-bottom:1px solid #f3f4f6;">
+            <div style="font-size:15px;font-weight:600;color:#111827;">{{grant.campaignName || '优惠券'}}</div>
+            <div style="margin-top:5px;color:#4b5563;">{{grant.voucherTitle || '已发放优惠券'}}</div>
+            <div style="margin-top:5px;font-size:12px;color:#9ca3af;">{{grant.grantedAt || ''}}</div>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
   </div>
   <foot-bar :active-btn="4"></foot-bar>
@@ -105,6 +118,9 @@
       info: {},
       blogs: [],
       myFollows: [], // 我关注的用户列表
+      grantList: [], // 持久化券包事实
+      grantSocket: null,
+      seenGrantEvents: {},
       blogs2: [], // 关注的人的播客
       params: {
         minTime: 0, // 上一次拉取到的时间戳
@@ -155,6 +171,9 @@
             this.queryUserInfo();
             // 查询用户笔记
             this.queryBlogs();
+            // 查询持久化券包，并建立一次用户通知连接
+            this.queryGrants();
+            this.connectGrantNotifications();
           })
           .catch(err => {
             location.href = "login.html"
@@ -182,6 +201,7 @@
         location.href = 'info-edit.html'
       },
       logout() {
+        this.closeGrantSocket();
         axios.post("/user/logout")
           .then(() => {
             // 清理session
@@ -195,6 +215,10 @@
         if (r.name === '4') {
           this.queryMyFollows();
         }
+        if (r.name === '5') {
+          this.queryGrants();
+          this.connectGrantNotifications();
+        }
       },
       queryMyFollows() {
         axios.get("/follow/my-follows")
@@ -203,6 +227,52 @@
       },
       toOtherInfo(userId) {
         location.href = 'other-info.html?id=' + userId;
+      },
+      queryGrants() {
+        axios.get("/voucher-grants/mine")
+          .then(({data}) => { this.grantList = data || []; })
+          .catch(e => console.log(e));
+      },
+      connectGrantNotifications() {
+        if (this.grantSocket || !token || typeof WebSocket === 'undefined') return;
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let socket;
+        try {
+          socket = new WebSocket(`${protocol}//${location.host}/api/ws/connect?token=${encodeURIComponent(token)}`);
+        } catch (e) {
+          return;
+        }
+        this.grantSocket = socket;
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type !== 'VOUCHER_GRANTED') return;
+            const eventId = String(message.eventId || '');
+            if (eventId && this.seenGrantEvents[eventId]) return;
+            if (eventId) this.$set(this.seenGrantEvents, eventId, true);
+            this.queryGrants();
+            this.$notify({
+              title: '优惠券已到账',
+              message: message.message || '优惠券已加入我的券包',
+              type: 'success',
+              duration: 4000,
+              position: 'top-right'
+            });
+          } catch (e) {}
+        };
+        socket.onclose = () => { if (this.grantSocket === socket) this.grantSocket = null; };
+        socket.onerror = () => { if (this.grantSocket === socket) this.grantSocket = null; };
+      },
+      closeGrantSocket() {
+        if (!this.grantSocket) return;
+        const socket = this.grantSocket;
+        this.grantSocket = null;
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
       },
       addLike(b) {
         const desired = !Boolean(b.isLike);
@@ -243,6 +313,9 @@
           this.isReachBottom = false
         }
       }
+    },
+    beforeDestroy() {
+      this.closeGrantSocket();
     },
 
   })
