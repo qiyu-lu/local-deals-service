@@ -47,6 +47,7 @@ build/
 /benchmark/m5a/
 /benchmark/m5b/
 /benchmark/m5c/
+/benchmark/m5d/
 /benchmark/*.csv
 /benchmark/*.jtl
 /benchmark/*.log
