@@ -48,6 +48,14 @@ public class VoucherGrantService {
      * before the idempotent re-read.
      */
     public VoucherGrant grant(VoucherGrantCommand command) {
+        return grantInternal(command).getGrant();
+    }
+
+    /**
+     * Internal facade for workers that need to distinguish a new grant from an already
+     * committed ONCE grant. Controllers continue to use the compatible grant() API.
+     */
+    GrantAttempt grantInternal(VoucherGrantCommand command) {
         long started = System.nanoTime();
         LocalDealsMetrics.GrantResult result = LocalDealsMetrics.GrantResult.FAILURE;
         try {
@@ -56,17 +64,29 @@ public class VoucherGrantService {
             VoucherGrant existing = findExisting(command);
             if (existing != null) {
                 result = LocalDealsMetrics.GrantResult.IDEMPOTENT;
-                return existing;
+                return GrantAttempt.idempotent(existing);
             }
             try {
-                VoucherGrant granted = transactionService.grant(command);
-                result = LocalDealsMetrics.GrantResult.GRANTED;
-                return granted;
+                VoucherGrantTransactionService.GrantTransactionResult transactionResult =
+                        transactionService.grantWithResult(command);
+                // Existing unit tests mock the compatible grant() method. The null fallback keeps
+                // that contract while the real transaction bean always returns an explicit result.
+                if (transactionResult == null) {
+                    VoucherGrant granted = transactionService.grant(command);
+                    result = LocalDealsMetrics.GrantResult.GRANTED;
+                    return GrantAttempt.granted(granted);
+                }
+                if (transactionResult.isCreated()) {
+                    result = LocalDealsMetrics.GrantResult.GRANTED;
+                    return GrantAttempt.granted(transactionResult.getGrant());
+                }
+                result = LocalDealsMetrics.GrantResult.IDEMPOTENT;
+                return GrantAttempt.idempotent(transactionResult.getGrant());
             } catch (DuplicateKeyException duplicate) {
                 VoucherGrant raced = findExisting(command);
                 if (raced != null) {
                     result = LocalDealsMetrics.GrantResult.IDEMPOTENT;
-                    return raced;
+                    return GrantAttempt.idempotent(raced);
                 }
                 throw duplicate;
             }
@@ -91,6 +111,34 @@ public class VoucherGrantService {
         }
     }
 
+    static final class GrantAttempt {
+        enum Outcome { GRANTED, IDEMPOTENT }
+
+        private final Outcome outcome;
+        private final VoucherGrant grant;
+
+        private GrantAttempt(Outcome outcome, VoucherGrant grant) {
+            this.outcome = outcome;
+            this.grant = grant;
+        }
+
+        static GrantAttempt granted(VoucherGrant grant) {
+            return new GrantAttempt(Outcome.GRANTED, grant);
+        }
+
+        static GrantAttempt idempotent(VoucherGrant grant) {
+            return new GrantAttempt(Outcome.IDEMPOTENT, grant);
+        }
+
+        Outcome getOutcome() {
+            return outcome;
+        }
+
+        VoucherGrant getGrant() {
+            return grant;
+        }
+    }
+
     public List<VoucherGrant> listMine(Long userId) {
         if (userId == null) throw new IllegalArgumentException("用户不能为空");
         return grantMapper.selectMine(userId);
@@ -108,7 +156,8 @@ public class VoucherGrantService {
             return grantMapper.selectByCampaignAndUserAndKey(command.getCampaignId(),
                     command.getUserId(), command.getIdempotencyKey());
         }
-        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource())) {
+        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource()) ||
+                VoucherGrantCommand.BATCH_GRANT.equals(command.getSource())) {
             return grantMapper.selectByCampaignAndMerchantAndUser(command.getCampaignId(),
                     command.getMerchantId(), command.getUserId());
         }
@@ -123,10 +172,12 @@ public class VoucherGrantService {
         String source = command.getSource();
         if (!VoucherGrantCommand.USER_CLAIM.equals(source) &&
                 !VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
-                !VoucherGrantCommand.TASK_REWARD.equals(source)) {
+                !VoucherGrantCommand.TASK_REWARD.equals(source) &&
+                !VoucherGrantCommand.BATCH_GRANT.equals(source)) {
             throw new IllegalArgumentException("发放来源不合法");
         }
-        if (VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
+        if ((VoucherGrantCommand.ADMIN_GRANT.equals(source) ||
+                VoucherGrantCommand.BATCH_GRANT.equals(source)) &&
                 (command.getMerchantId() == null || command.getOperatorId() == null)) {
             throw new IllegalArgumentException("管理员发放必须指定商户和操作人");
         }

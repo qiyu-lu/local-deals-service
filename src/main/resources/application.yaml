@@ -131,6 +131,16 @@ local-deals:
     legacy-backfill-on-startup: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BACKFILL_ON_STARTUP:false}"
     legacy-scan-count: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_SCAN_COUNT:500}"
     legacy-batch-size: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BATCH_SIZE:500}"
+  voucher-batch:
+    # M6C workers are maintenance capabilities and must be explicitly enabled for a demo/worker node.
+    job-worker-enabled: "${LOCAL_DEALS_VOUCHER_BATCH_JOB_WORKER_ENABLED:false}"
+    notification-worker-enabled: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_WORKER_ENABLED:false}"
+    initial-delay: "${LOCAL_DEALS_VOUCHER_BATCH_INITIAL_DELAY:5s}"
+    fixed-delay: "${LOCAL_DEALS_VOUCHER_BATCH_FIXED_DELAY:1s}"
+    batch-size: "${LOCAL_DEALS_VOUCHER_BATCH_SIZE:50}"
+    notification-batch-size: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_BATCH_SIZE:50}"
+    notification-max-attempts: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_ATTEMPTS:10}"
+    notification-max-backoff: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_BACKOFF:5m}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"

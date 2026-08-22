@@ -5,6 +5,7 @@ import com.localdeals.entity.MarketingTag;
 import com.localdeals.entity.MarketingTagMember;
 import com.localdeals.entity.VoucherCampaign;
 import com.localdeals.entity.VoucherGrant;
+import com.localdeals.entity.VoucherGrantNotificationOutbox;
 import com.localdeals.exception.ApiErrorCodes;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.MarketingTagMapper;
@@ -12,6 +13,7 @@ import com.localdeals.mapper.MarketingTagMemberMapper;
 import com.localdeals.mapper.SignMapper;
 import com.localdeals.mapper.VoucherCampaignMapper;
 import com.localdeals.mapper.VoucherGrantMapper;
+import com.localdeals.mapper.VoucherGrantNotificationOutboxMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -26,28 +28,44 @@ public class VoucherGrantTransactionService {
     private final MarketingTagMapper tagMapper;
     private final MarketingTagMemberMapper memberMapper;
     private final SignMapper signMapper;
+    private final VoucherGrantNotificationOutboxMapper notificationOutboxMapper;
 
     public VoucherGrantTransactionService(VoucherCampaignMapper campaignMapper,
             VoucherGrantMapper grantMapper, MarketingTagMapper tagMapper,
-            MarketingTagMemberMapper memberMapper, SignMapper signMapper) {
+            MarketingTagMemberMapper memberMapper, SignMapper signMapper,
+            VoucherGrantNotificationOutboxMapper notificationOutboxMapper) {
         this.campaignMapper = campaignMapper;
         this.grantMapper = grantMapper;
         this.tagMapper = tagMapper;
         this.memberMapper = memberMapper;
         this.signMapper = signMapper;
+        this.notificationOutboxMapper = notificationOutboxMapper;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public VoucherGrant grant(VoucherGrantCommand command) {
+        return grantInternal(command).getGrant();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public GrantTransactionResult grantWithResult(VoucherGrantCommand command) {
+        return grantInternal(command);
+    }
+
+    private GrantTransactionResult grantInternal(VoucherGrantCommand command) {
         if (VoucherGrantCommand.TASK_REWARD.equals(command.getSource()) &&
                 signMapper.countByUserAndDate(command.getUserId(), command.getTaskDate()) == 0) {
             throw conflict(ApiErrorCodes.TASK_NOT_COMPLETED, "请先完成今日签到");
         }
         VoucherGrant existing = selectExisting(command);
-        if (existing != null) return existing;
+        if (existing != null) return GrantTransactionResult.idempotent(existing);
 
         VoucherCampaign campaign = lockCampaign(command);
         if (campaign == null) throw new ApiStatusException(HttpStatus.NOT_FOUND, "活动不存在");
+        // The campaign row lock is the merchant-scoped serialization boundary. A request that
+        // observed no grant before waiting for this lock must re-check after the lock is held.
+        existing = selectExisting(command);
+        if (existing != null) return GrantTransactionResult.idempotent(existing);
         if (!command.getExpectedRuleVersion().equals(campaign.getRuleVersion())) {
             throw conflict("CAMPAIGN_RULE_CHANGED", "活动规则版本已变化");
         }
@@ -81,7 +99,40 @@ public class VoucherGrantTransactionService {
         grant.setRuleVersion(campaign.getRuleVersion());
         grant.setOperatorId(command.getOperatorId());
         if (grantMapper.insert(grant) != 1) throw new IllegalStateException("发券流水写入失败");
-        return selectExisting(command);
+        VoucherGrantNotificationOutbox notification = new VoucherGrantNotificationOutbox();
+        notification.setGrantId(grant.getId());
+        notification.setMerchantId(grant.getMerchantId());
+        notification.setUserId(grant.getUserId());
+        if (notificationOutboxMapper.insertPending(notification) != 1) {
+            throw new IllegalStateException("发券通知 Outbox 写入失败");
+        }
+        return GrantTransactionResult.created(grant);
+    }
+
+    static final class GrantTransactionResult {
+        private final VoucherGrant grant;
+        private final boolean created;
+
+        private GrantTransactionResult(VoucherGrant grant, boolean created) {
+            this.grant = grant;
+            this.created = created;
+        }
+
+        static GrantTransactionResult created(VoucherGrant grant) {
+            return new GrantTransactionResult(grant, true);
+        }
+
+        static GrantTransactionResult idempotent(VoucherGrant grant) {
+            return new GrantTransactionResult(grant, false);
+        }
+
+        VoucherGrant getGrant() {
+            return grant;
+        }
+
+        boolean isCreated() {
+            return created;
+        }
     }
 
     private VoucherGrant selectExisting(VoucherGrantCommand command) {
@@ -89,7 +140,8 @@ public class VoucherGrantTransactionService {
             return grantMapper.selectByCampaignAndUserAndKey(command.getCampaignId(),
                     command.getUserId(), command.getIdempotencyKey());
         }
-        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource())) {
+        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource()) ||
+                VoucherGrantCommand.BATCH_GRANT.equals(command.getSource())) {
             return grantMapper.selectByCampaignAndMerchantAndUser(command.getCampaignId(),
                     command.getMerchantId(), command.getUserId());
         }
@@ -97,7 +149,8 @@ public class VoucherGrantTransactionService {
     }
 
     private VoucherCampaign lockCampaign(VoucherGrantCommand command) {
-        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource())) {
+        if (VoucherGrantCommand.ADMIN_GRANT.equals(command.getSource()) ||
+                VoucherGrantCommand.BATCH_GRANT.equals(command.getSource())) {
             return campaignMapper.selectScopedForUpdate(command.getCampaignId(), command.getMerchantId());
         }
         return campaignMapper.selectForUserClaimForUpdate(command.getCampaignId());
@@ -111,6 +164,10 @@ public class VoucherGrantTransactionService {
         if (VoucherGrantCommand.ADMIN_GRANT.equals(source) &&
                 !"ADMIN".equals(campaign.getGrantMode()) && !"BOTH".equals(campaign.getGrantMode())) {
             throw conflict("CAMPAIGN_GRANT_MODE_UNSUPPORTED", "活动不支持管理员发放");
+        }
+        if (VoucherGrantCommand.BATCH_GRANT.equals(source) &&
+                !"ADMIN".equals(campaign.getGrantMode()) && !"BOTH".equals(campaign.getGrantMode())) {
+            throw conflict("CAMPAIGN_GRANT_MODE_UNSUPPORTED", "活动不支持批量管理员发放");
         }
         if (VoucherGrantCommand.TASK_REWARD.equals(source) &&
                 !"TASK".equals(campaign.getGrantMode())) {

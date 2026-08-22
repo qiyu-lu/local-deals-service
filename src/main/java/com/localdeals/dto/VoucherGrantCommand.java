@@ -10,6 +10,7 @@ public class VoucherGrantCommand {
     public static final String USER_CLAIM = "USER_CLAIM";
     public static final String ADMIN_GRANT = "ADMIN_GRANT";
     public static final String TASK_REWARD = "TASK_REWARD";
+    public static final String BATCH_GRANT = "BATCH_GRANT";
     public static final String DAILY_SIGN_IN = "DAILY_SIGN_IN";
     public static final String ONCE = "ONCE";
 

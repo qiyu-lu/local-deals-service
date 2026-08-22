@@ -8,7 +8,9 @@ import com.localdeals.dto.MarketingTagRequest;
 import com.localdeals.dto.Result;
 import com.localdeals.dto.VoucherCampaignRequest;
 import com.localdeals.dto.VoucherCampaignStatusRequest;
+import com.localdeals.dto.VoucherBatchJobCreateRequest;
 import com.localdeals.dto.VoucherGrantCommand;
+import com.localdeals.service.VoucherBatchJobService;
 import com.localdeals.service.MarketingAdminService;
 import com.localdeals.service.VoucherGrantService;
 import com.localdeals.utils.AdminPrincipalHolder;
@@ -27,11 +29,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class MarketingAdminController {
     private final MarketingAdminService marketingAdminService;
     private final VoucherGrantService grantService;
+    private final VoucherBatchJobService batchJobService;
 
     public MarketingAdminController(MarketingAdminService marketingAdminService,
-            VoucherGrantService grantService) {
+            VoucherGrantService grantService, VoucherBatchJobService batchJobService) {
         this.marketingAdminService = marketingAdminService;
         this.grantService = grantService;
+        this.batchJobService = batchJobService;
     }
 
     @GetMapping("/tags")
@@ -124,5 +128,59 @@ public class MarketingAdminController {
             @RequestParam(value = "merchantId", required = false) Long merchantId) {
         Long scopedMerchantId = marketingAdminService.resolveMerchant(merchantId);
         return Result.ok(grantService.listCampaignGrants(campaignId, scopedMerchantId));
+    }
+
+    @PostMapping("/campaigns/{campaignId}/batch-jobs")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_WRITE)
+    public Result createBatchJob(@PathVariable("campaignId") Long campaignId,
+            @RequestBody VoucherBatchJobCreateRequest request) {
+        return Result.ok(batchJobService.create(campaignId, request));
+    }
+
+    @GetMapping("/batch-jobs")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_READ)
+    public Result listBatchJobs(@RequestParam(value = "merchantId", required = false) Long merchantId,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "size", defaultValue = "20") int size) {
+        return Result.ok(batchJobService.list(merchantId, page, size), batchJobService.count(merchantId));
+    }
+
+    @GetMapping("/batch-jobs/{jobId}")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_READ)
+    public Result getBatchJob(@PathVariable("jobId") Long jobId,
+            @RequestParam(value = "merchantId", required = false) Long merchantId) {
+        return Result.ok(batchJobService.get(jobId, merchantId));
+    }
+
+    @GetMapping("/batch-jobs/{jobId}/items")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_READ)
+    public Result listBatchItems(@PathVariable("jobId") Long jobId,
+            @RequestParam(value = "merchantId", required = false) Long merchantId,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "size", defaultValue = "20") int size) {
+        return Result.ok(batchJobService.listItems(jobId, merchantId, status, page, size),
+                batchJobService.countItems(jobId, merchantId, status));
+    }
+
+    @PostMapping("/batch-jobs/{jobId}/pause")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_WRITE)
+    public Result pauseBatchJob(@PathVariable("jobId") Long jobId,
+            @RequestParam(value = "merchantId", required = false) Long merchantId) {
+        return Result.ok(batchJobService.pause(jobId, merchantId));
+    }
+
+    @PostMapping("/batch-jobs/{jobId}/resume")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_WRITE)
+    public Result resumeBatchJob(@PathVariable("jobId") Long jobId,
+            @RequestParam(value = "merchantId", required = false) Long merchantId) {
+        return Result.ok(batchJobService.resume(jobId, merchantId));
+    }
+
+    @PostMapping("/batch-jobs/{jobId}/retry-failures")
+    @RequireAdminPermission(AdminPermissionCodes.MARKETING_WRITE)
+    public Result retryBatchFailures(@PathVariable("jobId") Long jobId,
+            @RequestParam(value = "merchantId", required = false) Long merchantId) {
+        return Result.ok(batchJobService.retryFailures(jobId, merchantId));
     }
 }
