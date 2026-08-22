@@ -167,3 +167,10 @@ RocketMQ cluster/topic/group 均逐项核验。应用命令显式传入真实 `R
 - Broker 新准入仍 `BLOCKED`；只有专用 label/port/topic/group、正确 NameServer、进程 TCP 无 9876
   和 delta 证据同时成立，未来才可执行 F5。
 - 下一阶段只进入 M5D 指标与故障收口，不开始 M6，也不升级技术栈。
+
+## 8. M5D 后续收口说明（2026-08-22）
+
+本文件以上内容仍是 M5C 当时的历史证据，尤其 Broker F5 的 `BLOCKED`/0 请求不追溯改写。
+M5D 后续建立 run-id 专用 RocketMQ，并以两个应用 PID 的环境变量和到专用 NameServer/Broker
+TCP 连接为门禁；门禁通过后 F5 得到 20/20 503 `SECKILL_SUBMIT_UNAVAILABLE`，库存、预约、
+processing、DB 和 Broker 可见消息均无增量。完整结果见 `docs/m5d-reliability-results.md`。

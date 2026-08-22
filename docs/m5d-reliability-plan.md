@@ -1,6 +1,6 @@
 # M5D 指标与故障恢复收口计划
 
-> 状态：实施中
+> 状态：已完成；正式结果见 `docs/m5d-reliability-results.md`
 >
 > 起点：`5677047 docs(traffic): record M5C evidence and prioritize M5D`
 >

@@ -25,7 +25,7 @@
 | Redis 预扣成功但 DB 永久失败时直接 ACK，库存和一人一单状态无法恢复 | 消费者写 MySQL 前先用只读 Lua 校验 exact `PROCESSING` 预约；缺失、错属或畸形消息不落库并重试至 DLQ。消费成功后原子标记 `SUCCESS`；DB 库存耗尽或同用户/券冲突时先暂停再精确补偿；主键 orderId 已属其他订单时只暂停并 quarantine，绝不自动释放 | `SeckillOrderStateIT`、`SeckillOrderConsumerTest`、`VoucherOrderReliabilityIT` |
 | 预占消息在长期故障/DLQ 后留在 `PROCESSING`，库存和用户购买资格无法自动收敛 | Redis TIME 驱动的 ZSET 持久到期索引 + 与 MQ 消费者共用的用户锁 + MySQL exact 分类；有单修复 `SUCCESS`，无单达到业务截止时间后才可在独立开关下精确补偿，不安全归属进 quarantine | `SeckillOrderReconcilerTest`、`SeckillProcessingIndexBackfillRunnerTest`、`docs/seckill-reconciliation.md` |
 | 新活动才写 Redis 元数据，升级后存量活动会被 fail-closed 拒绝 | 启动时从 MySQL 幂等回填存量券；库存只在 key 不存在时初始化，活动字段只补缺失值，不覆盖实时预扣或 `SUSPENDED` | `SeckillVoucherRedisInitializerTest`、`SeckillVoucherRedisInitializerIT` |
-| MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → RocketMQ `mysql-sync-topic` → `EsSyncConsumer` → ES；业务代码零感知 | `CanalSyncIT`（直接调用 `EsSyncConsumer.onMessage` 验证 INSERT/UPDATE/DELETE 三种路径） |
+| MySQL 和 ES 之间无数据同步机制，双写侵入业务代码 | Canal 伪装 MySQL 从节点监听 binlog → 配置化 RocketMQ topic/group → `EsSyncConsumer` → ES；目标消息解析、转换或写入失败会抛出并进入 retry/DLQ，固定文档 ID 保证重放幂等；DDL/无关表 ACK | `CanalSyncIT` 是直接调用 consumer 的 consumer-level ES 验证，不是 Canal E2E；故障恢复见 `docs/m5d-reliability-results.md` |
 | 秒杀结果只依赖单次实时通知，断线或跨实例异常后用户无法确认结果 | WebSocket + Redis pub/sub 作为快速通知，`GET /voucher-order/status/{orderId}` 作为用户隔离的持久兜底；前端超时后有限轮询，64 位订单 ID 全链路按字符串传输 | `WebSocketNotifierTest`、`SeckillWebSocketIT`、`VoucherOrderServiceImplTest` |
 | 商铺、优惠券写接口匿名可调用，消费者账号可冒充管理端，管理广播没有商户边界 | 新增独立 `tb_admin_account` + BCrypt 登录、固定角色 RBAC 和以 `tb_shop.merchant_id` 为根的数据范围；旧写映射退役。后台 WebSocket 使用 30 秒一次性 ticket、平台/商户独立频道和发送前权限复核；同一连接的并发发送有界串行化 | `AdminMvcSecurityTest`、`AdminRbacIT`、`AdminCatalogServiceTest`、`WebSocketSessionIsolationTest` |
 | 点赞用 Redis ZSET 判状态且每次请求直接更新 `tb_blog.liked`，并发重试会双计、Redis 丢失后无法恢复用户身份 | `tb_blog_like` 作为身份真相，显式 PUT/DELETE 与不可变 outbox 同事务；worker 聚合 delta 并与 processed 标记同事务。旧 Redis 身份需停写导入，持久 cutover marker 未完成时生产写入 fail-closed | `BlogLikeCommandServiceTest`、`BlogLikeReliabilityIT`、`docs/blog-like-hot-rank.md` |
@@ -37,7 +37,7 @@
 | 压测容易只看 HTTP Error%，无法证明业务正确性 | 当前脚本同时校验 MySQL 订单数、重复下单、DB/Redis 库存、精确 reservation 数、全部 `SUCCESS` 终态、活动状态和本券 processing index 归零；Broker 堆积/DLQ 明确交由 RocketMQ 运维面观察 | `scripts/run-seckill-benchmark.sh`、`docs/jmeter-usage.md` |
 | 异步下单链路缺少运行时观测入口 | 接入 Micrometer / Prometheus，暴露秒杀请求分流、MQ 消费结果、DB 幂等与库存回滚等指标 | `/actuator/prometheus` |
 | 关键依赖故障只能靠日志猜测，Actuator 与业务入口同面暴露 | M5A 建立固定枚举指标目录，补齐点赞/Outbox、热榜、商铺缓存、认证、ES consumer 和秒杀 backlog 观测；management 仅绑定 loopback 独立端口，nginx 明确拒绝 `/api/actuator` | `docs/m5a-metric-catalog.md`、`docs/m5a-observability-results.md` |
-| 突发秒杀在 ID/MQ 前无共享准入，缓存/搜索故障可能放大 DB/ES 并返回模糊 HTTP 200 | M5C 在 ID/MQ 前用 Redis TIME Lua 做 activity/user/IP 固定窗；DB_READ/SEARCH 仅两枚 JVM semaphore；follower 750ms 有界等待；统一 429/503/业务码，ES 故障不回退无界 MySQL LIKE | `docs/m5c-resource-traffic-results.md`；双实例 activity 合计 300、冷 key DB fallback delta=2；Broker F5 仍 BLOCKED |
+| 突发秒杀在 ID/MQ 前无共享准入，缓存/搜索故障可能放大 DB/ES 并返回模糊 HTTP 200 | M5C 在 ID/MQ 前用 Redis TIME Lua 做 activity/user/IP 固定窗；DB_READ/SEARCH 仅两枚 JVM semaphore；follower 750ms 有界等待；统一 429/503/业务码，ES 故障不回退无界 MySQL LIKE | `docs/m5c-resource-traffic-results.md`；M5D 严格 PID/TCP 隔离门禁后补做 Broker F5，20/20 为 503 且业务无增量 |
 
 
 ## 前端
@@ -275,7 +275,7 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - 优惠券秒杀：RocketMQ 事务消息把半消息与 Redis Lua 原子预占绑定；Lua 使用 Redis 服务端时间校验活动窗口，并记录精确 reservation 与 `PROCESSING` 状态。
 - 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
 - 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
-- 可观测性：M5A 已补齐秒杀、点赞 Outbox、热榜、商铺缓存、认证和 ES consumer 的低基数 Prometheus 指标；management 独立绑定 loopback 端口。M5B 有界缓存已完成并保留隔离故障证据；M5C 限流/统一降级语义尚未实施。
+- 可观测性：M5A 指标目录、M5B 有界缓存、M5C 资源门禁和 M5D 故障恢复均已完成；M5D 新增低基数秒杀 DB persist Timer，并在 run-id 专用栈验证 Redis/MySQL/consumer pause/ES/Broker 故障。management 仍独立绑定 loopback，结果见 `docs/m5d-reliability-results.md`。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
 
 ### 管理端本阶段边界

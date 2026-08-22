@@ -1,6 +1,6 @@
 # M5A 低基数指标目录与管理面契约
 
-> 状态：M5A 实施契约；商铺缓存条目含 M5B/M5C 有限扩展
+> 状态：M5A 实施契约；含 M5B/M5C 有限扩展与 M5D 收口
 >
 > 基线提交：`a36e379`
 >
@@ -28,6 +28,7 @@
 | `local_deals.seckill.mq.consume` / `local_deals_seckill_mq_consume_total` | Counter | `result=success|failure` | 兼容旧指标。`success` 包含新落库和 already-success ACK；`failure` 混合暂态重试、已补偿 ACK、永久补偿与隔离，不能单独推断 DLQ 或 Broker lag。M5A 在目录中保留这一局限，不用动态异常标签拆分。 |
 | `local_deals.seckill.mq.consume.outcome` / `local_deals_seckill_mq_consume_outcome_total` | Counter | `result=persisted|already_success|already_failed|malformed|lock_busy|reservation_mismatch|state_missing|compensated|quarantined|transient_error|compensation_error|quarantine_error` | M5A 新增的有限详细结果，每次 delivery attempt 只递增一个；与兼容 aggregate 分开查询，不能和旧 `success|failure` 相加。WebSocket 通知是持久终态后的 best-effort，不改变本指标 outcome。 |
 | `local_deals.seckill.db.orders` / `local_deals_seckill_db_orders_total` | Counter | `result=duplicate|stock_rollback` | DB 幂等命中和库存条件更新失败；不是全部订单写入计数。 |
+| `local_deals.seckill.db.persist.duration` / `local_deals_seckill_db_persist_duration_seconds_*` | Timer/seconds | `result=success|failure` | M5D 新增；只包 consumer 实际调用 `createVoucherOrder` 的时间。返回记 success，抛出记 failure；每次实际调用只记一次，发布 histogram。 |
 | `local_deals.seckill.reconciliation` / `local_deals_seckill_reconciliation_total` | Counter | `result=success_repaired|timeout_compensated|pair_conflict_compensated|pair_conflict_blocked|order_id_quarantined|invalid_state_quarantined|compensation_disabled|deferred|claim_skipped|scheduler_busy|lock_busy|scan_error|database_error|state_error|invalid_state` | 每个对账分类分支一次。有限枚举保留现有语义；Broker lag 不能从该指标推算。 |
 
 ## 3. M5A 新增指标
@@ -97,9 +98,11 @@ M5A 基线期 Redis 异常仍抛出；M5B 已将其改为有界 DB fallback，�
 | `local_deals.es.sync.rows` / `local_deals_es_sync_rows_total` | Counter | 同上 table/operation；`result=success|failure|ignored` | 每行一个终态；缺 id、转换失败和 ES 写失败均为 failure。 |
 | `local_deals.es.sync.apply.duration` / `local_deals_es_sync_apply_duration_seconds_*` | Timer/seconds | `table=shop|blog`; `operation=insert|update|delete|other` | 包住一条目标消息的逐行应用，发布 histogram。 |
 
-当前 DTO 没有经验证的事件时间，目录中没有 ES lag 指标。RocketMQ/Canal backlog 必须来自
-Broker 管理面，不能由 message Counter 相减推算。consumer 当前逐行异常后 ACK 的事实由
-`partial_failure` 暴露，M5A 不改变 ACK/重试语义。
+当前 DTO 没有经验证的事件时间，目录中没有 ES event lag 指标。RocketMQ backlog 必须来自
+Broker 管理面，不能由 message Counter 相减推算。M5D 起，目标消息解析、行转换或 ES 写入失败
+在记录 failure/partial_failure 后抛出，由 RocketMQ retry/DLQ；DDL 和无关表仍以 ignored ACK。
+topic/group 分别由 `local-deals.es-sync.topic` 与 `local-deals.es-sync.consumer-group` 配置，默认仍为
+`mysql-sync-topic` / `es-sync-consumer-group`。固定业务主键作为 ES `_id`，重复投递为幂等目标状态操作。
 
 ### 3.6 秒杀 PROCESSING 采样
 
