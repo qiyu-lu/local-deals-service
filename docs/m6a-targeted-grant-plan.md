@@ -102,3 +102,35 @@ admin grant 并发仍只有一行；失败、503、无资格和旧规则版本�
 V1->V9 和 V8->V9 各 9 条 migration 通过；真实 MySQL 商户隔离测试 1/1 通过。统一 grant、并发
 不变量、Controller、前端、故障验证、全量测试和结果收口均未执行。专用容器暂不删除，以保留
 迁移现场；当前状态只能是 `M6A BLOCKED / M6 in progress / M6B/M6C not started and not authorized`。
+
+## 9. R0 恢复尝试记录（2026-08-22）
+
+本轮新 run-id 为 `m6a_20260822b`。旧 `m6a-20260822a` 容器虽然名称、label、镜像和端口
+分别指向 `127.0.0.1:24316`、`127.0.0.1:27389`，但没有可验证的 MySQL run-id
+sentinel，Redis run-id sentinel 也未通过，因此没有使用、修改或清理旧容器。
+
+新建且仅用于本轮 R0 的容器为 `m6a-m6a_20260822b-mysql`（`mysql:8.0`，
+`127.0.0.1:24317->3306`）和 `m6a-m6a_20260822b-redis`（`redis:7.2-alpine`，
+`127.0.0.1:27390->6379`），网络和两个容器均带
+`com.localdeals.m6a.run-id=m6a_20260822b`。MySQL sentinel 与 Redis sentinel 均返回
+`m6a_20260822b`；Redis 只有 sentinel key，业务 key 为 0。未启动 RocketMQ，也未触碰
+共享 `9876/10911`。
+
+R0 正式命令使用 Java 8、Maven offline，并由 `strace -f -e trace=connect` 记录 Maven 和
+Surefire 子进程。连接日志共 269 行，其中 13 次 TCP connect 全部为专用 MySQL
+`127.0.0.1:24317` 的 IPv4-mapped IPv6 表示；其余为本机 nscd Unix socket。没有
+`9876`、`10911`、`9200`、`3306`、`6379` 或其他无法解释的 AF_INET/AF_INET6 目标。
+原始证据保留在 `/tmp/m6a-r0-20260822b.txNjKg/`。
+
+本次正式 R0 仍为 `BLOCKED`，原因是测试 guard 的 target marker 在 Flyway 迁移前写入，
+使 fresh schema 非空；独立 Flyway 因此没有执行 V1，V2 在找不到 `tb_voucher_order` 时
+失败。`M6aFlywayIT` 和 `MarketingAdminIsolationIT` 共运行 2 个测试、均为 error；
+后者的 Spring 上下文在 Flyway initializer 阶段失败，RocketMQ bean 断言尚未执行，
+不能将其记为 PASS。失败后仅保留了 sentinel/marker 和部分 Flyway history，没有产生
+merchant、tag、member、campaign、grant fixture，Redis 仍只有 sentinel。
+
+已在未提交 WIP 中将 target marker 改为“fresh/upgrade migration 和 schema assert 成功后
+才写入”；失败或部分迁移的 schema 没有 marker 时，下一次会在 DROP 前停止。该修正只
+完成离线 `test-compile`，按一次性 R0 规则不进行第二次真实依赖重跑。契约偏差、统一
+grant、并发不变量、Controller、前端、故障验证、全量测试均未开始；当前仍为
+`M6A BLOCKED / M6 in progress / M6B/M6C not started and not authorized`。
