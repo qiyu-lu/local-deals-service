@@ -44,6 +44,7 @@ public class LocalDealsMetrics {
     public enum TrafficResource { SECKILL, DB_READ, SEARCH }
     public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
     public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
+    public enum SeckillDbPersistResult { SUCCESS, FAILURE }
     public enum MqConsumeOutcome {
         PERSISTED,
         ALREADY_SUCCESS,
@@ -84,6 +85,8 @@ public class LocalDealsMetrics {
             new EnumMap<>(CollectorResult.class);
     private final Map<MqConsumeOutcome, Counter> mqConsumeOutcomes =
             new EnumMap<>(MqConsumeOutcome.class);
+    private final Map<SeckillDbPersistResult, Timer> seckillDbPersistDurations =
+            new EnumMap<>(SeckillDbPersistResult.class);
     private final Map<String, Counter> trafficDecisions = new HashMap<>();
     private final Map<TrafficResource, AtomicInteger> trafficInflight =
             new EnumMap<>(TrafficResource.class);
@@ -235,6 +238,14 @@ public class LocalDealsMetrics {
                             "Detailed finite outcome for each seckill MQ delivery attempt",
                             "result", metricValue(outcome)));
         }
+        for (SeckillDbPersistResult result : SeckillDbPersistResult.values()) {
+            seckillDbPersistDurations.put(result,
+                    Timer.builder("local_deals.seckill.db.persist.duration")
+                            .description("MySQL persistence duration for an admitted seckill order")
+                            .tag("result", metricValue(result))
+                            .publishPercentileHistogram()
+                            .register(registry));
+        }
         registerTrafficDecision(registry, TrafficResource.SECKILL,
                 TrafficResult.ALLOWED, TrafficReason.NONE);
         registerTrafficDecision(registry, TrafficResource.SECKILL,
@@ -318,6 +329,10 @@ public class LocalDealsMetrics {
 
     public void recordMqConsumeOutcome(MqConsumeOutcome outcome) {
         safeIncrement(mqConsumeOutcomes.get(outcome));
+    }
+
+    public void recordSeckillDbPersist(SeckillDbPersistResult result, long nanos) {
+        safeRecord(seckillDbPersistDurations.get(result), nanos);
     }
 
     public void recordTraffic(TrafficResource resource, TrafficResult result, TrafficReason reason) {

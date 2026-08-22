@@ -66,6 +66,7 @@ class CanalSyncIT {
             "\"images\":\"test.jpg\",\"address\":\"Test Address\",\"x\":\"120.15\",\"y\":\"30.33\"," +
             "\"avg_price\":\"100\",\"sold\":\"0\",\"comments\":\"0\",\"score\":\"40\"}]}";
         esSyncConsumer.onMessage(json);
+        esSyncConsumer.onMessage(json);
         ShopDoc doc = findShopDoc();
         assertThat(doc).isNotNull();
         assertThat(doc.getName()).isEqualTo("CanalTestShop");
@@ -88,6 +89,7 @@ class CanalSyncIT {
             "\"avg_price\":\"200\",\"sold\":\"5\",\"comments\":\"2\",\"score\":\"45\"}]," +
             "\"old\":[{\"name\":\"OldName\",\"avg_price\":\"100\"}]}";
         esSyncConsumer.onMessage(updateJson);
+        esSyncConsumer.onMessage(updateJson);
         ShopDoc doc = findShopDoc();
         assertThat(doc).isNotNull();
         assertThat(doc.getName()).isEqualTo("NewName");
@@ -108,6 +110,7 @@ class CanalSyncIT {
             "\"data\":[{\"id\":\"999901\",\"name\":\"ToDelete\",\"type_id\":\"1\"," +
             "\"images\":\"test.jpg\",\"address\":\"Test Address\",\"x\":\"120.15\",\"y\":\"30.33\"," +
             "\"avg_price\":\"100\",\"sold\":\"0\",\"comments\":\"0\",\"score\":\"40\"}]}";
+        esSyncConsumer.onMessage(deleteJson);
         esSyncConsumer.onMessage(deleteJson);
         assertThat(findShopDoc()).isNull();
     }

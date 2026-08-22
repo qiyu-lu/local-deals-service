@@ -16,13 +16,15 @@ import org.springframework.stereotype.Service;
 import java.util.Map;
 
 /**
- * Consumes Canal FlatMessage events from {@code mysql-sync-topic} (produced by Canal Server
+ * Consumes Canal FlatMessage events from the configured ES sync topic (produced by Canal Server
  * watching MySQL binlog for {@code tb_shop} and {@code tb_blog}) and keeps the corresponding
  * Elasticsearch indices ({@code shop_index} / {@code blog_index}) eventually consistent with MySQL.
  */
 @Slf4j
 @Service
-@RocketMQMessageListener(topic = "mysql-sync-topic", consumerGroup = "es-sync-consumer-group")
+@RocketMQMessageListener(
+        topic = "${local-deals.es-sync.topic:mysql-sync-topic}",
+        consumerGroup = "${local-deals.es-sync.consumer-group:es-sync-consumer-group}")
 public class EsSyncConsumer implements RocketMQListener<String> {
 
     private static final IndexCoordinates SHOP_INDEX = IndexCoordinates.of("shop_index");
@@ -42,18 +44,22 @@ public class EsSyncConsumer implements RocketMQListener<String> {
         try {
             msg = JSONUtil.toBean(message, CanalMessage.class);
         } catch (Exception e) {
-            log.error("Failed to parse Canal message: {}", message, e);
+            log.error("Failed to parse Canal message; delivery will be retried", e);
             metrics.recordEsMessage(LocalDealsMetrics.EsTable.IGNORED,
                     LocalDealsMetrics.EsOperation.OTHER,
                     LocalDealsMetrics.EsMessageResult.FAILURE);
-            return;
+            throw new IllegalArgumentException("Malformed Canal message, will retry", e);
         }
         LocalDealsMetrics.EsTable table = tableOf(msg == null ? null : msg.getTable());
         LocalDealsMetrics.EsOperation operation = operationOf(msg == null ? null : msg.getType());
-        if (msg == null || Boolean.TRUE.equals(msg.getIsDdl()) || msg.getData() == null ||
-                msg.getData().isEmpty() || table == LocalDealsMetrics.EsTable.IGNORED) {
+        if (msg != null && (Boolean.TRUE.equals(msg.getIsDdl()) ||
+                table == LocalDealsMetrics.EsTable.IGNORED)) {
             metrics.recordEsMessage(table, operation, LocalDealsMetrics.EsMessageResult.IGNORED);
             return;
+        }
+        if (msg == null || msg.getData() == null || msg.getData().isEmpty()) {
+            metrics.recordEsMessage(table, operation, LocalDealsMetrics.EsMessageResult.FAILURE);
+            throw new IllegalArgumentException("Target Canal message has no rows, will retry");
         }
 
         long startedAt = System.nanoTime();
@@ -71,6 +77,10 @@ public class EsSyncConsumer implements RocketMQListener<String> {
                         ? LocalDealsMetrics.EsMessageResult.FAILURE
                         : LocalDealsMetrics.EsMessageResult.PARTIAL_FAILURE);
         metrics.recordEsMessage(table, operation, result);
+        if (stats.failures > 0) {
+            throw new IllegalStateException("Failed to apply " + stats.failures +
+                    " row(s) from target Canal message; delivery will be retried", stats.firstFailure);
+        }
     }
 
     private ApplyStats handleShop(CanalMessage msg,
@@ -82,8 +92,7 @@ public class EsSyncConsumer implements RocketMQListener<String> {
             try {
                 String id = strVal(row, "id");
                 if (id == null) {
-                    stats.failure(metrics, table, operation);
-                    continue;
+                    throw new IllegalArgumentException("Canal shop row is missing id");
                 }
                 if (isDelete) {
                     esTemplate.delete(id, SHOP_INDEX);
@@ -96,8 +105,9 @@ public class EsSyncConsumer implements RocketMQListener<String> {
                 }
                 stats.success(metrics, table, operation);
             } catch (Exception e) {
-                stats.failure(metrics, table, operation);
-                log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
+                stats.failure(metrics, table, operation, e);
+                log.warn("Failed to apply Canal row for table={}; delivery will be retried",
+                        msg.getTable(), e);
             }
         }
         return stats;
@@ -112,8 +122,7 @@ public class EsSyncConsumer implements RocketMQListener<String> {
             try {
                 String id = strVal(row, "id");
                 if (id == null) {
-                    stats.failure(metrics, table, operation);
-                    continue;
+                    throw new IllegalArgumentException("Canal blog row is missing id");
                 }
                 if (isDelete) {
                     esTemplate.delete(id, BLOG_INDEX);
@@ -126,8 +135,9 @@ public class EsSyncConsumer implements RocketMQListener<String> {
                 }
                 stats.success(metrics, table, operation);
             } catch (Exception e) {
-                stats.failure(metrics, table, operation);
-                log.warn("Skipping malformed Canal row for table={}: {}", msg.getTable(), row, e);
+                stats.failure(metrics, table, operation, e);
+                log.warn("Failed to apply Canal row for table={}; delivery will be retried",
+                        msg.getTable(), e);
             }
         }
         return stats;
@@ -212,6 +222,7 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private static final class ApplyStats {
         private int successes;
         private int failures;
+        private RuntimeException firstFailure;
 
         private void success(LocalDealsMetrics metrics, LocalDealsMetrics.EsTable table,
                              LocalDealsMetrics.EsOperation operation) {
@@ -220,8 +231,12 @@ public class EsSyncConsumer implements RocketMQListener<String> {
         }
 
         private void failure(LocalDealsMetrics metrics, LocalDealsMetrics.EsTable table,
-                             LocalDealsMetrics.EsOperation operation) {
+                             LocalDealsMetrics.EsOperation operation, Exception cause) {
             failures++;
+            if (firstFailure == null) {
+                firstFailure = cause instanceof RuntimeException
+                        ? (RuntimeException) cause : new IllegalStateException(cause);
+            }
             metrics.recordEsRow(table, operation, LocalDealsMetrics.EsRowResult.FAILURE);
         }
     }

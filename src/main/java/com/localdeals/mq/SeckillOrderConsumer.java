@@ -135,7 +135,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                 throw new IllegalStateException(
                         "Redis reservation state is missing or incomplete, will retry. orderId=" + msg.getOrderId());
             }
-            voucherOrderService.createVoucherOrder(msg.toVoucherOrder());
+            persistOrder(msg);
             if (!seckillOrderStateService.markSuccess(msg)) {
                 throw new IllegalStateException(
                         "Exact Redis reservation could not be marked SUCCESS. orderId=" + msg.getOrderId());
@@ -162,6 +162,18 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             throw e;
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void persistOrder(SeckillOrderMessage msg) {
+        long startedAt = System.nanoTime();
+        LocalDealsMetrics.SeckillDbPersistResult result =
+                LocalDealsMetrics.SeckillDbPersistResult.FAILURE;
+        try {
+            voucherOrderService.createVoucherOrder(msg.toVoucherOrder());
+            result = LocalDealsMetrics.SeckillDbPersistResult.SUCCESS;
+        } finally {
+            localDealsMetrics.recordSeckillDbPersist(result, System.nanoTime() - startedAt);
         }
     }
 

@@ -38,6 +38,10 @@ class LocalDealsMetricsTest {
                 .counter()).isNotNull();
         assertThat(registry.find("local_deals.traffic.inflight")
                 .tag("resource", "db_read").gauge()).isNotNull();
+        assertThat(registry.find("local_deals.seckill.db.persist.duration")
+                .tag("result", "success").timer()).isNotNull();
+        assertThat(registry.find("local_deals.seckill.db.persist.duration")
+                .tag("result", "failure").timer()).isNotNull();
         assertThat(registry.find("local_deals.traffic.decision")
                 .tags("resource", "db_read", "result", "rejected", "reason", "ip")
                 .counter()).isNull();

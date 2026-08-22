@@ -155,6 +155,9 @@ local-deals:
       block: 2s
       max-retry: 3
       retry-key-prefix: "seckill:stream:retry:"
+  es-sync:
+    topic: "${LOCAL_DEALS_ES_SYNC_TOPIC:mysql-sync-topic}"
+    consumer-group: "${LOCAL_DEALS_ES_SYNC_CONSUMER_GROUP:es-sync-consumer-group}"
 rocketmq:
   name-server: localhost:9876
   producer:

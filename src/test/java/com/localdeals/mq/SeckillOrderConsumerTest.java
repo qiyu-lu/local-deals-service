@@ -19,6 +19,7 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -44,9 +45,11 @@ class SeckillOrderConsumerTest {
     @Mock
     private RLock lock;
 
+    private SimpleMeterRegistry registry;
+
     @BeforeEach
     void allowExactProcessingReservation() {
-        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        registry = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(consumer, "meterRegistry", registry);
         ReflectionTestUtils.setField(consumer, "localDealsMetrics", new LocalDealsMetrics(registry));
         ReflectionTestUtils.invokeMethod(consumer, "registerMetrics");
@@ -73,6 +76,8 @@ class SeckillOrderConsumerTest {
         verify(seckillOrderStateService).suspendVoucher(88888L, "DB_STOCK_EXHAUSTED");
         verify(seckillOrderStateService).compensate(msg, "DB_STOCK_EXHAUSTED");
         verify(webSocketNotifier).notify(1L, false, 999L, 88888L);
+        assertThat(registry.get("local_deals.seckill.db.persist.duration")
+                .tag("result", "failure").timer().count()).isEqualTo(1L);
     }
 
     @Test
@@ -140,6 +145,8 @@ class SeckillOrderConsumerTest {
         inOrder.verify(voucherOrderService).createVoucherOrder(any());
         inOrder.verify(seckillOrderStateService).markSuccess(msg);
         verify(webSocketNotifier).notify(4L, true, 996L, 88888L);
+        assertThat(registry.get("local_deals.seckill.db.persist.duration")
+                .tag("result", "success").timer().count()).isEqualTo(1L);
     }
 
     @Test
