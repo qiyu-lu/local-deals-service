@@ -443,6 +443,18 @@ feat(coupon): unify claim push and task reward grants
 feat(marketing): add auditable batch delivery and notification outbox
 ```
 
+### 9.7 当前 M6A 实施快照（2026-08-22）
+
+当前阶段为 `M6A IN PROGRESS`；M6B/M6C 未开始且未经授权。M6A-R0 已用新的
+`m6a_20260822c` 解除当前隔离阻塞：fresh V1→V9、upgrade V8→V9、schema assert、真实
+MySQL 商户隔离 1/1 和无 RocketMQ/Redis/ES runtime bean 断言均通过。原始 `d026db3`
+BLOCKED 结论和 `m6a_20260822b` 失败仍保留，不能追溯改判为 PASS。
+
+R0 后已完成并分段提交标签/活动、统一 grant ledger、真实 MySQL 并发不变量、Controller、
+最小前端、低基数指标和 MySQL/Redis 故障路径；Java 8 安全单元回归 307/307，前端 build
+通过。未执行会连接共享 RocketMQ 或默认 MySQL/Redis/ES 的旧外部 IT，故不把这组证据表述为
+无条件全量外部回归。c 的专用容器和网络已按精确 run-id 清理，未执行 broad prune，未 push。
+
 ## 10. 阶段 M7：故障演练和展示收口
 
 ### 10.1 必须能回答的故障矩阵

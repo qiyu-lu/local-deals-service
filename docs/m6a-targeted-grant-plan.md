@@ -1,6 +1,6 @@
 # M6A 商户定向发券最小闭环实施契约
 
-> 状态：BLOCKED；命中共享依赖停止线，M6A 未完成
+> 状态：IN PROGRESS；M6A-R0 隔离阻塞已解除，M6A 尚未完成；历史 BLOCKED 记录保留
 >
 > 起点：`2f83b6b docs(observability): record M5D recovery evidence`
 >
@@ -164,3 +164,58 @@ grant fixture 均为 0；V1 基线数据不计为 M6A fixture。fresh V1→V9 �
 因此追加结论：`m6a_20260822c R0 PASS / historical blockers retained`。`d026db3` 的原始
 BLOCKED 结论和 `m6a_20260822b` 的失败均保留，不改判为 PASS；当前阶段恢复为
 `M6A IN PROGRESS / M6B/M6C not started and not authorized`。
+
+## 11. M6A 继续实施与验证证据（2026-08-22）
+
+本节记录 R0 通过后继续实施的当前状态；第 8、9 节的历史 BLOCKED 记录不改写。
+
+### 11.1 契约修正与提交链
+
+以下偏差已在当前提交链中修正：
+
+- `VoucherCampaignRequest` 和 `VoucherCampaignStatusRequest` 携带 expected status/ruleVersion；
+- 活动更新只允许 `DRAFT/PAUSED`，SQL 同时限制 `merchant_id`、expected status/version、
+  `granted_count <= quota_total`；状态流转成功后递增版本；
+- 已产生 grant 后禁止修改 voucher；后台 scoped 查询强制 merchantId，用户领取使用独立查询；
+- V9 通过 `(campaign_id, merchant_id, voucher_id)` 约束 grant 必须来自同一条锁定 campaign；
+- Flyway IT 读取并校验 `M6A_RUN_ID`，由 run-id 派生 fresh/upgrade schema，并在专用 MySQL
+  sentinel、目标 schema 和迁移/schema assert 均通过后才写 marker。
+
+当前本地提交链为：`a4f9326`（标签/活动）、`5d5b22c`（统一 grant ledger）、`daaa2f6`
+（隔离与并发不变量）、`c387116`（Controller/前端/指标）和 `b9f6a0c`（故障路径）。
+历史 `d026db3`、`446455d`、`ea9245e`、`9e98ce3` 均保留，未 amend、squash 或删除。
+
+### 11.2 真实 MySQL/Redis 证据
+
+- `M6aFlywayIT`：fresh V1→V9、upgrade V8→V9 均为 history=9，schema assert 和权限矩阵通过；
+  c 的 target marker=1。`MarketingAdminIsolationIT` 商户隔离 1/1，事务回滚后 M6A
+  merchant/admin/shop/voucher/order/tag/member/campaign/grant fixture 均为 0。
+- `MarketingGrantConcurrencyIT` 5/5：同用户 100 并发只有 1 grant 且计数 +1；100 用户竞争
+  quota=10 恰好 10；USER_CLAIM/ADMIN_GRANT 同用户只有 1；旧 ruleVersion 零副作用；标签
+  移除竞态不破坏不变量。最终证据为 `/tmp/m6a-final-20260822c.ZZd31C/`，TCP connect
+  全部只到 `127.0.0.1:24318`，另有本机 nscd Unix socket。
+- 实际 bean absence 断言通过：不存在 `DefaultMQProducer`、`DefaultLitePullConsumer`、
+  `DefaultMQPushConsumer`、`DefaultRocketMQListenerContainer`、真实 `RocketMQTemplate`、
+  `RedisConnectionFactory` 和 `RestHighLevelClient`；日志无 producer/consumer 启动、client
+  register 或 NameServer 连接。
+- Redis 故障测试使用 c 的专用 `127.0.0.1:27391`，`M6aRedisAuthFailureIT 1/1`，错误 token
+  返回 401、UserHolder 为空、DBSIZE 未增加；Redis 仅有 run-id sentinel。MySQL 停止故障测试
+  `M6aMysqlStopFailureIT 1/1`，精确停止/恢复 c 容器，发放返回 503/DATABASE_UNAVAILABLE，
+  grant 计数无副作用。证据分别为 `/tmp/m6a-redis-20260822c.kBxLQ1/` 和
+  `/tmp/m6a-mysql-fault-20260822c.HD9KJK/`。
+
+### 11.3 API、前端、指标和回归边界
+
+Controller 安全测试 3/3，低基数 grant source/result 指标测试通过；管理端最小前端 build
+通过。Java 8 下安全的非外部单元回归为 307/307（`/tmp/m6a-java8-unit-20260822c.ck4N7F/`）。
+未执行未加隔离门禁的旧 RocketMQ/Redis/ES/WebSocket/搜索 IT；其中部分会访问共享
+`9876/10911` 或默认 `3306/6379/9200`，继续执行会违反本阶段硬停止线，因此不能把本轮称为
+“无条件全量外部回归”。不实施 M6B/M6C、批量发券、MQ/Outbox/通知或技术栈升级。
+
+### 11.4 清理与当前阶段
+
+已按精确名称、label、镜像、网络和端口核对并删除 `m6a_20260822a`、`m6a_20260822b` 的
+专用容器/网络；随后删除 c 的 `m6a-m6a_20260822c-mysql`（`24318->3306`）、
+`m6a-m6a_20260822c-redis`（`27391->6379`）及 `m6a-m6a_20260822c-net`。未执行 broad
+prune，未触碰共享 RocketMQ；c 的 schema、sentinel、marker、connect、日志和测试结果已
+保留在本节及 `/tmp` 证据目录。当前阶段仍为 `M6A IN PROGRESS`；未 push。
