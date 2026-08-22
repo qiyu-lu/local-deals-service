@@ -8,9 +8,9 @@
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新已完成阶段：M6A（提交链和证据见 `docs/m6a-targeted-grant-results.md`）
+> 最新已完成阶段：M6B（提交链和证据见 `docs/m6b-daily-task-results.md`）
 >
-> 当前阶段：M5A、M5B、M5C、M5D、M6A 已完成；M6 后续范围等待下一阶段定义；M6B/M6C 未开始且未经授权
+> 当前阶段：M5A、M5B、M5C、M5D、M6A 已完成；M6B COMPLETED（每日签到与任务奖励）；M6 IN PROGRESS；M6C（批量发放与通知 Outbox）未开始且未经授权
 
 这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
 
@@ -470,6 +470,24 @@ RocketMQ/Redis/ES bean absence、Java 8 回归、MVC、Node 前端和 admin buil
 唯一 AF_INET/AF_INET6 目标为专用 `127.0.0.1:24320`；fixture 清零后按精确名称清理容器和网络。
 因此 M6A 标记为 `COMPLETED`；M6 后续范围等待下一阶段定义，M6B/M6C 未开始且未经授权。原始
 d026db3、`m6a_20260822b` 和 `m6a_close_20260822a` BLOCKED 记录保留，不改判 PASS。
+
+### 9.9 M6B 当前实施边界（2026-08-22）
+
+M6B = **每日签到与任务奖励**，实施计划见 `docs/m6b-daily-task-plan.md`。本阶段只实现固定
+任务 `DAILY_SIGN_IN`：签到事实落 MySQL，连续签到从 MySQL 日期记录计算，TASK 活动奖励复用
+M6A 的统一 grant 事务和标签资格；默认业务时区为 `Asia/Shanghai`，日期和幂等键均由服务端生成。
+V10 负责签到唯一事实、TASK/`TASK_REWARD` 枚举、历史 grant `ONCE` 回填和新的 grant 唯一边界。
+
+M6C = **批量发放与通知 Outbox**，本阶段未开始且未经授权；不实施批量 job、通知 Outbox、MQ
+或其他异步发券能力。9.7/9.8 的 M6A 历史快照和 BLOCKED 证据保持不变。
+
+### 9.10 M6B 完成结论（2026-08-22）
+
+M6B 已完成：V10 fresh V1→V10、upgrade V9→V10、MySQL 签到唯一事实、固定任务每日奖励、
+业务时区、统一 grant 事务、TASK 查询幂等、前端最小闭环和 Java/Node/admin 验证均通过。真实
+隔离证据、并发不变量、fixture 清零、strace 目标和失败尝试见 `docs/m6b-daily-task-results.md`。
+当前阶段标记为 `M6 IN PROGRESS`；M6C（批量发放与通知 Outbox）未开始且未经授权。M5/M6A
+历史 BLOCKED 证据保持原样，不追溯改判。
 
 ## 10. 阶段 M7：故障演练和展示收口
 
