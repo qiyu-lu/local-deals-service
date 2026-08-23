@@ -513,7 +513,7 @@ skipped/failed=100/100/0/0/0，6 个 worker-equivalent 批次，收敛 722ms；i
 ### 9.12 M6 收口结论（2026-08-23）
 
 M6A、M6B、M6C 的业务闭环、迁移、权限、前端和隔离回归均已形成结果文档，M6 标记为
-`COMPLETED`。M7 保持 `not started`；核销、支付、退款和技术栈升级不属于本次收口。
+`COMPLETED`。M7 收口结论见 10.3；核销、支付、退款和技术栈升级不属于本次收口。
 
 ## 10. 阶段 M7：故障演练和展示收口
 
@@ -523,7 +523,7 @@ M6A、M6B、M6C 的业务闭环、迁移、权限、前端和隔离回归均已�
 | --- | --- | --- | --- | --- |
 | Redis 短时不可用 | 鉴权/秒杀 fail closed；热榜受控回 DB；M4 后点赞身份走 MySQL | MQ consumer 重试，不能无预约落库 | 恢复连接，核对 processing/outbox/cache rebuild | 错误码、DB QPS、积压年龄、恢复时间 |
 | Redis 全量数据丢失 | 立即停止秒杀新预占，禁止用空库存 key 启动 | 保留 MQ，恢复 AOF/备份后精确对账 | 恢复备份、验证 reservation/status、再开流量 | 订单/库存/预约三方核对；明确 RPO |
-| RocketMQ 不可用 | 半消息发送失败则不做本地预占；通知类写 outbox | 已在 Broker 的消息按其重试/DLQ 策略处理 | 恢复路由，观察 backlog/DLQ，运行对账 | accepted 数、PROCESSING age、DLQ |
+| RocketMQ 不可用 | 半消息发送失败则不做本地预占；M6 通知使用 Redis Pub/Sub Outbox，不增加 MQ 通知链路 | 已在 Broker 的消息按其重试/DLQ 策略处理 | 恢复路由，观察 backlog/DLQ，运行对账 | accepted 数、PROCESSING age、DLQ；通知看 Outbox |
 | 消息延迟或重复 | 返回 PROCESSING，可通过状态接口查询 | 消费幂等；超龄后由 reconciler 精确分类 | 修复 consumer，先无补偿观察，再审批补偿 | 最终状态、重复订单 0、quarantine |
 | MySQL 不可用 | 写操作 fail closed；只对安全读提供有界陈旧缓存 | consumer/outbox 保留重试，积压超阈值后停止新流量 | 恢复 DB，先消费高优先级积压 | backlog、连接池等待、收敛时间 |
 | Elasticsearch 不可用 | 搜索限流降级，不做无界 DB 模糊扫描 | Canal/MQ 事件保留或进入失败处理 | 重建索引并比较源表行数/version | sync lag、缺失/多余文档数 |
@@ -535,13 +535,25 @@ M6A、M6B、M6C 的业务闭环、迁移、权限、前端和隔离回归均已�
 最终演示至少保留：
 
 - 一张系统边界图和一张秒杀状态流转图；
-- 固定参数的 baseline/current 压测结果；
+- 固定参数的历史 baseline/current 对照；不得与当前 RocketMQ 版本直接计算性能提升百分比；
 - Redis 断连、consumer 停止、DB 永久冲突、WebSocket 断线四类故障演示；
 - 每轮运行的环境、commit、命令、原始结果和业务不变量；
 - Prometheus/Grafana 截图只作为辅助，CSV/SQL/Redis 校验仍需可复现；
 - 一份“已解决、仍有边界、何时升级”的诚实清单。
 
 不要声称“完美解决缓存问题”“绝不丢消息”或“无懈可击”。更可信的表达是说明故障模型、可接受 RPO/RTO、自动恢复边界和需要人工审批的情况。
+
+### 10.3 M7 完成结论（2026-08-23）
+
+M7 已完成。统一入口见 `docs/m7-evidence-index.md`，机器矩阵见 `docs/m7-failure-matrix.csv`，
+演示手册见 `docs/m7-demo-runbook.md`，最终限制和无共享依赖检查见 `docs/m7-results.md`。
+M7 复用 M5C/M5D、M3 对账和 M6A--M6C 结果，没有重复完整故障矩阵；新增的前端断线行为只做
+最多 10 次、30 秒 deadline 的持久券包轮询，并由 Node contract 验证。M7 不启动外部依赖、不改
+生产 Java、不增加业务模块、不 push。
+
+故障矩阵明确保留 Redis 全量丢失和 Canal 完整 E2E 的 `NOT_TESTED`，M5D ES 为 consumer-level，
+M6 通知为 Redis Pub/Sub，不包装本地恢复时间为生产 SLA。由此 M5A--M5D、M6A--M6C、M7 和
+modernization mainline 均为 `COMPLETED`；M8/技术升级未开始。
 
 ## 11. Git 实施规范
 
@@ -630,19 +642,18 @@ MySQL保存长期业务事实；Redis承担会话、资格状态机和可重建�
 
 ## 15. 新会话执行清单
 
-M5 和 M6 已收口，M7 尚未开始。新会话先核对本阶段提交链、
-`docs/m6c-batch-notification-results.md`、`docs/m6a-targeted-grant-results.md` 和工作区状态；
-没有用户明确授权时不自动进入 M7 或技术栈升级。发布或演示前可复验既有阶段，但必须使用新的
-run-id 和专用依赖，保留 consumer-level/Canal E2E 边界以及历史负面证据。
+M5、M6 和 M7 已收口，modernization mainline 已完成。后续新会话只能在新的明确授权和独立阶段
+范围下工作；发布或演示前可复验既有阶段，但必须使用新的 run-id 和专用依赖，保留
+consumer-level/Canal E2E 边界以及历史负面证据，不自动进入技术栈升级。
 
 ### 可复制到新会话的提示词
 
 ```text
 请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md、
-docs/m6c-batch-notification-results.md 和 docs/m6a-targeted-grant-results.md，核对 branch、HEAD、
-status、diff 与 M6 提交链，不覆盖用户改动。M5A--M5D、M6A--M6C 已完成，M7 尚未开始；未经用户
-明确授权不要进入 M7、核销/支付/退款或技术栈升级。复验时必须使用新的 run-id 专用依赖，保留
-全部负面证据与 MQ/ES/外部 IT 未验证边界。
+docs/m7-results.md 和 docs/m7-evidence-index.md，核对 branch、HEAD、status、diff 与 M7 提交链，
+不覆盖用户改动。M5A--M5D、M6A--M6C、M7 和 modernization mainline 已完成；未经明确授权不要
+进入 M8、核销/支付/退款或技术栈升级。复验时必须使用新的 run-id 专用依赖，保留全部负面证据与
+MQ/ES/外部 IT 未验证边界。
 ```
 
 ## 16. 路线完成的判定
@@ -658,3 +669,5 @@ status、diff 与 M6 提交链，不覆盖用户改动。M5A--M5D、M6A--M6C 已
 - README、运行手册和面试表述不夸大测试边界。
 
 完成这些之后，继续升级框架、拆服务或分库分表都应被视为新的独立课题，而不是当前项目“还不够高级”的补丁。
+
+当前状态：`M7 COMPLETED`，`modernization mainline COMPLETED`，`M8 not started`，未 push。
