@@ -20,7 +20,7 @@ ROUND=""
 HOST="localhost"
 PORT=8083
 TOKENS_FILE="benchmark/tokens.csv"
-JMETER_PLAN="docs/Summary Report.jmx"
+JMETER_PLAN="docs/testing/seckill-benchmark.jmx"
 POLL_INTERVAL_MS=50
 DRAIN_TIMEOUT_MS=30000
 MYSQL_HOST="${MYSQL_HOST:-${LOCAL_DEALS_MYSQL_HOST:-localhost}}"
@@ -64,8 +64,8 @@ Options:
   --host HOST             Target host for JMeter. Default: localhost
   --port PORT             Target port for JMeter. Default: 8083
   --tokens-file PATH      Token CSV path. Default: benchmark/tokens.csv
-  --jmeter-plan PATH      JMeter plan path. Default: docs/Summary Report.jmx in project-dir.
-  --scenario NAME         Output folder under docs/JmeterTestSummary. Default: seckill-rocketmq-v2
+  --jmeter-plan PATH      JMeter plan path. Default: docs/testing/seckill-benchmark.jmx in project-dir.
+  --scenario NAME         Output folder under benchmark/seckill. Default: seckill-rocketmq-v2
   --impl NAME             File-name implementation label. Default: rocketmq-reservation-v2
   --project-dir PATH      Project checkout to run Maven/JMeter from. Default: this repo.
   --output-root PATH      Repo root where benchmark artifacts are written. Default: this repo.
@@ -217,7 +217,7 @@ if [[ -z "$EXPECTED_ORDERS" ]]; then
   fi
 fi
 
-RESULT_DIR_REL="docs/JmeterTestSummary/${SCENARIO}"
+RESULT_DIR_REL="benchmark/seckill/${SCENARIO}"
 BENCHMARK_DIR_REL="benchmark"
 RESULT_DIR="${OUTPUT_ROOT}/${RESULT_DIR_REL}"
 BENCHMARK_DIR="${OUTPUT_ROOT}/${BENCHMARK_DIR_REL}"

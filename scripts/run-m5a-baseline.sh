@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JMETER_PLAN="${PROJECT_DIR}/docs/m5a-http-baseline.jmx"
+JMETER_PLAN="${PROJECT_DIR}/docs/testing/m5a-http-baseline.jmx"
 
 fail() {
   echo "M5A baseline gate failed: $*" >&2

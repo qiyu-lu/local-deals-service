@@ -56,6 +56,7 @@ build/
 /benchmark/*-prometheus-after.txt
 /benchmark/report*/
 /benchmark/pre-m8/
-/docs/JmeterTestSummary/m7rc-*/
+/benchmark/seckill/
+/benchmark/redis-stream-reliability/
 jmeter.log
 .superpowers/

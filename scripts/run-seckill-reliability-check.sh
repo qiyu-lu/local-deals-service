@@ -149,7 +149,7 @@ fi
 export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
 
-RESULT_DIR_REL="docs/reliability-results"
+RESULT_DIR_REL="benchmark/redis-stream-reliability"
 RESULT_DIR="${OUTPUT_ROOT}/${RESULT_DIR_REL}"
 RUN_ID_PREFIX="${DATE}-${MODULE}-${IMPL}-fault-injection"
 if [[ -z "$ROUND" ]]; then
