@@ -34,6 +34,7 @@ flowchart LR
 | M5C/M5D | M5D F1–F5 专用 run-id 通过；M5C 过载/门禁结果保留；F4 明确 consumer-level | [`docs/m5d-reliability-results.md`](docs/m5d-reliability-results.md)、[`docs/m5c-resource-traffic-results.md`](docs/m5c-resource-traffic-results.md) |
 | M6A/M6B | M6A 统一 grant 与商户隔离；M6B 签到/TASK；V9/V10 fresh/upgrade 结果 | [`docs/m6a-targeted-grant-results.md`](docs/m6a-targeted-grant-results.md)、[`docs/m6b-daily-task-results.md`](docs/m6b-daily-task-results.md) |
 | M6C | 100 item：target/granted/idempotent/skipped/failed=`100/100/0/0/0`；6 批；收敛 722ms；Outbox Redis 恢复 25ms；item P99 与入口限流为 `NA` | [`docs/m6c-batch-notification-results.md`](docs/m6c-batch-notification-results.md) |
+| M7-RC | 专用 i run：M6C 1000 人 `1000/1000/0/0/0`；RocketMQ S1 三轮全成功；S2 `accepted=100/rejected_stock=900`；不与历史 Stream 计算提升 | [`docs/pre-m8-baseline-results.md`](docs/pre-m8-baseline-results.md)、[`docs/pre-m8-baseline-summary.csv`](docs/pre-m8-baseline-summary.csv) |
 
 数值均是对应专用本地环境的观测或真实数据库行，不是生产 SLA；`NA` 不用 0 冒充测量。
 
@@ -348,9 +349,12 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - [M7 故障矩阵](docs/m7-failure-matrix.csv)
 - [M7 15 分钟演示手册](docs/m7-demo-runbook.md)
 - [M7 最终结果与限制](docs/m7-results.md)
+- [M7-RC 基线计划](docs/pre-m8-baseline-plan.md)
+- [M7-RC 基线结果与简历证据](docs/pre-m8-baseline-results.md)
+- [M7-RC 机器可读汇总](docs/pre-m8-baseline-summary.csv)
 
 ## 外部压测与集成验证
 
-压测和外部 IT 不属于默认 Quick Start。它们必须使用阶段专用隔离脚本、显式 run-id、专用依赖
+M7-RC 已完成；M8/Java 17/Spring Boot 3 尚未开始。压测和外部 IT 不属于默认 Quick Start。它们必须使用阶段专用隔离脚本、显式 run-id、专用依赖
 和对应清理方式；不要把 `-Dtest="*IT"` 指向共享 MySQL/Redis/RocketMQ/ES。秒杀压测参数、业务
 不变量和历史对照见 [JMeter 使用说明](docs/jmeter-usage.md) 与 [M7 演示手册](docs/m7-demo-runbook.md)。
