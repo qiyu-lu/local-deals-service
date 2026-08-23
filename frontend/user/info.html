@@ -121,6 +121,10 @@
       grantList: [], // 持久化券包事实
       grantSocket: null,
       seenGrantEvents: {},
+      grantPollTimer: null,
+      grantPollAttempts: 0,
+      grantPollDeadline: 0,
+      grantPollState: 'IDLE',
       blogs2: [], // 关注的人的播客
       params: {
         minTime: 0, // 上一次拉取到的时间戳
@@ -229,9 +233,64 @@
         location.href = 'other-info.html?id=' + userId;
       },
       queryGrants() {
-        axios.get("/voucher-grants/mine")
-          .then(({data}) => { this.grantList = data || []; })
+        return axios.get("/voucher-grants/mine")
+          .then(({data}) => {
+            this.grantList = Array.isArray(data) ? data : ((data && (data.list || data.records || data.data)) || []);
+            return this.grantList;
+          })
           .catch(e => console.log(e));
+      },
+      isGrantPollTerminal(status) {
+        const normalized = String(status || '').toUpperCase();
+        return normalized === 'SUCCESS' || normalized === 'FAILED';
+      },
+      stopGrantFallbackPoll(finalState) {
+        if (this.grantPollTimer) {
+          clearTimeout(this.grantPollTimer);
+          this.grantPollTimer = null;
+        }
+        if (this.isGrantPollTerminal(finalState)) {
+          this.grantPollState = String(finalState).toUpperCase();
+        } else if (this.grantPollState === 'POLLING') {
+          this.grantPollState = 'IDLE';
+        }
+      },
+      startGrantFallbackPoll() {
+        if (this.grantPollState === 'POLLING') return;
+        this.stopGrantFallbackPoll();
+        this.grantPollState = 'POLLING';
+        this.grantPollAttempts = 0;
+        this.grantPollDeadline = Date.now() + 30000;
+        this.pollGrantFallback();
+      },
+      scheduleGrantFallbackPoll() {
+        if (this.grantPollState !== 'POLLING' || this.grantPollAttempts >= 10 || Date.now() >= this.grantPollDeadline) {
+          this.stopGrantFallbackPoll();
+          return;
+        }
+        this.grantPollTimer = setTimeout(() => {
+          this.grantPollTimer = null;
+          this.pollGrantFallback();
+        }, 2000);
+      },
+      pollGrantFallback() {
+        if (this.grantPollState !== 'POLLING' || this.grantPollAttempts >= 10 || Date.now() >= this.grantPollDeadline) {
+          this.stopGrantFallbackPoll();
+          return;
+        }
+        this.grantPollAttempts += 1;
+        axios.get("/voucher-grants/mine")
+          .then(({data}) => {
+            const payload = Array.isArray(data) ? null : (data || {});
+            const list = Array.isArray(data) ? data : (payload.list || payload.records || payload.data || []);
+            this.grantList = Array.isArray(list) ? list : [];
+            if (payload && this.isGrantPollTerminal(payload.deliveryState || payload.status)) {
+              this.stopGrantFallbackPoll(payload.deliveryState || payload.status);
+              return;
+            }
+            this.scheduleGrantFallbackPoll();
+          })
+          .catch(() => this.scheduleGrantFallbackPoll());
       },
       connectGrantNotifications() {
         if (this.grantSocket || !token || typeof WebSocket === 'undefined') return;
@@ -243,10 +302,15 @@
           return;
         }
         this.grantSocket = socket;
+        socket.onopen = () => {
+          if (this.grantSocket === socket) this.stopGrantFallbackPoll();
+        };
         socket.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
             if (message.type !== 'VOUCHER_GRANTED') return;
+            const deliveryState = message.deliveryState || message.status || 'SUCCESS';
+            if (this.isGrantPollTerminal(deliveryState)) this.stopGrantFallbackPoll(deliveryState);
             const eventId = String(message.eventId || '');
             if (eventId && this.seenGrantEvents[eventId]) return;
             if (eventId) this.$set(this.seenGrantEvents, eventId, true);
@@ -260,10 +324,21 @@
             });
           } catch (e) {}
         };
-        socket.onclose = () => { if (this.grantSocket === socket) this.grantSocket = null; };
-        socket.onerror = () => { if (this.grantSocket === socket) this.grantSocket = null; };
+        socket.onclose = () => {
+          if (this.grantSocket === socket) {
+            this.grantSocket = null;
+            this.startGrantFallbackPoll();
+          }
+        };
+        socket.onerror = () => {
+          if (this.grantSocket === socket) {
+            this.grantSocket = null;
+            this.startGrantFallbackPoll();
+          }
+        };
       },
       closeGrantSocket() {
+        this.stopGrantFallbackPoll();
         if (!this.grantSocket) return;
         const socket = this.grantSocket;
         this.grantSocket = null;
