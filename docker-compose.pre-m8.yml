@@ -1,0 +1,74 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ${M7RC_RUN_ID}-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${M7RC_MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${M7RC_SCHEMA}
+    command:
+      - --default-authentication-plugin=mysql_native_password
+    ports:
+      - 127.0.0.1:${M7RC_MYSQL_PORT}:3306
+    labels:
+      com.localdeals.m7rc.run-id: ${M7RC_RUN_ID}
+      com.localdeals.m7rc.role: mysql
+
+  redis:
+    image: redis:6.2
+    container_name: ${M7RC_RUN_ID}-redis
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --requirepass
+      - ${M7RC_REDIS_PASSWORD}
+    ports:
+      - 127.0.0.1:${M7RC_REDIS_PORT}:6379
+    labels:
+      com.localdeals.m7rc.run-id: ${M7RC_RUN_ID}
+      com.localdeals.m7rc.role: redis
+
+  namesrv:
+    image: apache/rocketmq:4.9.4
+    container_name: ${M7RC_RUN_ID}-namesrv
+    command: sh mqnamesrv
+    ports:
+      - 127.0.0.1:${M7RC_RMQ_NAMESRV_PORT}:9876
+    labels:
+      com.localdeals.m7rc.run-id: ${M7RC_RUN_ID}
+      com.localdeals.m7rc.role: namesrv
+
+  broker:
+    image: apache/rocketmq:4.9.4
+    container_name: ${M7RC_RUN_ID}-broker
+    depends_on:
+      - namesrv
+    command: sh mqbroker -c /home/rocketmq/rocketmq-4.9.4/conf/pre-m8-broker.conf
+    ports:
+      - 127.0.0.1:${M7RC_RMQ_BROKER_PORT}:${M7RC_RMQ_BROKER_PORT}
+      - 127.0.0.1:${M7RC_RMQ_BROKER_HA_PORT}:${M7RC_RMQ_BROKER_HA_PORT}
+    volumes:
+      - ${M7RC_BROKER_CONF}:/home/rocketmq/rocketmq-4.9.4/conf/pre-m8-broker.conf:ro
+    labels:
+      com.localdeals.m7rc.run-id: ${M7RC_RUN_ID}
+      com.localdeals.m7rc.role: broker
+
+  elasticsearch:
+    image: hm-dianping-elasticsearch:latest
+    container_name: ${M7RC_RUN_ID}-elasticsearch
+    environment:
+      discovery.type: single-node
+      cluster.name: ${M7RC_PROJECT}
+      ES_JAVA_OPTS: -Xms384m -Xmx384m
+      xpack.security.enabled: "false"
+    ports:
+      - 127.0.0.1:${M7RC_ES_PORT}:9200
+    labels:
+      com.localdeals.m7rc.run-id: ${M7RC_RUN_ID}
+      com.localdeals.m7rc.role: elasticsearch
+
+networks:
+  default:
+    name: ${M7RC_NETWORK_NAME}

@@ -51,6 +51,11 @@ build/
 /benchmark/*.csv
 /benchmark/*.jtl
 /benchmark/*.log
+/benchmark/*-consumer-progress-final.txt
+/benchmark/*-prometheus-before.txt
+/benchmark/*-prometheus-after.txt
 /benchmark/report*/
+/benchmark/pre-m8/
+/docs/JmeterTestSummary/m7rc-*/
 jmeter.log
 .superpowers/
