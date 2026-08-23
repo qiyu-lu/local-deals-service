@@ -60,7 +60,8 @@ class SeckillOrderRetryIT {
     @MockBean
     private SeckillOrderStateService seckillOrderStateService;
 
-    private static final String TOPIC = "seckill-order-topic";
+    private static final String TOPIC = System.getProperty(
+            "m7rc.seckill.retry.topic", "seckill-order-topic");
     private static final long RUN_SUFFIX = System.currentTimeMillis() % 1_000_000L;
     private static final Long TRANSIENT_VOUCHER_ID = 77_000_000L + RUN_SUFFIX;
     private static final Long PERMANENT_VOUCHER_ID = TRANSIENT_VOUCHER_ID + 1L;

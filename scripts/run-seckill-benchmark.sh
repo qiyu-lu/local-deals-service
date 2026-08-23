@@ -31,6 +31,16 @@ MYSQL_USER="${MYSQL_USER:-${LOCAL_DEALS_DATASOURCE_USERNAME:-root}}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-${LOCAL_DEALS_DATASOURCE_PASSWORD:-}}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-local_deals}"
 REDIS_PASSWORD="${REDIS_PASSWORD:-${LOCAL_DEALS_REDIS_PASSWORD:-}}"
+MANAGEMENT_HOST="${MANAGEMENT_HOST:-${M7RC_MANAGEMENT_HOST:-}}"
+MANAGEMENT_PORT="${MANAGEMENT_PORT:-${M7RC_MANAGEMENT_PORT:-}}"
+M7RC_RUN_ID="${M7RC_RUN_ID:-}"
+M7RC_PROJECT="${M7RC_PROJECT:-}"
+M7RC_RMQ_NAMESRV="${M7RC_RMQ_NAMESRV:-}"
+M7RC_RMQ_CLIENT_NAMESRV="${M7RC_RMQ_CLIENT_NAMESRV:-}"
+M7RC_RMQ_NAMESRV_PORT="${M7RC_RMQ_NAMESRV_PORT:-}"
+M7RC_RMQ_GROUP="${M7RC_RMQ_GROUP:-seckill-consumer-group}"
+M7RC_RMQ_TOPIC="${M7RC_RMQ_TOPIC:-seckill-order-topic}"
+M7RC_BROKER_CONTAINER="${M7RC_BROKER_CONTAINER:-}"
 JAVA_HOME="${JAVA_HOME:-/home/sd101t/.jdks/dragonwell-ex-1.8.0_472}"
 MAVEN_CMD="${MAVEN_CMD:-}"
 SKIP_PREPARE=0
@@ -64,6 +74,14 @@ Options:
   --redis-host HOST       Redis host. Default: localhost (override via REDIS_HOST or LOCAL_DEALS_REDIS_HOST in .env)
   --redis-port PORT       Redis port. Default: 6379
   --mysql-database NAME   MySQL database name. Default: local_deals
+  --management-host HOST  Management endpoint host for Prometheus deltas.
+  --management-port PORT  Management endpoint port for Prometheus deltas.
+  --run-id ID             Dedicated M7-RC run-id for RocketMQ lag evidence.
+  --rmq-namesrv HOST:PORT Dedicated RocketMQ NameServer for lag evidence.
+  --rmq-client-namesrv HOST:PORT NameServer address used by Maven fixture helpers.
+  --rmq-group GROUP       RocketMQ seckill consumer group. Default: seckill-consumer-group.
+  --rmq-topic TOPIC       RocketMQ seckill main topic. Default: seckill-order-topic.
+  --broker-container NAME Dedicated broker container for mqadmin lag evidence.
   --maven-cmd PATH        Maven executable path. Default: mvn, ./mvnw, or IDEA bundled Maven.
   --java-home PATH        JAVA_HOME for Maven benchmark helpers. Default: Dragonwell JDK 8 in ~/.jdks.
   --poll-ms N             MySQL/Redis polling interval after JMeter exits. Default: 50
@@ -107,6 +125,14 @@ while [[ $# -gt 0 ]]; do
     --redis-host) REDIS_HOST="$2"; shift 2 ;;
     --redis-port) REDIS_PORT="$2"; shift 2 ;;
     --mysql-database) MYSQL_DATABASE="$2"; shift 2 ;;
+    --management-host) MANAGEMENT_HOST="$2"; shift 2 ;;
+    --management-port) MANAGEMENT_PORT="$2"; shift 2 ;;
+    --run-id) M7RC_RUN_ID="$2"; shift 2 ;;
+    --rmq-namesrv) M7RC_RMQ_NAMESRV="$2"; shift 2 ;;
+    --rmq-client-namesrv) M7RC_RMQ_CLIENT_NAMESRV="$2"; shift 2 ;;
+    --rmq-group) M7RC_RMQ_GROUP="$2"; shift 2 ;;
+    --rmq-topic) M7RC_RMQ_TOPIC="$2"; shift 2 ;;
+    --broker-container) M7RC_BROKER_CONTAINER="$2"; shift 2 ;;
     --maven-cmd) MAVEN_CMD="$2"; shift 2 ;;
     --java-home) JAVA_HOME="$2"; shift 2 ;;
     --poll-ms) POLL_INTERVAL_MS="$2"; shift 2 ;;
@@ -230,8 +256,155 @@ fi
 
 mkdir -p "$RESULT_DIR" "$BENCHMARK_DIR"
 
+PROMETHEUS_URL=""
+PROMETHEUS_BEFORE="${BENCHMARK_DIR}/${RUN_ID}-prometheus-before.txt"
+PROMETHEUS_AFTER="${BENCHMARK_DIR}/${RUN_ID}-prometheus-after.txt"
+MQ_PROGRESS_FILE="${BENCHMARK_DIR}/${RUN_ID}-consumer-progress-final.txt"
+MQ_MAIN_LAG="NA"
+MQ_RETRY_LAG="NA"
+MQ_DLQ_LAG="NA"
+if [[ -n "$MANAGEMENT_HOST" && -n "$MANAGEMENT_PORT" ]]; then
+  PROMETHEUS_URL="http://${MANAGEMENT_HOST}:${MANAGEMENT_PORT}/actuator/prometheus"
+fi
+if [[ -z "$M7RC_RMQ_NAMESRV" && -n "$M7RC_RUN_ID" ]]; then
+  M7RC_RMQ_NAMESRV="${M7RC_RUN_ID}-namesrv:9876"
+fi
+if [[ -z "$M7RC_RMQ_CLIENT_NAMESRV" && -n "$M7RC_RMQ_NAMESRV_PORT" ]]; then
+  M7RC_RMQ_CLIENT_NAMESRV="127.0.0.1:${M7RC_RMQ_NAMESRV_PORT}"
+fi
+if [[ -z "$M7RC_BROKER_CONTAINER" && -n "$M7RC_RUN_ID" ]]; then
+  M7RC_BROKER_CONTAINER="${M7RC_RUN_ID}-broker"
+fi
+MAVEN_ISOLATION_ARGS=()
+if [[ -n "$M7RC_RMQ_CLIENT_NAMESRV" ]]; then
+  MAVEN_ISOLATION_ARGS=(
+    "-Drocketmq.name-server=${M7RC_RMQ_CLIENT_NAMESRV}"
+    "-Dspring.elasticsearch.rest.uris=http://127.0.0.1:${M7RC_ES_PORT:-9200}"
+    "-Dlocal-deals.seckill.topic=${M7RC_RMQ_TOPIC}"
+    "-Dlocal-deals.seckill.consumer-group=${M7RC_RMQ_GROUP}"
+  )
+fi
+
+capture_prometheus() {
+  local phase="$1" output="$2"
+  if [[ -z "$PROMETHEUS_URL" ]]; then
+    : >"$output"
+    return 0
+  fi
+  if ! curl --fail --silent --show-error "$PROMETHEUS_URL" >"$output"; then
+    echo "Prometheus snapshot failed for phase=${phase}; counters will be NA." >&2
+    : >"$output"
+  fi
+}
+
+prometheus_value() {
+  local file="$1" metric="$2" label_selector="$3"
+  python3 - "$file" "$metric" "$label_selector" <<'PY'
+import re
+import sys
+
+path, wanted_metric, selector = sys.argv[1:]
+wanted = {}
+for item in selector.split(','):
+    if item:
+        key, value = item.split('=', 1)
+        wanted[key] = value
+
+total = 0.0
+found = False
+line_pattern = re.compile(
+    r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)'
+)
+label_pattern = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:\\.|[^"\\])*)"')
+try:
+    lines = open(path, encoding='utf-8')
+except OSError:
+    print('NA')
+    raise SystemExit
+with lines:
+    for raw in lines:
+        match = line_pattern.match(raw.strip())
+        if not match or match.group(1) != wanted_metric:
+            continue
+        labels = dict(label_pattern.findall(match.group(2) or ''))
+        if all(labels.get(key) == value for key, value in wanted.items()):
+            total += float(match.group(3))
+            found = True
+print(format(total, '.15g') if found else 'NA')
+PY
+}
+
+prometheus_delta() {
+  local metric="$1" label_selector="$2" before after
+  if [[ -z "$PROMETHEUS_URL" ]]; then
+    printf 'NA\n'
+    return 0
+  fi
+  before="$(prometheus_value "$PROMETHEUS_BEFORE" "$metric" "$label_selector")"
+  after="$(prometheus_value "$PROMETHEUS_AFTER" "$metric" "$label_selector")"
+  if [[ "$before" == "NA" || "$after" == "NA" ]]; then
+    printf 'NA\n'
+    return 0
+  fi
+  awk -v before="$before" -v after="$after" 'BEGIN { printf "%.15g\n", after - before }'
+}
+
+topic_depth() {
+  local topic="$1"
+  local topics
+  topics="$(docker exec "$M7RC_BROKER_CONTAINER" sh mqadmin topicList \
+    -n "$M7RC_RMQ_NAMESRV" 2>/dev/null || true)"
+  if ! printf '%s\n' "$topics" | grep -Fxq "$topic"; then
+    printf '0\n'
+    return 0
+  fi
+  docker exec "$M7RC_BROKER_CONTAINER" sh mqadmin topicStatus \
+    -n "$M7RC_RMQ_NAMESRV" -t "$topic" 2>/dev/null | \
+    awk '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ { depth += $4 - $3; found = 1 } END { if (found) printf "%d\n", depth + 0; else exit 1 }'
+}
+
+capture_rocketmq_lag() {
+  if [[ -z "$M7RC_BROKER_CONTAINER" || -z "$M7RC_RMQ_NAMESRV" || -z "$M7RC_RMQ_GROUP" ]]; then
+    : >"$MQ_PROGRESS_FILE"
+    return 0
+  fi
+  if ! docker exec "$M7RC_BROKER_CONTAINER" sh mqadmin consumerProgress \
+      -n "$M7RC_RMQ_NAMESRV" -g "$M7RC_RMQ_GROUP" >"$MQ_PROGRESS_FILE" 2>&1; then
+    echo "RocketMQ consumerProgress failed; final lag will be NA." >&2
+    return 0
+  fi
+  local parsed
+  parsed="$(awk -v topic="$M7RC_RMQ_TOPIC" -v retry="%RETRY%${M7RC_RMQ_GROUP}" '
+    $1 == topic { main += $6; found = 1 }
+    $1 == retry { retried += $6 }
+    END { if (found) printf "%d %d\n", main + 0, retried + 0; else exit 1 }
+  ' "$MQ_PROGRESS_FILE" 2>/dev/null || true)"
+  if [[ "$parsed" =~ ^[0-9]+\ [0-9]+$ ]]; then
+    read -r MQ_MAIN_LAG MQ_RETRY_LAG <<<"$parsed"
+  fi
+  MQ_DLQ_LAG="$(topic_depth "%DLQ%${M7RC_RMQ_GROUP}" 2>/dev/null || printf 'NA')"
+}
+
+wait_for_rocketmq_lag_zero() {
+  if [[ -z "$M7RC_BROKER_CONTAINER" || -z "$M7RC_RMQ_NAMESRV" || -z "$M7RC_RMQ_GROUP" ]]; then
+    return 0
+  fi
+  local deadline_ms now_ms
+  deadline_ms=$(( $(date +%s%3N) + DRAIN_TIMEOUT_MS ))
+  while true; do
+    capture_rocketmq_lag
+    if [[ "$MQ_MAIN_LAG" == "0" && "$MQ_RETRY_LAG" == "0" && "$MQ_DLQ_LAG" == "0" ]]; then
+      return 0
+    fi
+    now_ms="$(date +%s%3N)"
+    (( now_ms >= deadline_ms )) && return 0
+    sleep 0.2
+  done
+}
+
 if [[ "$SKIP_PREPARE" -eq 0 ]]; then
   "$MAVEN_CMD" \
+    "${MAVEN_ISOLATION_ARGS[@]}" \
     -Dtest=BenchmarkDataTool#prepareBenchmarkUsersAndTokens \
     -Dbench.userCount="$USER_COUNT" \
     -Dbench.tokensFile="$TOKENS_FILE" \
@@ -241,14 +414,16 @@ fi
 if [[ "$SKIP_RESET" -eq 0 ]]; then
   reset_cmd=(
     "$MAVEN_CMD"
+    "${MAVEN_ISOLATION_ARGS[@]}"
     -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData
     -Dbench.stock="$STOCK"
     test
   )
   if [[ -n "$VOUCHER_ID" ]]; then
-    reset_cmd=(
-      "$MAVEN_CMD"
-      -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData
+      reset_cmd=(
+        "$MAVEN_CMD"
+        "${MAVEN_ISOLATION_ARGS[@]}"
+        -Dtest=BenchmarkDataTool#resetSeckillBenchmarkData
       -Dbench.stock="$STOCK"
       -Dbench.voucherId="$VOUCHER_ID"
       test
@@ -264,6 +439,8 @@ if [[ -z "$VOUCHER_ID" ]]; then
   echo "voucherId was not provided and could not be parsed from reset output." >&2
   exit 1
 fi
+
+capture_prometheus before "$PROMETHEUS_BEFORE"
 
 redis_cmd() {
   redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --no-auth-warning "$@" 2>/dev/null
@@ -423,6 +600,7 @@ PY
 )"
 done
 
+wait_for_rocketmq_lag_zero
 drain_end_ms="$(date +%s%3N)"
 drain_ms=$((drain_end_ms - drain_start_ms))
 db_stock="$(mysql_scalar "SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ${VOUCHER_ID};")"
@@ -435,7 +613,8 @@ reservation_counts="$(reservation_status_counts)"
 read -r redis_success_count redis_non_success_count redis_processing_reservation_count \
   <<< "$reservation_counts"
 redis_processing_index_count="$(processing_index_count_for_voucher)"
-RUN_SUMMARY_LINK="${RUN_SUMMARY_REL#docs/}"
+capture_prometheus after "$PROMETHEUS_AFTER"
+RUN_SUMMARY_LINK="$(basename "$RUN_SUMMARY")"
 
 python3 - "$JTL_FILE" "$SUMMARY_CSV" "$AGGREGATE_CSV" <<'PY'
 import csv
@@ -540,6 +719,12 @@ print(
 PY
 )"
 
+accepted="$(prometheus_delta local_deals_seckill_requests_total result=accepted)"
+rejected_stock="$(prometheus_delta local_deals_seckill_requests_total result=rejected_stock)"
+rejected_duplicate="$(prometheus_delta local_deals_seckill_requests_total result=rejected_duplicate)"
+rejected_rate="$(prometheus_delta local_deals_seckill_requests_total result=rejected_rate)"
+unavailable="$(prometheus_delta local_deals_seckill_requests_total result=unavailable)"
+
 expected_redis_stock=$((STOCK - EXPECTED_ORDERS))
 expected_db_stock=$((STOCK - EXPECTED_ORDERS))
 correctness="pass"
@@ -555,6 +740,21 @@ if [[ "$redis_non_success_count" != "0" ]]; then correctness="fail"; fi
 if [[ "$redis_processing_reservation_count" != "0" ]]; then correctness="fail"; fi
 if [[ "$redis_processing_index_count" != "0" ]]; then correctness="fail"; fi
 if [[ "$redis_stock" != "$expected_redis_stock" ]]; then correctness="fail"; fi
+if [[ -n "$PROMETHEUS_URL" ]]; then
+  [[ "$accepted" =~ ^[0-9]+([.][0-9]+)?$ ]] || correctness="fail"
+  [[ "$rejected_stock" =~ ^[0-9]+([.][0-9]+)?$ ]] || correctness="fail"
+  [[ "$rejected_duplicate" =~ ^[0-9]+([.][0-9]+)?$ ]] || correctness="fail"
+  [[ "$rejected_rate" =~ ^[0-9]+([.][0-9]+)?$ ]] || correctness="fail"
+  [[ "$unavailable" =~ ^[0-9]+([.][0-9]+)?$ ]] || correctness="fail"
+  [[ "$accepted" == "$EXPECTED_ORDERS" ]] || correctness="fail"
+  [[ "$rejected_stock" == "$((TOTAL_REQUESTS - EXPECTED_ORDERS))" ]] || correctness="fail"
+  [[ "$rejected_duplicate" == "0" ]] || correctness="fail"
+  [[ "$rejected_rate" == "0" ]] || correctness="fail"
+  [[ "$unavailable" == "0" ]] || correctness="fail"
+fi
+if [[ -n "$M7RC_BROKER_CONTAINER" ]]; then
+  [[ "$MQ_MAIN_LAG" == "0" && "$MQ_RETRY_LAG" == "0" && "$MQ_DLQ_LAG" == "0" ]] || correctness="fail"
+fi
 
 export DATE RUN_ID SCENARIO THREADS LOOPS STOCK USER_COUNT EXPECTED_ORDERS VOUCHER_ID ROUND
 export IMPLEMENTATION="$IMPL"
@@ -583,6 +783,12 @@ export REDIS_ACTIVITY_STATUS="$redis_activity_status"
 export REDIS_SUCCESS_COUNT="$redis_success_count"
 export REDIS_NON_SUCCESS_COUNT="$redis_non_success_count"
 export REDIS_PROCESSING_INDEX_COUNT="$redis_processing_index_count"
+export ACCEPTED="$accepted"
+export REJECTED_STOCK="$rejected_stock"
+export REJECTED_DUPLICATE="$rejected_duplicate"
+export REJECTED_RATE="$rejected_rate"
+export UNAVAILABLE="$unavailable"
+export MQ_MAIN_LAG MQ_RETRY_LAG MQ_DLQ_LAG
 export CORRECTNESS="$correctness"
 export METRIC_RUN_SUMMARY="$RUN_SUMMARY_REL"
 export METRIC_JTL_FILE="$JTL_FILE_REL"
@@ -606,6 +812,8 @@ fields = [
     "redis_stock", "redis_order_count", "redis_reservation_count",
     "redis_activity_status", "redis_success_count", "redis_non_success_count",
     "redis_processing_index_count",
+    "accepted", "rejected_stock", "rejected_duplicate", "rejected_rate", "unavailable",
+    "mq_main_lag", "mq_retry_lag", "mq_dlq_lag",
     "correctness", "run_summary", "jtl_file", "summary_csv",
     "aggregate_csv", "html_report",
 ]
@@ -653,6 +861,14 @@ cat > "$RUN_SUMMARY" <<EOF
 - error_pct: ${error_pct}
 - jmeter_elapsed_ms: ${jmeter_elapsed_ms}
 - drain_ms: ${drain_ms}
+- accepted: ${accepted}
+- rejected_stock: ${rejected_stock}
+- rejected_duplicate: ${rejected_duplicate}
+- rejected_rate: ${rejected_rate}
+- unavailable: ${unavailable}
+- rocketmq_main_lag: ${MQ_MAIN_LAG}
+- rocketmq_retry_lag: ${MQ_RETRY_LAG}
+- rocketmq_dlq_lag: ${MQ_DLQ_LAG}
 - poll_interval_ms: ${POLL_INTERVAL_MS}
 - java_home: ${JAVA_HOME}
 - maven_cmd: ${MAVEN_CMD}

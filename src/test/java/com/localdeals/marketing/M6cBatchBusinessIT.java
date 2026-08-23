@@ -55,6 +55,8 @@ class M6cBatchBusinessIT {
     private static final String FIXTURE_PREFIX = "M6C_IT_";
     private static final String ACCOUNT_PREFIX = "m6c.it.";
     private static final AtomicLong ORDER_ID = new AtomicLong(910000000000000000L);
+    private static final int DEFAULT_BATCH_TARGET = 100;
+    private static final int DEFAULT_WORKER_BATCH_SIZE = 17;
 
     @DynamicPropertySource
     static void registerM6cDatasource(DynamicPropertyRegistry registry) {
@@ -78,6 +80,10 @@ class M6cBatchBusinessIT {
     void cleanAfter() {
         AdminPrincipalHolder.remove();
         cleanupFixtures();
+        System.out.println("M6C_FIXTURE_CLEANUP remaining_users=" + countFixtureUsers() +
+                " remaining_merchants=" + countFixtureMerchants() +
+                " remaining_tags=" + countFixtureTags() + " remaining_campaigns=" +
+                countFixtureCampaigns());
     }
 
     @Test
@@ -132,37 +138,51 @@ class M6cBatchBusinessIT {
     void oneHundredItemsUseSmallBatchesAndPauseResumeConvergesToGrantAndQuotaInvariant() {
         Long operatorId = createAccount(MERCHANT_ID, "hundred");
         AdminPrincipalHolder.save(merchantPrincipal(operatorId, MERCHANT_ID));
-        List<Long> users = createUsers(100, "hundred");
+        int target = configuredBatchTarget();
+        int workerBatchSize = configuredWorkerBatchSize();
+        List<Long> users = createUsers(target, "hundred");
         MarketingTag tag = createTag("HUNDRED");
         addMembers(tag, users);
-        VoucherCampaign campaign = createActiveCampaign(tag.getId(), "hundred", "ADMIN", 100);
+        VoucherCampaign campaign = createActiveCampaign(tag.getId(), "hundred", "ADMIN", target);
         VoucherBatchJob job = batchJobService.create(campaign.getId(), batchRequest("hundred", campaign));
-        assertThat(batchJobService.snapshotOne()).isEqualTo(100);
+        assertThat(batchJobService.snapshotOne()).isEqualTo(target);
 
         long convergenceStarted = System.nanoTime();
-        VoucherBatchJobService.BatchRunResult first = batchJobService.processNextBatch(17);
-        assertThat(first.getProcessed()).isEqualTo(17);
+        VoucherBatchJobService.BatchRunResult first = batchJobService.processNextBatch(workerBatchSize);
+        assertThat(first.getProcessed()).isEqualTo(workerBatchSize);
         assertThat(batchJobService.pause(job.getId(), null).getStatus()).isEqualTo("PAUSED");
-        assertThat(batchJobService.processNextBatch(17).getProcessed()).isZero();
-        assertThat(itemCount(job.getId(), "PENDING")).isEqualTo(83);
+        assertThat(batchJobService.processNextBatch(workerBatchSize).getProcessed()).isZero();
+        assertThat(itemCount(job.getId(), "PENDING")).isEqualTo(target - workerBatchSize);
 
         batchJobService.resume(job.getId(), null);
-        int resumedBatches = processToEnd(job.getId(), 17);
+        int resumedBatches = processToEnd(job.getId(), workerBatchSize);
         VoucherBatchJob finished = batchJobService.get(job.getId(), null);
         assertThat(finished.getStatus()).isEqualTo("COMPLETED");
-        assertThat(itemCount(job.getId(), "GRANTED")).isEqualTo(100);
+        assertThat(itemCount(job.getId(), "GRANTED")).isEqualTo(target);
         assertThat(itemCount(job.getId(), "IDEMPOTENT")).isZero();
         assertThat(itemCount(job.getId(), "SKIPPED")).isZero();
         assertThat(itemCount(job.getId(), "FAILED")).isZero();
-        assertThat(grantCount(campaign.getId())).isEqualTo(100);
+        assertThat(grantCount(campaign.getId())).isEqualTo(target);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT granted_count FROM tb_voucher_campaign WHERE id=?", Integer.class, campaign.getId()))
-                .isEqualTo(100);
-        assertThat(outboxCount(campaign.getId())).isEqualTo(100);
+                .isEqualTo(target);
+        assertThat(outboxCount(campaign.getId())).isEqualTo(target);
         long convergenceMillis = (System.nanoTime() - convergenceStarted) / 1_000_000L;
-        System.out.println("M6C_BATCH_METRIC target=100 granted=100 idempotent=0 skipped=0 failed=0 " +
-                "quota_remaining=0 worker_batches=" + (resumedBatches + 1) +
-                " convergence_ms=" + convergenceMillis + " item_latency_p99_ms=NA rate_limited=NA");
+        int grants = grantCount(campaign.getId());
+        int campaignGrantedCount = jdbcTemplate.queryForObject(
+                "SELECT granted_count FROM tb_voucher_campaign WHERE id=?", Integer.class, campaign.getId());
+        int outboxRows = outboxCount(campaign.getId());
+        int duplicateGrants = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(SUM(duplicate_count),0) FROM (" +
+                        "SELECT COUNT(*) - 1 AS duplicate_count FROM tb_voucher_grant " +
+                        "WHERE campaign_id=? AND idempotency_key='ONCE' GROUP BY user_id " +
+                        "HAVING COUNT(*) > 1) duplicates", Integer.class, campaign.getId());
+        System.out.println("M6C_BATCH_METRIC target=" + target + " granted=" + target +
+                " idempotent=0 skipped=0 failed=0 quota_remaining=0 worker_batch_size=" + workerBatchSize +
+                " worker_batches=" + (resumedBatches + 1) +
+                " convergence_ms=" + convergenceMillis + " item_latency_p99_ms=NA rate_limited=NA" +
+                " grant_rows=" + grants + " campaign_granted_count=" + campaignGrantedCount +
+                " outbox_rows=" + outboxRows + " duplicate_grants=" + duplicateGrants);
     }
 
     @Test
@@ -418,6 +438,26 @@ class M6cBatchBusinessIT {
         return batches;
     }
 
+    private int configuredBatchTarget() {
+        return positiveIntEnvironment("M7_RC_BATCH_TARGET", DEFAULT_BATCH_TARGET);
+    }
+
+    private int configuredWorkerBatchSize() {
+        return positiveIntEnvironment("M7_RC_BATCH_BATCH_SIZE", DEFAULT_WORKER_BATCH_SIZE);
+    }
+
+    private int positiveIntEnvironment(String name, int defaultValue) {
+        String value = System.getenv(name);
+        if (value == null || value.trim().isEmpty()) return defaultValue;
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            if (parsed <= 0) throw new NumberFormatException("must be positive");
+            return parsed;
+        } catch (NumberFormatException error) {
+            throw new IllegalStateException(name + " must be a positive integer", error);
+        }
+    }
+
     private int itemCount(Long jobId, String status) {
         return (int) batchItemMapper.countByJobAndStatus(jobId, status);
     }
@@ -430,6 +470,26 @@ class M6cBatchBusinessIT {
     private int outboxCount(Long campaignId) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_voucher_grant_notification_outbox o " +
                 "JOIN tb_voucher_grant g ON g.id=o.grant_id WHERE g.campaign_id=?", Integer.class, campaignId);
+    }
+
+    private int countFixtureUsers() {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM tb_user WHERE nick_name LIKE ?", Integer.class, FIXTURE_PREFIX + "%");
+    }
+
+    private int countFixtureMerchants() {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM tb_merchant WHERE code LIKE ?", Integer.class, FIXTURE_PREFIX + "%");
+    }
+
+    private int countFixtureTags() {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM tb_marketing_tag WHERE code LIKE ?", Integer.class, "M6C_%");
+    }
+
+    private int countFixtureCampaigns() {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM tb_voucher_campaign WHERE name LIKE ?", Integer.class, FIXTURE_PREFIX + "%");
     }
 
     private String itemUserStatus(Long jobId, Long userId) {

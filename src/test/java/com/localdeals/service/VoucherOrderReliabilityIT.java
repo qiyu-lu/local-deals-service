@@ -2,15 +2,20 @@ package com.localdeals.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.localdeals.entity.VoucherOrder;
+import com.localdeals.entity.SeckillVoucher;
+import com.localdeals.entity.Voucher;
 import com.localdeals.exception.OrderReservationConflictException;
 import com.localdeals.exception.OrderIdConflictException;
 import com.localdeals.exception.StockExhaustedException;
+import com.localdeals.mapper.VoucherMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -36,6 +41,9 @@ class VoucherOrderReliabilityIT {
     @Autowired
     private ISeckillVoucherService seckillVoucherService;
 
+    @Autowired
+    private VoucherMapper voucherMapper;
+
     private static final Long VOUCHER_ID = 10L;
     private static final Long USER_ID = 999001L;
     private static final Long ORDER_ID = 999000001L;
@@ -44,9 +52,12 @@ class VoucherOrderReliabilityIT {
     private static final Long PK_COLLISION_ORDER_ID = 999000004L;
     private static final Long OTHER_USER_ID = 999002L;
     private Integer originalStock;
+    private boolean createdVoucherFixture;
+    private boolean createdSeckillFixture;
 
     @BeforeEach
     void setup() {
+        ensureVoucherFixture();
         originalStock = seckillVoucherService.query()
                 .eq("voucher_id", VOUCHER_ID).one().getStock();
         // Force DB stock to 0 so the stock-guard update matches 0 rows.
@@ -62,6 +73,39 @@ class VoucherOrderReliabilityIT {
                     .set("stock", originalStock)
                     .eq("voucher_id", VOUCHER_ID)
                     .update();
+        }
+        if (createdSeckillFixture) {
+            seckillVoucherService.removeById(VOUCHER_ID);
+        }
+        if (createdVoucherFixture) {
+            voucherMapper.deleteById(VOUCHER_ID);
+        }
+        createdSeckillFixture = false;
+        createdVoucherFixture = false;
+    }
+
+    private void ensureVoucherFixture() {
+        if (voucherMapper.selectById(VOUCHER_ID) == null) {
+            Voucher voucher = new Voucher();
+            voucher.setId(VOUCHER_ID);
+            voucher.setShopId(1L);
+            voucher.setTitle("isolated reliability voucher");
+            voucher.setPayValue(100L);
+            voucher.setActualValue(200L);
+            voucher.setType(1);
+            voucher.setStatus(1);
+            voucherMapper.insert(voucher);
+            createdVoucherFixture = true;
+        }
+        if (seckillVoucherService.getById(VOUCHER_ID) == null) {
+            LocalDateTime now = LocalDateTime.now();
+            SeckillVoucher voucher = new SeckillVoucher();
+            voucher.setVoucherId(VOUCHER_ID);
+            voucher.setStock(1);
+            voucher.setBeginTime(now.minusMinutes(1));
+            voucher.setEndTime(now.plusMinutes(10));
+            seckillVoucherService.save(voucher);
+            createdSeckillFixture = true;
         }
     }
 

@@ -51,6 +51,28 @@ class M6cFlywayIT {
         writeTargetMarker(baseUrl, username, password, upgrade, runId);
     }
 
+    @Test
+    void upgradeV8ToV11InstallsAllLaterMigrationsWithoutHistoricalNotifications() throws Exception {
+        String baseUrl = required("M6C_MYSQL_BASE_URL");
+        String username = required("M6C_MYSQL_USERNAME");
+        String password = required("M6C_MYSQL_PASSWORD");
+        String runId = requiredRunId();
+        String port = requiredPort();
+        assertBaseUrlTargetsLoopback(baseUrl, port);
+
+        String sentinelSchema = runId + "_sentinel";
+        String upgrade = targetSchema(runId, "upgrade_v8");
+        recreateSchema(baseUrl, username, password, runId, sentinelSchema, upgrade);
+
+        Flyway.configure().dataSource(schemaUrl(baseUrl, upgrade), username, password)
+                .target(MigrationVersion.fromVersion("8")).load().migrate();
+        Flyway.configure().dataSource(schemaUrl(baseUrl, upgrade), username, password)
+                .target(MigrationVersion.fromVersion("11")).load().migrate();
+
+        assertSchema(schemaUrl(baseUrl, upgrade), username, password, 0);
+        writeTargetMarker(baseUrl, username, password, upgrade, runId);
+    }
+
     private void seedV10Grant(String url, String username, String password) throws Exception {
         try (Connection connection = DriverManager.getConnection(url, username, password);
              Statement statement = connection.createStatement()) {
@@ -220,7 +242,7 @@ class M6cFlywayIT {
 
     private static String targetSchema(String runId, String suffix) {
         String schema = runId + "_" + suffix;
-        if (!schema.matches(Pattern.quote(runId) + "_(fresh|upgrade)")) {
+        if (!schema.matches(Pattern.quote(runId) + "_(fresh|upgrade|upgrade_v8)")) {
             throw new IllegalStateException("unsafe M6C schema: " + schema);
         }
         return schema;

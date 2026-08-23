@@ -24,6 +24,7 @@ import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
+import org.springframework.boot.test.context.TestComponent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
@@ -33,6 +34,7 @@ import org.springframework.context.annotation.Import;
  * Deliberately narrow M6A integration context.  It must not inherit the
  * application's component scan or its RocketMQ/Redis/ES/WebSocket setup.
  */
+@TestComponent
 @Configuration(proxyBeanMethods = false)
 @EnableTransactionManagement
 @ImportAutoConfiguration(classes = {

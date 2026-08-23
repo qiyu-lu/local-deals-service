@@ -1,6 +1,7 @@
 package com.localdeals.marketing;
 
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.RedisPassword;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -25,8 +26,12 @@ final class M6cRedisGuard {
 
     static void assertSentinel() {
         String runId = required("M6C_RUN_ID");
-        LettuceConnectionFactory connectionFactory = new LettuceConnectionFactory(
-                new RedisStandaloneConfiguration("127.0.0.1", port()));
+        RedisStandaloneConfiguration redis = new RedisStandaloneConfiguration("127.0.0.1", port());
+        String password = password();
+        if (password != null) {
+            redis.setPassword(RedisPassword.of(password));
+        }
+        LettuceConnectionFactory connectionFactory = new LettuceConnectionFactory(redis);
         try {
             connectionFactory.afterPropertiesSet();
             StringRedisTemplate template = new StringRedisTemplate(connectionFactory);
@@ -40,6 +45,11 @@ final class M6cRedisGuard {
 
     static String host() {
         return "127.0.0.1";
+    }
+
+    static String password() {
+        String value = System.getenv("M6C_REDIS_PASSWORD");
+        return value == null || value.trim().isEmpty() ? null : value.trim();
     }
 
     private static String required(String name) {

@@ -4,8 +4,10 @@ import com.localdeals.entity.VoucherGrantNotificationOutbox;
 import com.localdeals.service.VoucherGrantNotificationOutboxService;
 import com.localdeals.websocket.WebSocketNotifier;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.context.TestComponent;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisPassword;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -16,6 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.time.Duration;
 
 /** M6C MySQL plus the run-owned Redis Pub/Sub producer, without MQ/ES/WebSocket listeners. */
+@TestComponent
 @Configuration(proxyBeanMethods = false)
 @Import({M6cPersistenceTestConfiguration.class, VoucherGrantNotificationOutboxService.class})
 public class M6cOutboxPersistenceTestConfiguration {
@@ -24,8 +27,13 @@ public class M6cOutboxPersistenceTestConfiguration {
     public LettuceConnectionFactory m6cRedisConnectionFactory() {
         LettuceClientConfiguration client = LettuceClientConfiguration.builder()
                 .commandTimeout(Duration.ofSeconds(2)).build();
-        LettuceConnectionFactory factory = new LettuceConnectionFactory(
-                new RedisStandaloneConfiguration(M6cRedisGuard.host(), M6cRedisGuard.port()), client);
+        RedisStandaloneConfiguration redis = new RedisStandaloneConfiguration(
+                M6cRedisGuard.host(), M6cRedisGuard.port());
+        String password = M6cRedisGuard.password();
+        if (password != null) {
+            redis.setPassword(RedisPassword.of(password));
+        }
+        LettuceConnectionFactory factory = new LettuceConnectionFactory(redis, client);
         factory.afterPropertiesSet();
         return factory;
     }
