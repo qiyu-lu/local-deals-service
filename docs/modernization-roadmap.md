@@ -1,27 +1,27 @@
 # local-deals-service 改造路线与新会话执行手册
 
-> 文档状态：当前执行入口
+> 文档状态：CURRENT / HISTORICAL EXECUTION ROADMAP
 >
-> 记录日期：2026-08-22
+> 首次记录：2026-08-22；状态更新：2026-08-23
 >
 > 仓库：`/home/sd101t/IdeaProjects/hm-dianping`
 >
 > 当前分支：`codex/platform-hardening`
 >
-> 最新已完成阶段：M6B（提交链和证据见 `docs/m6b-daily-task-results.md`）
+> 最新状态：M7-RC COMPLETED；modernization mainline COMPLETED；M8 not started
 >
-> 当前阶段：M5A、M5B、M5C、M5D、M6A 已完成；M6B COMPLETED（每日签到与任务奖励）；M6 IN PROGRESS；M6C（批量发放与通知 Outbox）未开始且未经授权
+> 正式结论入口：`docs/evidence/pre-m8/pre-m8-baseline-results.md` 与 `docs/evidence/m7/m7-results.md`
 
-这份文档用于在新会话中继续实施。它首先记录中断现场，再给出后续路线、边界、验收标准和 Git 节点。执行前必须用 Git 重新核对实际状态；如果分支或 HEAD 已变化，以实际仓库为准并先更新本节，不能机械套用旧快照。
+本文主体保留 modernization 各阶段当时的执行路线、边界、验收标准、BLOCKED 和负面结果，属于历史执行记录；不得把早期阶段状态当作当前进度，也不得把历史失败追溯改写为最终 PASS。恢复项目时应先核对 Git，再以本页顶部状态和对应 results 文档为准。
 
 “点赞持久化与热榜”已在 M4 完成。M5A 已完成指标契约、隔离基线和故障行为盘点；M5B 已按
-`docs/m5b-bounded-cache-plan.md` 完成有界缓存，证据见 `docs/m5b-bounded-cache-results.md`。
-M5C 任务级契约见 `docs/m5c-resource-traffic-plan.md`，完成证据见
-`docs/m5c-resource-traffic-results.md`。M5D 覆盖矩阵、隔离故障和恢复证据见
-`docs/m5d-reliability-plan.md` 与 `docs/m5d-reliability-results.md`。M6A 已完成，证据见
-`docs/m6a-targeted-grant-plan.md`、`docs/m6a-targeted-grant-results.md`；本次未进入 M6B/M6C，也未升级技术栈。
+`docs/evidence/m5/m5b-bounded-cache-plan.md` 完成有界缓存，证据见 `docs/evidence/m5/m5b-bounded-cache-results.md`。
+M5C 任务级契约见 `docs/evidence/m5/m5c-resource-traffic-plan.md`，完成证据见
+`docs/evidence/m5/m5c-resource-traffic-results.md`。M5D 覆盖矩阵、隔离故障和恢复证据见
+`docs/evidence/m5/m5d-reliability-plan.md` 与 `docs/evidence/m5/m5d-reliability-results.md`。M6A 已完成，证据见
+`docs/evidence/m6/m6a-targeted-grant-plan.md`、`docs/evidence/m6/m6a-targeted-grant-results.md`。上述文字记录的是相关段落形成时的阶段快照；M6B、M6C、M7 与 M7-RC 后续均已完成，M8 和技术栈升级未开始。
 
-`docs/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/admin-rbac.md`、`docs/seckill-reconciliation.md` 和 `docs/blog-like-hot-rank.md`。
+`docs/archive/legacy-context/project-context.md` 保存的是更早阶段的历史上下文，其中的 `main` 分支和旧提交号已经过时。自本文件创建后，恢复项目应先读本文件，再按专题阅读 `docs/design/admin-rbac.md`、`docs/design/seckill-consistency-and-recovery.md` 和 `docs/design/blog-like-outbox-hot-rank.md`。
 
 ## 1. 项目定位与最终叙事
 
@@ -85,9 +85,9 @@ M5C 任务级契约见 `docs/m5c-resource-traffic-plan.md`，完成证据见
 | M3.1 超龄预约对账 | `dd36b4b` | 已提交 | PROCESSING 索引、消费者共享锁、每订单调度仲裁、DB 精确分类、quarantine、可审批补偿、回填和运行手册 |
 | M4 点赞持久化与热榜 | `710ad61` | 已完成 | MySQL 点赞关系、事务 outbox、停写导入与 cutover、generation-fenced Redis top-K、DB 安全回退 |
 | M5A 可观测基线与故障盘点 | `4bbc2ba` | 已完成（1 项 BLOCKED） | 低基数指标目录、management 网络边界、B0-B4、F1-F4、MySQL/Redis 只读 backlog 采样；Broker 故障下新秒杀准入未形成有效隔离证据 |
-| M5B 有界缓存 | `3ac79f3` / `e21ce4f` | 已完成 | 商铺详情/类型字典的 Redis 500ms 有界等待、DB 安全回退、per-key singleflight、坏值修复、短空值和 after-commit 失效；结果见 `docs/m5b-bounded-cache-results.md` |
-| M5C 资源级流控 | `108d6fa`…`246988e` | 已完成（Broker F5 仍 BLOCKED） | 秒杀 activity/user/IP 前置门禁、DB/搜索本地并发舱、稳定 429/503/业务码和双实例/故障证据；结果见 `docs/m5c-resource-traffic-results.md` |
-| M5D 指标与故障恢复收口 | `bda2b85`…（本阶段提交链） | 已完成 | 8.5 覆盖矩阵、秒杀 DB persist Timer、ES consumer retry/幂等、run-id 隔离栈和 F1--F5；结果见 `docs/m5d-reliability-results.md` |
+| M5B 有界缓存 | `3ac79f3` / `e21ce4f` | 已完成 | 商铺详情/类型字典的 Redis 500ms 有界等待、DB 安全回退、per-key singleflight、坏值修复、短空值和 after-commit 失效；结果见 `docs/evidence/m5/m5b-bounded-cache-results.md` |
+| M5C 资源级流控 | `108d6fa`…`246988e` | 已完成（Broker F5 仍 BLOCKED） | 秒杀 activity/user/IP 前置门禁、DB/搜索本地并发舱、稳定 429/503/业务码和双实例/故障证据；结果见 `docs/evidence/m5/m5c-resource-traffic-results.md` |
+| M5D 指标与故障恢复收口 | `bda2b85`…（本阶段提交链） | 已完成 | 8.5 覆盖矩阵、秒杀 DB persist Timer、ES consumer retry/幂等、run-id 隔离栈和 F1--F5；结果见 `docs/evidence/m5/m5d-reliability-results.md` |
 
 “已提交”只表示形成了可追踪节点，不表示未来任何环境下都无需复验。发布或演示前仍应按照本文件的证据门禁运行当前版本测试。
 
@@ -106,7 +106,7 @@ M4 已交付的点赞与热榜范围包括：
 2026-08-20 使用 Java 8 对最终源码执行编译和默认测试，228 个测试全绿；专用 MySQL
 schema 与专用 Redis 中的 M4 集成测试 11 个全绿。Flyway 的 V1->V8、V6->V8 均通过，
 最终 `invalid_blogs=0`、`pending_outbox=0`、专用 Redis `DBSIZE=0`。完整命令、时间、隔离
-边界和测试计数记录在 `docs/blog-like-hot-rank.md`。这份证据不等于生产容量结论，也不等于
+边界和测试计数记录在 `docs/design/blog-like-outbox-hot-rank.md`。这份证据不等于生产容量结论，也不等于
 浏览器端到端测试。
 
 ## 5. 目标架构及真相边界
@@ -325,7 +325,7 @@ feat(blog): make likes durable and hot rank rebuildable
 ### 8.5 可观测指标
 
 复用现有 Micrometer/Prometheus，不新增另一套指标体系。M5D 最终覆盖矩阵见
-`docs/m5d-reliability-plan.md`；实现和外部采集边界如下：
+`docs/evidence/m5/m5d-reliability-plan.md`；实现和外部采集边界如下：
 
 - 资源准入复用 `local_deals.traffic.decision{resource,result,reason}`，不注册重复指标；
 - cache hit/miss/stale/fallback/rebuild 计数与重建耗时；
@@ -360,20 +360,20 @@ M5A、M5B、M5C、M5D 已实施，并分别形成可独立回滚的绿灯节点�
 1. **M5-A 基线与契约（已完成）**：核对干净工作区；固定商铺详情、热榜、搜索、验证码、后台登录和
    秒杀提交的正常/突发流量；记录现有吞吐、P95/P99、DB QPS、缓存命中/回退和拒绝语义；
    先定义 429/503 与有限 reason 标签，禁止 userId/orderId 进入指标标签。
-   结果见 `docs/m5a-observability-results.md`；该阶段未实现 429/503 策略，F3 Broker 新准入
+   结果见 `docs/evidence/m5/m5a-observability-results.md`；该阶段未实现 429/503 策略，F3 Broker 新准入
    补测因隔离停止线记为 BLOCKED，不得据此声称 producer 故障语义已验证。
 2. **M5-B 有界缓存（已完成）**：商铺详情和类型字典已实现 Redis `500ms` 有界等待、
    miss/坏值/不可用后的 DB 安全回退、per-key singleflight、短空值和后台 commit 后精确失效；
-   未引入布隆过滤器或额外缓存层。任务契约见 `docs/m5b-bounded-cache-plan.md`，正式与负面证据见
-   `docs/m5b-bounded-cache-results.md`。
+   未引入布隆过滤器或额外缓存层。任务契约见 `docs/evidence/m5/m5b-bounded-cache-plan.md`，正式与负面证据见
+   `docs/evidence/m5/m5b-bounded-cache-results.md`。
 3. **M5-C 资源级流控（已完成）**：复用已有验证码/后台登录门禁，新增秒杀 activity+user+IP 和
    读接口本地并发上限；验证 429、依赖故障 503、秒杀 fail closed，以及已接受订单消费和
    对账不被新流量限流误伤。详细配置、响应矩阵、测试、隔离门禁和停止线见
-   `docs/m5c-resource-traffic-plan.md`；完成证据见 `docs/m5c-resource-traffic-results.md`。该文件保留
+   `docs/evidence/m5/m5c-resource-traffic-plan.md`；完成证据见 `docs/evidence/m5/m5c-resource-traffic-results.md`。该文件保留
    当时 Broker F5 `BLOCKED` 的历史事实，后续 M5D 证据不追溯改写。
 4. **M5-D 指标与故障收口（已完成）**：补齐第 8.5 节覆盖矩阵和秒杀 DB persist Timer；ES
    consumer 目标失败抛出以进入 retry/DLQ；在 run-id 专用栈完成 Redis、MySQL、consumer pause、
-   ES 和严格预检后的 Broker F5。结果见 `docs/m5d-reliability-results.md`，未写性能提升百分比。
+   ES 和严格预检后的 Broker F5。结果见 `docs/evidence/m5/m5d-reliability-results.md`，未写性能提升百分比。
 
 M5-B、M5-C、M5-D 各自通过 Java 8 默认测试、相关隔离 IT、`git diff --check` 和 staged
 diff 检查后再提交；任一节点未闭合，不进入下一节点，更不得开始 M6。
@@ -454,8 +454,8 @@ BLOCKED 结论和 `m6a_20260822b` 失败仍保留，不能追溯改判为 PASS�
 R0 后已完成并分段提交标签/活动、统一 grant ledger、真实 MySQL 并发不变量、Controller、
 最小前端、低基数指标和 MySQL/Redis 故障路径；Java 8 安全单元回归 307/307，前端 build
 通过。未执行会连接共享 RocketMQ 或默认 MySQL/Redis/ES 的旧外部 IT，故不把这组证据表述为
-无条件全量外部回归。详细结果见 `docs/m6a-targeted-grant-results.md`，机器可读摘要见
-`docs/m6a-targeted-grant-summary.csv`。c 的专用容器和网络已按精确 run-id 清理，未执行
+无条件全量外部回归。详细结果见 `docs/evidence/m6/m6a-targeted-grant-results.md`，机器可读摘要见
+`docs/evidence/m6/m6a-targeted-grant-summary.csv`。c 的专用容器和网络已按精确 run-id 清理，未执行
 broad prune，未 push。
 
 M6A-Close 的一次最终重跑因测试命令遗漏实际 datasource 环境变量而回落到共享
@@ -475,7 +475,7 @@ d026db3、`m6a_20260822b` 和 `m6a_close_20260822a` BLOCKED 记录保留，不�
 
 以下 M6C 未开始的表述是 2026-08-22 的历史边界快照；当前收口结论见 9.11/9.12。
 
-M6B = **每日签到与任务奖励**，实施计划见 `docs/m6b-daily-task-plan.md`。本阶段只实现固定
+M6B = **每日签到与任务奖励**，实施计划见 `docs/evidence/m6/m6b-daily-task-plan.md`。本阶段只实现固定
 任务 `DAILY_SIGN_IN`：签到事实落 MySQL，连续签到从 MySQL 日期记录计算，TASK 活动奖励复用
 M6A 的统一 grant 事务和标签资格；默认业务时区为 `Asia/Shanghai`，日期和幂等键均由服务端生成。
 V10 负责签到唯一事实、TASK/`TASK_REWARD` 枚举、历史 grant `ONCE` 回填和新的 grant 唯一边界。
@@ -487,14 +487,14 @@ M6C = **批量发放与通知 Outbox**，本阶段未开始且未经授权；不
 
 M6B 已完成：V10 fresh V1→V10、upgrade V9→V10、MySQL 签到唯一事实、固定任务每日奖励、
 业务时区、统一 grant 事务、TASK 查询幂等、前端最小闭环和 Java/Node/admin 验证均通过。真实
-隔离证据、并发不变量、fixture 清零、strace 目标和失败尝试见 `docs/m6b-daily-task-results.md`。
+隔离证据、并发不变量、fixture 清零、strace 目标和失败尝试见 `docs/evidence/m6/m6b-daily-task-results.md`。
 当时阶段仍标记为 `M6 IN PROGRESS`，M6C 尚未开始。M5/M6A 历史 BLOCKED 证据保持原样，
 不追溯改判。
 
 ### 9.11 M6C 完成结论（2026-08-23）
 
-M6C 已完成，结果见 `docs/m6c-batch-notification-results.md`，机器摘要见
-`docs/m6c-batch-notification-summary.csv`。V11 fresh V1→V11 与 upgrade V10→V11 均通过；
+M6C 已完成，结果见 `docs/evidence/m6/m6c-batch-notification-results.md`，机器摘要见
+`docs/evidence/m6/m6c-batch-notification-summary.csv`。V11 fresh V1→V11 与 upgrade V10→V11 均通过；
 历史 grant 没有通知回填。批量 Job 只接受 ADMIN/BOTH + MANUAL_TAG，HTTP 线程不扫描人群，
 后台使用 MySQL 行锁、INSERT SELECT 快照和有限 item 批次，统一调用 VoucherGrantService
 并复用 ONCE。Job 支持 requestId 幂等、pause/resume、失败明细和只重试技术 FAILED。
@@ -545,8 +545,8 @@ M6A、M6B、M6C 的业务闭环、迁移、权限、前端和隔离回归均已�
 
 ### 10.3 M7 完成结论（2026-08-23）
 
-M7 已完成。统一入口见 `docs/m7-evidence-index.md`，机器矩阵见 `docs/m7-failure-matrix.csv`，
-演示手册见 `docs/m7-demo-runbook.md`，最终限制和无共享依赖检查见 `docs/m7-results.md`。
+M7 已完成。统一入口见 `docs/evidence/m7/m7-evidence-index.md`，机器矩阵见 `docs/evidence/m7/m7-failure-matrix.csv`，
+演示手册见 `docs/guides/project-demo.md`，最终限制和无共享依赖检查见 `docs/evidence/m7/m7-results.md`。
 M7 复用 M5C/M5D、M3 对账和 M6A--M6C 结果，没有重复完整故障矩阵；新增的前端断线行为只做
 最多 10 次、30 秒 deadline 的持久券包轮询，并由 Node contract 验证。M7 不启动外部依赖、不改
 生产 Java、不增加业务模块、不 push。
@@ -650,7 +650,7 @@ consumer-level/Canal E2E 边界以及历史负面证据，不自动进入技术�
 
 ```text
 请先阅读 /home/sd101t/IdeaProjects/hm-dianping/docs/modernization-roadmap.md、
-docs/m7-results.md 和 docs/m7-evidence-index.md，核对 branch、HEAD、status、diff 与 M7 提交链，
+docs/evidence/m7/m7-results.md 和 docs/evidence/m7/m7-evidence-index.md，核对 branch、HEAD、status、diff 与 M7 提交链，
 不覆盖用户改动。M5A--M5D、M6A--M6C、M7 和 modernization mainline 已完成；未经明确授权不要
 进入 M8、核销/支付/退款或技术栈升级。复验时必须使用新的 run-id 专用依赖，保留全部负面证据与
 MQ/ES/外部 IT 未验证边界。
@@ -670,4 +670,4 @@ MQ/ES/外部 IT 未验证边界。
 
 完成这些之后，继续升级框架、拆服务或分库分表都应被视为新的独立课题，而不是当前项目“还不够高级”的补丁。
 
-当前状态：`M7 COMPLETED`，`modernization mainline COMPLETED`，`M8 not started`，未 push。
+当前状态：`M7-RC COMPLETED`，`modernization mainline COMPLETED`，`M8 not started`。
