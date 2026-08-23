@@ -41,4 +41,4 @@
 
 ## Markdown Row
 
-| 2026-05-16 | baseline-lua-stream | seckill-baseline-lua-stream | 1000 线程 / 1 次循环 | 1000 | 1000 | 205.88841 | 2 / 22 | 81 | 1000 / 1000 | 0 | pass | [run-summary](docs/JmeterTestSummary/seckill-baseline-lua-stream/2026-05-16-seckill-baseline-lua-stream-1000t-1l-r1-run-summary.md) |
+| 2026-05-16 | baseline-lua-stream | seckill-baseline-lua-stream | 1000 线程 / 1 次循环 | 1000 | 1000 | 205.88841 | 2 / 22 | 81 | 1000 / 1000 | 0 | pass | [run-summary](2026-05-16-seckill-baseline-lua-stream-1000t-1l-r1-run-summary.md) |

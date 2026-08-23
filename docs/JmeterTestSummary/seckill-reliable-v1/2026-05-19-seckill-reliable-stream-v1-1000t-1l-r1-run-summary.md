@@ -45,4 +45,4 @@
 
 ## Markdown Row
 
-| 2026-05-19 | reliable-stream-v1 | seckill-reliable-v1 | 1000 线程 / 1 次循环 | 1000 | 1000 | 208.33333 | 2 / 29 | 72 | 1000 / 1000 | 0 | 0 | pass | [run-summary](JmeterTestSummary/seckill-reliable-v1/2026-05-19-seckill-reliable-stream-v1-1000t-1l-r1-run-summary.md) |
+| 2026-05-19 | reliable-stream-v1 | seckill-reliable-v1 | 1000 线程 / 1 次循环 | 1000 | 1000 | 208.33333 | 2 / 29 | 72 | 1000 / 1000 | 0 | 0 | pass | [run-summary](2026-05-19-seckill-reliable-stream-v1-1000t-1l-r1-run-summary.md) |

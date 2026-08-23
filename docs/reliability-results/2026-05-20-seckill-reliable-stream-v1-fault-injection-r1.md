@@ -51,4 +51,4 @@ payload.voucherId
 
 ## Markdown Row
 
-| 2026-05-20 | reliable-stream-v1 | current | 10 | 1779243827418-0 | 0 | 1 | 0 | pass | [run-summary](reliability-results/2026-05-20-seckill-reliable-stream-v1-fault-injection-r1.md) |
+| 2026-05-20 | reliable-stream-v1 | current | 10 | 1779243827418-0 | 0 | 1 | 0 | pass | [run-summary](2026-05-20-seckill-reliable-stream-v1-fault-injection-r1.md) |

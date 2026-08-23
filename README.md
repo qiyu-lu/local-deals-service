@@ -1,10 +1,43 @@
 # 优惠券秒杀系统
 
-> GitHub repo: `local-deals-service` | 基于黑马点评教程改造，涵盖秒杀可靠性增强、Elasticsearch 搜索、RocketMQ 事务消息、Canal 数据同步、WebSocket 实时推送
+> 一句话定位：一个以 MySQL 业务事实为核心、用 Redis/RocketMQ/ES/WebSocket 完成可审计本地生活交易与营销闭环的 Java 8 单体服务。
 
-基于黑马点评教程原型改造的高并发本地生活平台。项目先用 Redis Stream 完成可靠性对比实验，随后迁移到 Elasticsearch + RocketMQ + Canal + WebSocket；当前阶段继续补齐独立商户后台、RBAC、商户数据范围、秒杀精确预约、失败补偿和可查询回执。历史 Stream 实验与结果仍保留为演进证据，但当前正式下单链路使用 RocketMQ 事务消息。
+基于黑马点评教程原型改造的本地生活平台。当前正式秒杀链路使用 RocketMQ 事务消息、Redis Lua 精确预约、MySQL 落库与可恢复状态查询；Redis Stream 只保留为历史实验对照，不属于当前正式技术栈。M5/M6 已完成，M7 负责故障证据、演示手册和项目展示收口。
 
-## 相比教程原型的核心优势
+## 系统边界
+
+系统边界图、秒杀状态图、故障矩阵和证据级别统一见 [`docs/m7-evidence-index.md`](docs/m7-evidence-index.md)。核心事实分工是：MySQL 保存长期业务事实；Redis 保存会话、预约和可重建读模型；RocketMQ 负责秒杀异步订单边界；Elasticsearch 是搜索读模型；M6 通知使用 Redis Pub/Sub + WebSocket，不使用 RocketMQ 通知链路。
+
+```mermaid
+flowchart LR
+    U[用户端] --> N[nginx]
+    A[管理端] --> N
+    N --> APP[单体应用\n身份 / 目录 / 秒杀 / 内容 / 营销]
+    APP --> DB[(MySQL\n最终事实)]
+    APP --> R[(Redis\n会话 / 预约 / 缓存 / PubSub)]
+    APP --> MQ[RocketMQ\n秒杀异步订单]
+    MQ --> ES[(Elasticsearch\n搜索读模型)]
+    C[Canal 边界] -.-> MQ
+```
+
+## 四条主线
+
+- **商户 RBAC 与数据隔离**：独立后台身份、固定角色、merchant scope、范围 SQL 和 WebSocket 会话隔离。
+- **秒杀预约、消息、落库和恢复**：资源准入、RocketMQ 事务消息、Lua reservation、`PROCESSING`、重试、补偿、`SUSPENDED`、`QUARANTINE` 和 reconciler。
+- **持久点赞 / Outbox / 可重建热榜**：MySQL 关系事实、事务 Outbox、worker 聚合和 generation-fenced Redis top-K。
+- **标签、签到、统一发券、批量 Job 和通知 Outbox**：M6A 定向发券、M6B `DAILY_SIGN_IN`/`TASK_REWARD`、M6C MANUAL_TAG 批量 Job、统一 grant ledger、Redis Pub/Sub 通知和持久券包。
+
+## 可量化验证摘要
+
+| 阶段 | 已验证结果 | 证据 |
+| --- | --- | --- |
+| M5C/M5D | M5D F1–F5 专用 run-id 通过；M5C 过载/门禁结果保留；F4 明确 consumer-level | [`docs/m5d-reliability-results.md`](docs/m5d-reliability-results.md)、[`docs/m5c-resource-traffic-results.md`](docs/m5c-resource-traffic-results.md) |
+| M6A/M6B | M6A 统一 grant 与商户隔离；M6B 签到/TASK；V9/V10 fresh/upgrade 结果 | [`docs/m6a-targeted-grant-results.md`](docs/m6a-targeted-grant-results.md)、[`docs/m6b-daily-task-results.md`](docs/m6b-daily-task-results.md) |
+| M6C | 100 item：target/granted/idempotent/skipped/failed=`100/100/0/0/0`；6 批；收敛 722ms；Outbox Redis 恢复 25ms；item P99 与入口限流为 `NA` | [`docs/m6c-batch-notification-results.md`](docs/m6c-batch-notification-results.md) |
+
+数值均是对应专用本地环境的观测或真实数据库行，不是生产 SLA；`NA` 不用 0 冒充测量。
+
+## 历史对照（不作为当前技术栈）
 
 本项目不把秒杀改造包装成未经验证的“吞吐性能大幅提升”。2026-05-20 的历史对比只证明 Stream 可靠性增强没有破坏正常链路，并能闭环异常 pending；当前 RocketMQ 版本则重点解决预约与消息的精确对应、Redis/MySQL 失败补偿、状态可恢复查询和安全边界。两组证据分开记录，避免把旧基准误当成当前架构的性能结论。
 
@@ -119,13 +152,20 @@
 | `BlogLikeReliabilityIT` | MySQL 事务 | 显式状态并发幂等、关系/outbox 原子回滚、worker 重放与并发只应用一次；仅可在隔离 schema 运行 |
 | `BlogHotRankRedisIT` | Redis Lua | generation 原子发布、新博客与旧 builder 竞态、top-K 裁剪及空榜；仅可在隔离 Redis 运行 |
 
-运行所有集成测试（需要 MySQL、Redis、Elasticsearch、RocketMQ NameServer/Broker
-在本地运行，并预先创建 `seckill-order-topic`）：
+默认安全检查不连接外部依赖；不要直接运行可能连接共享依赖的 `-Dtest="*IT"`：
 
 ```bash
-set -a && source .env && set +a
-~/.m2/wrapper/dists/apache-maven-3.9.11/a2d47e15/bin/mvn -Dtest="*IT" test
+mvn -o -DskipTests compile test-compile
+mvn -o test
+node scripts/check-m5c-frontend.js
+node scripts/check-m6a-frontend.js
+node scripts/check-m6b-frontend.js
+node scripts/check-m6c-frontend.js
+node scripts/check-m7-frontend.js
 ```
+
+外部集成测试必须由对应阶段的专用隔离脚本显式提供 run-id、端口、sentinel 和依赖；M5D/M6C
+的既有结果入口见 [`docs/m7-evidence-index.md`](docs/m7-evidence-index.md)。
 
 ## 对比验证摘要
 
@@ -187,8 +227,7 @@ scripts/run-seckill-benchmark.sh \
 # MySQL/Redis 连接参数从 .env 中的 LOCAL_DEALS_* 自动读取，无需额外指定容器名
 # 压测结束后自动校验 MySQL 订单、Redis 库存/预约/活动状态，并输出 P95/P99
 
-# 4. （可选）当前 RocketMQ 重投递验证；需要本地 NameServer 与 Broker
-mvn -Dtest=SeckillOrderRetryIT test
+# 外部 RocketMQ/ES/Redis/MySQL IT 不在 Quick Start 中直接运行；必须使用对应阶段的隔离脚本和新 run-id
 # 历史 Redis Stream 故障注入结果保留在 docs/reliability-results.md，不作为当前链路验收命令
 ```
 
@@ -253,7 +292,7 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 **后端**
 - Java 8 / Spring Boot 2.3.12 / MyBatis-Plus
 - MySQL 8 / Flyway
-- Redis 6 / Redis Stream / Redis GEO / Bitmap / Redis pub/sub
+- Redis 6 / Redis GEO / Bitmap / Redis pub/sub（Redis Stream 仅为历史实验）
 - Redisson（分布式锁）
 - Elasticsearch 7.17.18 + IK 分词器（`ik_max_word` 索引 / `ik_smart` 搜索）+ geo_point
 - RocketMQ client 5.0.0 / Broker 5.2.0（事务消息、`@RocketMQTransactionListener`）
@@ -276,6 +315,8 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - 已覆盖的一致性路径：Flyway 唯一索引作为一人一单最终兜底；落库后标记 `SUCCESS`，永久业务失败时暂停活动并幂等补偿为 `FAILED`，临时故障交给 RocketMQ 重试。
 - 结果恢复：WebSocket 用于快速通知，用户隔离的状态接口用于断线兜底；订单 ID 以字符串传输，避免 JavaScript 超过安全整数后精度丢失。
 - 可观测性：M5A 指标目录、M5B 有界缓存、M5C 资源门禁和 M5D 故障恢复均已完成；M5D 新增低基数秒杀 DB persist Timer，并在 run-id 专用栈验证 Redis/MySQL/consumer pause/ES/Broker 故障。management 仍独立绑定 loopback，结果见 `docs/m5d-reliability-results.md`。
+- 营销闭环：M6A 支持商户标签活动、USER_CLAIM/ADMIN_GRANT 和统一 ONCE ledger；M6B 支持服务端日期的 `DAILY_SIGN_IN`/`TASK_REWARD`；M6C 支持 MANUAL_TAG + ADMIN/BOTH 的可审计批量 Job、快照、pause/resume/retry-failures、失败明细、统一 grant 和事务通知 Outbox。
+- 通知边界：M6C 使用 Redis Pub/Sub + 用户 WebSocket 频道 `VOUCHER_GRANTED`，以 `/voucher-grants/mine` 为离线最终事实；Outbox `PUBLISHED` 只表示 Redis 接受发布，不表示用户在线或已读。
 - 附近商铺：使用 Redis GEO 按距离检索商铺，并将距离写回响应对象。
 
 ### 管理端本阶段边界
@@ -303,23 +344,13 @@ V7/V8 将点赞身份迁移到 MySQL 关系表，并用事务 outbox 异步聚�
 - [秒杀对比验证手册](docs/seckill-comparison-test-runbook.md)
 - [压测结果记录](docs/benchmark-results.md)
 - [故障注入结果](docs/reliability-results.md)
+- [M7 故障证据索引](docs/m7-evidence-index.md)
+- [M7 故障矩阵](docs/m7-failure-matrix.csv)
+- [M7 15 分钟演示手册](docs/m7-demo-runbook.md)
+- [M7 最终结果与限制](docs/m7-results.md)
 
-## 压测准备
+## 外部压测与集成验证
 
-压测不绕过正式登录逻辑，也不删除验证码校验。秒杀压测使用测试侧工具预生成测试用户和 Redis token，JMeter 从 CSV 中读取 token 后请求秒杀接口。
-
-推荐使用脚本自动完成测试用户/token 准备、库存重置、JMeter 压测、MySQL/Redis 校验和报告输出：
-
-```bash
-set -a && source .env && set +a
-
-scripts/run-seckill-benchmark.sh \
-  --threads 100 \
-  --loops 1 \
-  --stock 100 \
-  --user-count 1000
-```
-
-不传 `--voucher-id` 时，压测工具会自动创建或复用一张本地压测秒杀券。MySQL/Redis 连接参数从 `.env` 中的 `LOCAL_DEALS_*` 自动读取。
-
-更多参数和清理规则见 [JMeter 使用说明](docs/jmeter-usage.md)。
+压测和外部 IT 不属于默认 Quick Start。它们必须使用阶段专用隔离脚本、显式 run-id、专用依赖
+和对应清理方式；不要把 `-Dtest="*IT"` 指向共享 MySQL/Redis/RocketMQ/ES。秒杀压测参数、业务
+不变量和历史对照见 [JMeter 使用说明](docs/jmeter-usage.md) 与 [M7 演示手册](docs/m7-demo-runbook.md)。
