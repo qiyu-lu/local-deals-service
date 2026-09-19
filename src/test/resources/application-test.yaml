@@ -19,6 +19,8 @@ rocketmq:
         seckill-order-topic: false
       es-sync-consumer-group:
         mysql-sync-topic: false
+      order-close-consumer-group:
+        order-close-topic: false
 local-deals:
   observability:
     # Tests opt in only when they own isolated MySQL and Redis targets.
@@ -32,6 +34,12 @@ local-deals:
     # Tests drive the batch and notification workers explicitly.
     job-worker-enabled: false
     notification-worker-enabled: false
+  coupon:
+    expiry-enabled: false
+  order:
+    scan:
+      # Tests call OrderTimeoutScanner.scanOnce() explicitly.
+      enabled: false
   seckill:
     reconciliation:
       # Tests opt in explicitly when exercising the worker.

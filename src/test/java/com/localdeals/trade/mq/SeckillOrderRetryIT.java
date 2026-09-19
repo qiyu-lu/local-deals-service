@@ -76,7 +76,7 @@ class SeckillOrderRetryIT {
     void transientFailure_isRedeliveredByBroker() {
         // Generic (transient) exception → consumer rethrows → RocketMQ must redeliver.
         doThrow(new RuntimeException("simulated DB timeout"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
 
         SeckillOrderMessage msg = new SeckillOrderMessage(
                 TRANSIENT_VOUCHER_ID, 770001L + RUN_SUFFIX, 990001L + RUN_SUFFIX);
@@ -85,7 +85,7 @@ class SeckillOrderRetryIT {
         // The real broker must invoke the consumer at least twice (original + >=1 retry)
         // for THIS voucher. First consumer-retry delay is ~10s, so allow 40s.
         verify(voucherOrderService, timeout(40_000).atLeast(2))
-                .createVoucherOrder(argThat(o -> o != null &&
+                .createPendingOrder(argThat(o -> o != null &&
                         o.getVoucherId().equals(TRANSIENT_VOUCHER_ID)));
     }
 
@@ -93,7 +93,7 @@ class SeckillOrderRetryIT {
     void permanentFailure_isNotRedelivered() {
         // StockExhaustedException is swallowed (ACK) → message must NOT be retried.
         doThrow(new StockExhaustedException("DB stock exhausted"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
         doNothing().when(webSocketNotifier).notify(any(), org.mockito.ArgumentMatchers.anyBoolean(), any(), any());
 
         SeckillOrderMessage msg = new SeckillOrderMessage(
@@ -106,7 +106,7 @@ class SeckillOrderRetryIT {
         // consumed exactly once (matching by voucherId isolates it from any leftover
         // background retry of an unrelated message).
         verify(voucherOrderService, after(15_000).times(1))
-                .createVoucherOrder(argThat(o -> o != null &&
+                .createPendingOrder(argThat(o -> o != null &&
                         o.getVoucherId().equals(PERMANENT_VOUCHER_ID)));
     }
 }

@@ -13,6 +13,8 @@ public final class AdminPermissionCodes {
     public static final String MERCHANT_MANAGE = "merchant:manage";
     public static final String MARKETING_READ = "marketing:read";
     public static final String MARKETING_WRITE = "marketing:write";
+    public static final String COUPON_VERIFY = "coupon:verify";
+    public static final String AUDIT_READ = "audit:read";
 
     private AdminPermissionCodes() {
     }

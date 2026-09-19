@@ -109,8 +109,8 @@ prepare_broker_store() {
   [[ "$BROKER_STORE" == /* ]] || return 0
   mkdir -p "$BROKER_STORE"
   # the broker runs as uid 3000 inside the image
-  docker run --rm -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:4.9.4 -R 3000:3000 /store 2>/dev/null ||
-    docker run --rm -u 0 -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:4.9.4 -R 3000:3000 /store
+  docker run --rm -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:5.3.2 -R 3000:3000 /store 2>/dev/null ||
+    docker run --rm -u 0 -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:5.3.2 -R 3000:3000 /store
 }
 
 prepare_es_data() {
@@ -130,10 +130,10 @@ up() {
   wait_for Elasticsearch es_ready
   wait_for RocketMQ rmq_ready
   local topic group
-  for topic in seckill-order-topic mysql-sync-topic; do
+  for topic in seckill-order-topic mysql-sync-topic order-close-topic; do
     docker exec "${STACK_NAME}-broker" sh mqadmin updateTopic -n namesrv:9876 -c "$STACK_NAME" -t "$topic" >/dev/null
   done
-  for group in seckill-consumer-group es-sync-consumer-group; do
+  for group in seckill-consumer-group es-sync-consumer-group order-close-consumer-group; do
     docker exec "${STACK_NAME}-broker" sh mqadmin updateSubGroup -n namesrv:9876 -c "$STACK_NAME" -g "$group" >/dev/null
   done
   [[ -z "$DEPS_CPUS" ]] || pin
@@ -154,7 +154,7 @@ down() {
   app_stop
   compose down --volumes --remove-orphans
   if [[ "$BROKER_STORE" == /* && -d "$BROKER_STORE" ]]; then
-    docker run --rm -u 0 -v "$(dirname "$BROKER_STORE"):/root-store" --entrypoint rm apache/rocketmq:4.9.4 \
+    docker run --rm -u 0 -v "$(dirname "$BROKER_STORE"):/root-store" --entrypoint rm apache/rocketmq:5.3.2 \
       -rf "/root-store/$(basename "$BROKER_STORE")"
   fi
   if [[ "$ES_DATA" == /* && -d "$ES_DATA" ]]; then

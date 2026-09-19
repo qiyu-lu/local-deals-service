@@ -54,6 +54,9 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     @Resource
     private LocalDealsMetrics localDealsMetrics;
 
+    @Resource
+    private OrderTimeoutScheduler orderTimeoutScheduler;
+
     private Counter consumeSuccessCounter;
     private Counter consumeFailureCounter;
 
@@ -144,6 +147,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.PERSISTED);
             detailedOutcomeRecorded = true;
             log.debug("Seckill order persisted. orderId={}", msg.getOrderId());
+            scheduleCloseBestEffort(msg);
             notifyBestEffort(msg, true);
         } catch (StockExhaustedException e) {
             handlePermanentFailure(msg, "DB_STOCK_EXHAUSTED", e);
@@ -170,7 +174,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
         LocalDealsMetrics.SeckillDbPersistResult result =
                 LocalDealsMetrics.SeckillDbPersistResult.FAILURE;
         try {
-            voucherOrderService.createVoucherOrder(msg.toVoucherOrder());
+            voucherOrderService.createPendingOrder(msg);
             result = LocalDealsMetrics.SeckillDbPersistResult.SUCCESS;
         } finally {
             localDealsMetrics.recordSeckillDbPersist(result, System.nanoTime() - startedAt);
@@ -225,6 +229,15 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                         "the poison message through retry/DLQ. voucherId={} orderId={}",
                 msg.getVoucherId(), msg.getOrderId(), cause);
         throw cause;
+    }
+
+    private void scheduleCloseBestEffort(SeckillOrderMessage msg) {
+        try {
+            orderTimeoutScheduler.scheduleClose(msg.getOrderId());
+        } catch (RuntimeException e) {
+            // The order is committed; OrderTimeoutScanner closes it if no timer message exists.
+            log.warn("Order timeout scheduling failed. orderId={}", msg.getOrderId(), e);
+        }
     }
 
     private void notifyBestEffort(SeckillOrderMessage msg, boolean success) {

@@ -8,7 +8,8 @@
 
 架构选择以业务事实和恢复能力为中心，而不是以中间件数量为目标。V2 按
 [重构计划](docs/plan/v2-high-concurrency-plan.md) 逐里程碑推进；M1 起运行在 Java 21 /
-Spring Boot 3.5（[ADR 0002](docs/adr/0002-m1-java21-boot3.md)）。
+Spring Boot 3.5（[ADR 0002](docs/adr/0002-m1-java21-boot3.md)）；M2 补上订单闭环：支付、超时关单、
+退款、券资产与核销（[ADR 0003](docs/adr/0003-m2-order-lifecycle.md)）。
 
 ## 系统边界
 
@@ -30,12 +31,35 @@ flowchart LR
 - Elasticsearch 是由业务事实派生的搜索读模型。
 - WebSocket 提供实时体验，断线或离线时由持久查询接口兜底。
 
+## 订单与券的生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_PAY: 秒杀准入成功，消费者落库\n(DB 库存 -1，发定时关单消息)
+    PENDING_PAY --> PAID: PAY 支付回调\n(同事务发券 AVAILABLE)
+    PENDING_PAY --> CLOSED: CLOSE 超时\n(expire_at 已过；DB 库存 +1，提交后释放 Redis 预占)
+    PAID --> USED: VERIFY 到店核销\n(券 AVAILABLE→USED)
+    PAID --> REFUNDING: REFUND_APPLY\n(券 →FROZEN，不可再核销)
+    REFUNDING --> REFUNDED: REFUND_SUCCESS 退款回调\n(券 →REFUNDED；库存回补)
+    CLOSED --> [*]
+    USED --> [*]
+    REFUNDED --> [*]
+```
+
+- 每条边是 `OrderStateMachine` 里的一次 `UPDATE ... WHERE order_no=? AND status=<源状态>`，
+  影响 0 行即为并发中的失败方；除此之外没有任何代码写 `trade_order.status`。
+- 支付回调与超时关单同时到达：只有一方的 CAS 成功。关单赢时，迟到的支付自动退款。
+- `CLOSED` / `REFUNDED` 的订单不再占用限购唯一键（生成列 `active_flag` 为 NULL），用户可再次购买。
+- 营销发券（领取 / 后台发放 / 签到奖励 / 批量发放）在发券事务内生成同一种券资产 `user_coupon`，
+  核销、过期、退款都只操作这张表。
+
 ## 核心改造
 
 | 方向 | 当前实现 |
 | --- | --- |
 | 商户后台与隔离 | 独立后台身份、固定角色 RBAC、merchant scope、范围 SQL 与 WebSocket 会话隔离 |
 | 秒杀一致性 | Redis Lua 精确预约 + RocketMQ 事务消息 + MySQL 唯一约束与幂等落库 |
+| 订单闭环 | 状态机 CAS、RocketMQ 5 定时消息关单 + 兜底扫描、签名回调幂等、自动退款、统一券资产与核销、后台操作审计 |
 | 恢复与对账 | `PROCESSING` 状态、精确补偿、超龄对账、`SUSPENDED` 与 `QUARANTINE` |
 | 点赞与热榜 | MySQL 点赞事实 + Transactional Outbox + generation-fenced 可重建 Redis 热榜 |
 | 营销闭环 | 标签、签到、统一 Grant、有限批量 Job 与通知 Outbox |
@@ -57,8 +81,8 @@ V1 的历史证据保留在 tag `v1-final` 的 `docs/evidence/`，与 V2 口径�
   mysql-connector-j、Redisson 3.52、Hutool 5.8。
 - 数据：MySQL 8.0、Redis 6.2、Spring Data Elasticsearch 5.5 / Elasticsearch Java client 8.18.8。
 - 搜索运行环境：仓库镜像基于 Elasticsearch 8.18.8，并安装 IK 8.18.8 分词器。
-- 消息：RocketMQ Spring Boot Starter 2.3.6（RocketMQ client 5.3.2）；Broker 仍为
-  `apache/rocketmq:4.9.4`，M2 升 5.x（定时消息）。
+- 消息：RocketMQ Spring Boot Starter 2.3.6（RocketMQ client 5.3.2）；Broker
+  `apache/rocketmq:5.3.2`（定时消息用于订单超时关单）。
 - 实时与观测：Spring WebSocket、Actuator、Micrometer、Prometheus。
 - 前端：用户端 Vue 2 + Element UI；管理端 Vue 3.4、Vue Router 4.3、Element Plus 2.7、Vite 5.2；nginx 1.22。
 
@@ -69,7 +93,7 @@ Redis Stream 仅存在于历史归档，不属于当前正式秒杀链路。
 ### 环境要求
 
 - JDK 8 与 Maven 3.x。
-- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、RocketMQ 4.9.4、Elasticsearch 7.17.18 和 nginx。
+- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、RocketMQ 5.3.2、Elasticsearch 8.18.8 和 nginx。
 - 主 Compose 已包含 RocketMQ NameServer/Broker（默认 `9876`/`10911`，端口被占用时用 `NAMESRV_PORT`/`BROKER_PORT` 覆盖）。
 - Node.js 与 npm 仅在需要重新构建管理端时使用。
 

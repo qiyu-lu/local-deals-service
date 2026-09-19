@@ -9,12 +9,14 @@ import com.localdeals.platform.exception.ApiStatusException;
 import com.localdeals.trade.exception.OrderReservationConflictException;
 import com.localdeals.trade.exception.OrderIdConflictException;
 import com.localdeals.trade.exception.StockExhaustedException;
-import com.localdeals.trade.entity.VoucherOrder;
-import com.localdeals.trade.mapper.VoucherOrderMapper;
+import com.localdeals.trade.config.OrderProperties;
+import com.localdeals.trade.entity.TradeOrder;
+import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderMessage;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.ISeckillVoucherService;
 import com.localdeals.trade.service.IVoucherOrderService;
+import com.localdeals.trade.service.OrderStateMachine;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillTrafficGuard;
 import com.localdeals.trade.utils.RedisIdWorker;
@@ -39,7 +41,7 @@ import jakarta.annotation.Resource;
  */
 @Slf4j
 @Service
-public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder>
+public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOrder>
         implements IVoucherOrderService {
 
     @Resource
@@ -56,6 +58,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     private SeckillTrafficGuard seckillTrafficGuard;
+
+    @Resource
+    private OrderStateMachine orderStateMachine;
+
+    @Resource
+    private OrderProperties orderProperties;
 
     @Resource
     private MeterRegistry meterRegistry;
@@ -182,29 +190,37 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 return Result.fail("订单不存在或无权查看");
             }
             if (SeckillOrderStateService.STATUS_PROCESSING.equals(state.getStatus())) {
-                VoucherOrder persisted = findOwnedPersistedOrder(orderId, userId);
+                TradeOrder persisted = findOwnedPersistedOrder(orderId, userId);
                 if (persisted != null && state.getVoucherId().equals(persisted.getVoucherId())) {
                     repairSuccessStateBestEffort(state);
-                    return Result.ok(new SeckillOrderStatusDTO(
-                            persisted.getId().toString(), persisted.getVoucherId(),
-                            SeckillOrderStateService.STATUS_SUCCESS, null));
+                    return Result.ok(persistedStatus(persisted));
+                }
+            }
+            if (SeckillOrderStateService.STATUS_SUCCESS.equals(state.getStatus())) {
+                TradeOrder persisted = findOwnedPersistedOrder(orderId, userId);
+                if (persisted != null) {
+                    return Result.ok(persistedStatus(persisted));
                 }
             }
             return Result.ok(toStatusDto(state));
         }
 
-        VoucherOrder persisted = findOwnedPersistedOrder(orderId, userId);
+        TradeOrder persisted = findOwnedPersistedOrder(orderId, userId);
         if (persisted != null) {
-            return Result.ok(new SeckillOrderStatusDTO(
-                    persisted.getId().toString(), persisted.getVoucherId(),
-                    SeckillOrderStateService.STATUS_SUCCESS, null));
+            return Result.ok(persistedStatus(persisted));
         }
         return Result.fail(redisUnavailable ? "订单状态暂不可用，请稍后重试" : "订单不存在或状态已过期");
     }
 
-    private VoucherOrder findOwnedPersistedOrder(Long orderId, Long userId) {
-        VoucherOrder persisted = getById(orderId);
+    private TradeOrder findOwnedPersistedOrder(Long orderId, Long userId) {
+        TradeOrder persisted = getById(orderId);
         return persisted != null && userId.equals(persisted.getUserId()) ? persisted : null;
+    }
+
+    /** Admission succeeded and the order is durable; orderStatus tells the client what to do next. */
+    private static SeckillOrderStatusDTO persistedStatus(TradeOrder order) {
+        return new SeckillOrderStatusDTO(order.getOrderNo().toString(), order.getVoucherId(),
+                SeckillOrderStateService.STATUS_SUCCESS, null, order.getStatus().name());
     }
 
     private void repairSuccessStateBestEffort(SeckillOrderStateService.Snapshot state) {
@@ -227,7 +243,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 state.getOrderId().toString(),
                 state.getVoucherId(),
                 state.getStatus(),
-                userFacingReason(state.getReason()));
+                userFacingReason(state.getReason()),
+                null);
     }
 
     private String userFacingReason(String reason) {
@@ -256,70 +273,65 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             throw new IllegalArgumentException("Seckill order ownership identifiers are required");
         }
 
-        VoucherOrder byId = getById(orderId);
+        TradeOrder byId = getById(orderId);
         if (byId != null) {
             if (userId.equals(byId.getUserId()) && voucherId.equals(byId.getVoucherId())) {
                 return SeckillOrderPersistenceResult.exact(
-                        byId.getId(), byId.getUserId(), byId.getVoucherId());
+                        byId.getOrderNo(), byId.getUserId(), byId.getVoucherId());
             }
             return SeckillOrderPersistenceResult.orderIdConflict(
-                    byId.getId(), byId.getUserId(), byId.getVoucherId());
+                    byId.getOrderNo(), byId.getUserId(), byId.getVoucherId());
         }
 
-        VoucherOrder byUserAndVoucher = lambdaQuery()
-                .eq(VoucherOrder::getUserId, userId)
-                .eq(VoucherOrder::getVoucherId, voucherId)
-                .one();
-        if (byUserAndVoucher != null) {
+        // Only an active order competes for the purchase limit; CLOSED/REFUNDED ones do not.
+        TradeOrder active = getBaseMapper().selectActive(userId, voucherId);
+        if (active != null) {
             return SeckillOrderPersistenceResult.userVoucherConflict(
-                    byUserAndVoucher.getId(), byUserAndVoucher.getUserId(),
-                    byUserAndVoucher.getVoucherId());
+                    active.getOrderNo(), active.getUserId(), active.getVoucherId());
         }
         return SeckillOrderPersistenceResult.absent();
     }
 
     @Override
     @Transactional
-    public void createVoucherOrder(VoucherOrder voucherOrder) {
+    public void createPendingOrder(SeckillOrderMessage message) {
+        long orderNo = message.getOrderId();
+        long userId = message.getUserId();
+        long voucherId = message.getVoucherId();
         try {
-            if (!this.save(voucherOrder)) {
-                throw new IllegalStateException("Voucher order insert affected no rows. orderId=" + voucherOrder.getId());
+            if (getBaseMapper().insertPendingFromVoucher(orderNo, userId, voucherId,
+                    orderProperties.getPayTimeout().getSeconds()) != 1) {
+                throw new IllegalStateException("Voucher or its shop is missing. voucherId=" + voucherId);
             }
         } catch (DuplicateKeyException e) {
             duplicateOrderCounter.increment();
-            VoucherOrder persistedById = getById(voucherOrder.getId());
+            TradeOrder persistedById = getById(orderNo);
             if (persistedById != null) {
-                if (voucherOrder.getUserId().equals(persistedById.getUserId()) &&
-                        voucherOrder.getVoucherId().equals(persistedById.getVoucherId())) {
-                    log.info("Idempotent seckill message replay. orderId={}", voucherOrder.getId());
+                if (persistedById.getUserId() == userId && persistedById.getVoucherId() == voucherId) {
+                    log.info("Idempotent seckill message replay. orderId={}", orderNo);
                     return;
                 }
                 throw new OrderIdConflictException(
-                        "Seckill order id belongs to another DB order. requestedOrderId=" +
-                                voucherOrder.getId() + ", persistedUserId=" + persistedById.getUserId() +
+                        "Seckill order id belongs to another DB order. requestedOrderId=" + orderNo +
+                                ", persistedUserId=" + persistedById.getUserId() +
                                 ", persistedVoucherId=" + persistedById.getVoucherId());
             }
-            VoucherOrder persisted = lambdaQuery()
-                    .eq(VoucherOrder::getUserId, voucherOrder.getUserId())
-                    .eq(VoucherOrder::getVoucherId, voucherOrder.getVoucherId())
-                    .one();
-            Long persistedOrderId = persisted == null ? null : persisted.getId();
+            TradeOrder active = getBaseMapper().selectActive(userId, voucherId);
             throw new OrderReservationConflictException(
-                    "Redis reservation conflicts with DB order. requestedOrderId=" + voucherOrder.getId() +
-                            ", persistedOrderId=" + persistedOrderId +
-                            ", userId=" + voucherOrder.getUserId() +
-                            ", voucherId=" + voucherOrder.getVoucherId());
+                    "Redis reservation conflicts with an active DB order. requestedOrderId=" + orderNo +
+                            ", persistedOrderId=" + (active == null ? null : active.getOrderNo()) +
+                            ", userId=" + userId + ", voucherId=" + voucherId);
         }
 
         boolean success = seckillVoucherService.update()
                 .setSql("stock = stock - 1")
-                .eq("voucher_id", voucherOrder.getVoucherId())
+                .eq("voucher_id", voucherId)
                 .gt("stock", 0)
                 .update();
-
         if (!success) {
             stockRollbackCounter.increment();
-            throw new StockExhaustedException("DB stock exhausted. voucherId=" + voucherOrder.getVoucherId());
+            throw new StockExhaustedException("DB stock exhausted. voucherId=" + voucherId);
         }
+        orderStateMachine.recordCreated(orderNo, "SYSTEM");
     }
 }

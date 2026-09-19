@@ -46,6 +46,9 @@ class SeckillOrderConsumerTest {
     @Mock
     private RLock lock;
 
+    @Mock
+    private OrderTimeoutScheduler orderTimeoutScheduler;
+
     private SimpleMeterRegistry registry;
 
     @BeforeEach
@@ -63,7 +66,7 @@ class SeckillOrderConsumerTest {
     @Test
     void onMessage_stockExhausted_doesNotThrowSoRocketMQAcks() {
         doThrow(new StockExhaustedException("DB stock exhausted. voucherId=88888"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
 
         SeckillOrderMessage msg = new SeckillOrderMessage();
         msg.setVoucherId(88888L);
@@ -84,7 +87,7 @@ class SeckillOrderConsumerTest {
     @Test
     void onMessage_compensationUnavailable_rethrowsForRetry() {
         doThrow(new StockExhaustedException("DB stock exhausted. voucherId=88888"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
         SeckillOrderMessage msg = new SeckillOrderMessage(88888L, 3L, 997L);
         doThrow(new RuntimeException("redis unavailable"))
                 .when(seckillOrderStateService).suspendVoucher(88888L, "DB_STOCK_EXHAUSTED");
@@ -99,7 +102,7 @@ class SeckillOrderConsumerTest {
     @Test
     void onMessage_differentOrderForExistingPurchaseCompensatesAndAcks() {
         doThrow(new OrderReservationConflictException("different persisted order"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
         SeckillOrderMessage msg = new SeckillOrderMessage(88888L, 5L, 995L);
         when(seckillOrderStateService.compensate(msg, "DB_ORDER_CONFLICT")).thenReturn(true);
 
@@ -113,7 +116,7 @@ class SeckillOrderConsumerTest {
     @Test
     void onMessage_orderIdCollisionSuspendsAndQuarantinesWithoutCompensation() {
         doThrow(new OrderIdConflictException("id belongs to another order"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
         SeckillOrderMessage msg = new SeckillOrderMessage(88888L, 15L, 985L);
         when(seckillOrderStateService.quarantineProcessingOrder(
                 985L, "DB_ORDER_ID_CONFLICT")).thenReturn(true);
@@ -143,7 +146,7 @@ class SeckillOrderConsumerTest {
 
         InOrder inOrder = inOrder(seckillOrderStateService, voucherOrderService);
         inOrder.verify(seckillOrderStateService).validateForConsumption(msg);
-        inOrder.verify(voucherOrderService).createVoucherOrder(any());
+        inOrder.verify(voucherOrderService).createPendingOrder(any());
         inOrder.verify(seckillOrderStateService).markSuccess(msg);
         verify(webSocketNotifier).notify(4L, true, 996L, 88888L);
         assertThat(registry.get("local_deals.seckill.db.persist.duration")
@@ -160,7 +163,7 @@ class SeckillOrderConsumerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("ownership mismatch");
 
-        verify(voucherOrderService, never()).createVoucherOrder(any());
+        verify(voucherOrderService, never()).createPendingOrder(any());
         verify(seckillOrderStateService, never()).markSuccess(any());
         verifyNoInteractions(webSocketNotifier);
     }
@@ -173,7 +176,7 @@ class SeckillOrderConsumerTest {
 
         assertThatCode(() -> consumer.onMessage(successful)).doesNotThrowAnyException();
 
-        verify(voucherOrderService, never()).createVoucherOrder(any());
+        verify(voucherOrderService, never()).createPendingOrder(any());
         verify(seckillOrderStateService, never()).markSuccess(any());
         verifyNoInteractions(webSocketNotifier);
     }
@@ -186,7 +189,7 @@ class SeckillOrderConsumerTest {
 
         assertThatCode(() -> consumer.onMessage(failed)).doesNotThrowAnyException();
 
-        verify(voucherOrderService, never()).createVoucherOrder(any());
+        verify(voucherOrderService, never()).createPendingOrder(any());
         verify(seckillOrderStateService, never()).markSuccess(any());
         verifyNoInteractions(webSocketNotifier);
     }
@@ -201,7 +204,7 @@ class SeckillOrderConsumerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("missing or incomplete");
 
-        verify(voucherOrderService, never()).createVoucherOrder(any());
+        verify(voucherOrderService, never()).createPendingOrder(any());
         verify(seckillOrderStateService, never()).markSuccess(any());
         verifyNoInteractions(webSocketNotifier);
     }
@@ -216,7 +219,7 @@ class SeckillOrderConsumerTest {
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("redis unavailable");
 
-        verify(voucherOrderService, never()).createVoucherOrder(any());
+        verify(voucherOrderService, never()).createPendingOrder(any());
         verify(seckillOrderStateService, never()).markSuccess(any());
         verifyNoInteractions(webSocketNotifier);
     }
@@ -230,7 +233,7 @@ class SeckillOrderConsumerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("could not be marked SUCCESS");
 
-        verify(voucherOrderService).createVoucherOrder(any());
+        verify(voucherOrderService).createPendingOrder(any());
         verify(seckillOrderStateService).markSuccess(msg);
         verifyNoInteractions(webSocketNotifier);
     }
@@ -250,7 +253,7 @@ class SeckillOrderConsumerTest {
     @Test
     void onMessage_transientException_rethrowsForRetry() {
         doThrow(new RuntimeException("DB connection timeout"))
-                .when(voucherOrderService).createVoucherOrder(any());
+                .when(voucherOrderService).createPendingOrder(any());
 
         SeckillOrderMessage msg = new SeckillOrderMessage();
         msg.setVoucherId(88888L);
@@ -261,5 +264,29 @@ class SeckillOrderConsumerTest {
         assertThatCode(() -> consumer.onMessage(msg))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("DB connection timeout");
+    }
+
+    @Test
+    void persistedOrderSchedulesItsTimeoutCloseAfterRedisSuccess() {
+        SeckillOrderMessage msg = new SeckillOrderMessage(17L, 23L, 4242L);
+        when(seckillOrderStateService.markSuccess(msg)).thenReturn(true);
+
+        consumer.onMessage(msg);
+
+        InOrder inOrder = inOrder(voucherOrderService, seckillOrderStateService, orderTimeoutScheduler);
+        inOrder.verify(voucherOrderService).createPendingOrder(msg);
+        inOrder.verify(seckillOrderStateService).markSuccess(msg);
+        inOrder.verify(orderTimeoutScheduler).scheduleClose(4242L);
+    }
+
+    @Test
+    void aBrokerFailureWhileSchedulingTheCloseStillAcksTheOrder() {
+        SeckillOrderMessage msg = new SeckillOrderMessage(17L, 23L, 4243L);
+        when(seckillOrderStateService.markSuccess(msg)).thenReturn(true);
+        when(orderTimeoutScheduler.scheduleClose(4243L)).thenThrow(new IllegalStateException("broker down"));
+
+        // The order is committed; the fallback scan closes it if the timer message never exists.
+        assertThatCode(() -> consumer.onMessage(msg)).doesNotThrowAnyException();
+        verify(webSocketNotifier).notify(23L, true, 4243L, 17L);
     }
 }

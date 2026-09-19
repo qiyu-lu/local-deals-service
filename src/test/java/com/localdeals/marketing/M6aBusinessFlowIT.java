@@ -68,9 +68,10 @@ class M6aBusinessFlowIT {
     void ownerToMemberToManualTagClaimFlowHasOneGrantAndOneCount() {
         Long memberUserId = selectUserWithoutOrder(-1L);
         Long ineligibleUserId = selectUserWithoutOrder(memberUserId);
-        jdbcTemplate.update("INSERT INTO tb_voucher_order " +
-                        "(id,user_id,voucher_id,pay_type,status) VALUES(?,?,?,?,?)",
-                BUSINESS_ORDER_ID, memberUserId, VOUCHER_ID, 1, 2);
+        jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
+                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
+                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
+                BUSINESS_ORDER_ID, memberUserId, VOUCHER_ID);
 
         Long operatorId = createAccount();
         AdminPrincipalHolder.save(merchantPrincipal(operatorId));
@@ -178,7 +179,7 @@ class M6aBusinessFlowIT {
 
     private Long selectUserWithoutOrder(Long excludedUserId) {
         return jdbcTemplate.queryForObject("SELECT u.id FROM tb_user u " +
-                        "WHERE u.id <> ? AND NOT EXISTS (SELECT 1 FROM tb_voucher_order o " +
+                        "WHERE u.id <> ? AND NOT EXISTS (SELECT 1 FROM trade_order o " +
                         "WHERE o.user_id=u.id AND o.voucher_id=?) ORDER BY u.id LIMIT 1",
                 Long.class, excludedUserId, VOUCHER_ID);
     }
@@ -206,7 +207,7 @@ class M6aBusinessFlowIT {
                 FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_voucher_campaign WHERE name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_marketing_tag WHERE code LIKE ?", FIXTURE_PREFIX + "%");
-        jdbcTemplate.update("DELETE FROM tb_voucher_order WHERE id=?", BUSINESS_ORDER_ID);
+        jdbcTemplate.update("DELETE FROM trade_order WHERE order_no=?", BUSINESS_ORDER_ID);
         jdbcTemplate.update("DELETE FROM tb_admin_account WHERE username=?", ACCOUNT_USERNAME);
     }
 }

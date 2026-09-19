@@ -36,7 +36,7 @@ services:
       - local-deals-net
 
   namesrv:
-    image: apache/rocketmq:4.9.4
+    image: apache/rocketmq:5.3.2
     container_name: ${STACK_NAME:-local-deals}-namesrv
     restart: ${STACK_RESTART:-always}
     command: sh mqnamesrv
@@ -46,13 +46,14 @@ services:
       - local-deals-net
 
   broker:
-    image: apache/rocketmq:4.9.4
+    image: apache/rocketmq:5.3.2
     container_name: ${STACK_NAME:-local-deals}-broker
     restart: ${STACK_RESTART:-always}
     depends_on:
       - namesrv
     # The broker advertises 127.0.0.1:<BROKER_PORT>, so host processes (the app, benchmarks)
     # reach it through the identical published port.
+    # 5.x for timer messages (order timeout close, any delay rather than 18 fixed levels).
     environment:
       BROKER_PORT: ${BROKER_PORT:-10911}
       STACK_NAME: ${STACK_NAME:-local-deals}
@@ -73,9 +74,10 @@ services:
         flushDiskType=ASYNC_FLUSH
         deleteWhen=04
         fileReservedTime=24
+        timerWheelEnable=true
         EOF
         exec sh mqbroker -c /tmp/broker.conf
-    # The commit log is the big writer: 4.9 turns the store read-only above 90% usage of the
+    # The commit log is the big writer: the broker turns the store read-only above 90% usage of the
     # disk it lives on, so point BROKER_STORE at a disk with room (uid 3000 must own it).
     volumes:
       - ${BROKER_STORE:-rocketmq-store}:/home/rocketmq/store

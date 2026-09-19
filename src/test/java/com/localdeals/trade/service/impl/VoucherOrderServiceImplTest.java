@@ -5,8 +5,8 @@ import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.dto.SeckillOrderStatusDTO;
 import com.localdeals.platform.dto.UserDTO;
-import com.localdeals.trade.entity.VoucherOrder;
-import com.localdeals.trade.mapper.VoucherOrderMapper;
+import com.localdeals.trade.entity.TradeOrder;
+import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillTrafficGuard;
@@ -31,7 +31,7 @@ class VoucherOrderServiceImplTest {
     private static final long LARGE_ORDER_ID = 90071992547409931L;
 
     private VoucherOrderServiceImpl service;
-    private VoucherOrderMapper voucherOrderMapper;
+    private TradeOrderMapper tradeOrderMapper;
     private RedisIdWorker redisIdWorker;
     private SeckillOrderProducer producer;
     private SeckillOrderStateService stateService;
@@ -45,8 +45,8 @@ class VoucherOrderServiceImplTest {
         stateService = mock(SeckillOrderStateService.class);
         trafficGuard = mock(SeckillTrafficGuard.class);
 
-        voucherOrderMapper = mock(VoucherOrderMapper.class);
-        MybatisPlusMocks.injectMapper(service, voucherOrderMapper, VoucherOrder.class);
+        tradeOrderMapper = mock(TradeOrderMapper.class);
+        MybatisPlusMocks.injectMapper(service, tradeOrderMapper, TradeOrder.class);
         ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
@@ -182,11 +182,8 @@ class VoucherOrderServiceImplTest {
     void persistedOrderWinsOverStaleProcessingStateAndRepairsRedis() {
         when(stateService.find(LARGE_ORDER_ID)).thenReturn(new SeckillOrderStateService.Snapshot(
                 LARGE_ORDER_ID, 23L, 17L, SeckillOrderStateService.STATUS_PROCESSING, null));
-        VoucherOrder persisted = new VoucherOrder();
-        persisted.setId(LARGE_ORDER_ID);
-        persisted.setUserId(23L);
-        persisted.setVoucherId(17L);
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
+        TradeOrder persisted = order(LARGE_ORDER_ID, 23L, 17L);
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
         when(stateService.markSuccess(org.mockito.ArgumentMatchers.any())).thenReturn(true);
 
         Result result = service.querySeckillOrderStatus(LARGE_ORDER_ID);
@@ -195,6 +192,7 @@ class VoucherOrderServiceImplTest {
         SeckillOrderStatusDTO dto = (SeckillOrderStatusDTO) result.getData();
         assertThat(dto.getStatus()).isEqualTo(SeckillOrderStateService.STATUS_SUCCESS);
         assertThat(dto.getOrderId()).isEqualTo(Long.toString(LARGE_ORDER_ID));
+        assertThat(dto.getOrderStatus()).isEqualTo("PENDING_PAY");
         verify(stateService).markSuccess(argThat(message ->
                 message.getOrderId().equals(LARGE_ORDER_ID) &&
                         message.getUserId().equals(23L) &&
@@ -216,8 +214,8 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void classifyPersistence_requiresExactOwnershipForSuccess() {
-        VoucherOrder persisted = order(LARGE_ORDER_ID, 23L, 17L);
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
+        TradeOrder persisted = order(LARGE_ORDER_ID, 23L, 17L);
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
 
         SeckillOrderPersistenceResult result =
                 service.classifyPersistence(LARGE_ORDER_ID, 23L, 17L);
@@ -228,8 +226,8 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void classifyPersistence_detectsOrderIdOwnedByAnotherReservation() {
-        VoucherOrder persisted = order(LARGE_ORDER_ID, 99L, 88L);
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
+        TradeOrder persisted = order(LARGE_ORDER_ID, 99L, 88L);
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(persisted);
 
         SeckillOrderPersistenceResult result =
                 service.classifyPersistence(LARGE_ORDER_ID, 23L, 17L);
@@ -241,8 +239,8 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void classifyPersistence_detectsDifferentOrderForSameUserAndVoucher() {
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(null);
-        when(voucherOrderMapper.selectOne(any())).thenReturn(order(777L, 23L, 17L));
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(null);
+        when(tradeOrderMapper.selectActive(23L, 17L)).thenReturn(order(777L, 23L, 17L));
 
         SeckillOrderPersistenceResult result =
                 service.classifyPersistence(LARGE_ORDER_ID, 23L, 17L);
@@ -254,8 +252,8 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void classifyPersistence_reportsAbsentOnlyAfterBothWriterQueriesAreEmpty() {
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(null);
-        when(voucherOrderMapper.selectOne(any())).thenReturn(null);
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID)).thenReturn(null);
+        when(tradeOrderMapper.selectActive(23L, 17L)).thenReturn(null);
 
         SeckillOrderPersistenceResult result =
                 service.classifyPersistence(LARGE_ORDER_ID, 23L, 17L);
@@ -265,7 +263,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void classifyPersistence_doesNotConvertDatabaseFailureToAbsence() {
-        when(voucherOrderMapper.selectById(LARGE_ORDER_ID))
+        when(tradeOrderMapper.selectById(LARGE_ORDER_ID))
                 .thenThrow(new IllegalStateException("writer unavailable"));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
@@ -274,9 +272,10 @@ class VoucherOrderServiceImplTest {
                 .hasMessageContaining("writer unavailable");
     }
 
-    private static VoucherOrder order(Long orderId, Long userId, Long voucherId) {
-        VoucherOrder order = new VoucherOrder();
-        order.setId(orderId);
+    private static TradeOrder order(Long orderId, Long userId, Long voucherId) {
+        TradeOrder order = new TradeOrder();
+        order.setOrderNo(orderId);
+        ReflectionTestUtils.setField(order, "status", com.localdeals.trade.entity.OrderStatus.PENDING_PAY);
         order.setUserId(userId);
         order.setVoucherId(voucherId);
         return order;

@@ -14,6 +14,7 @@ import com.localdeals.platform.mapper.SignMapper;
 import com.localdeals.marketing.mapper.VoucherCampaignMapper;
 import com.localdeals.marketing.mapper.VoucherGrantMapper;
 import com.localdeals.marketing.mapper.VoucherGrantNotificationOutboxMapper;
+import com.localdeals.trade.service.CouponIssuer;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -29,17 +30,20 @@ public class VoucherGrantTransactionService {
     private final MarketingTagMemberMapper memberMapper;
     private final SignMapper signMapper;
     private final VoucherGrantNotificationOutboxMapper notificationOutboxMapper;
+    private final CouponIssuer couponIssuer;
 
     public VoucherGrantTransactionService(VoucherCampaignMapper campaignMapper,
             VoucherGrantMapper grantMapper, MarketingTagMapper tagMapper,
             MarketingTagMemberMapper memberMapper, SignMapper signMapper,
-            VoucherGrantNotificationOutboxMapper notificationOutboxMapper) {
+            VoucherGrantNotificationOutboxMapper notificationOutboxMapper,
+            CouponIssuer couponIssuer) {
         this.campaignMapper = campaignMapper;
         this.grantMapper = grantMapper;
         this.tagMapper = tagMapper;
         this.memberMapper = memberMapper;
         this.signMapper = signMapper;
         this.notificationOutboxMapper = notificationOutboxMapper;
+        this.couponIssuer = couponIssuer;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -106,6 +110,8 @@ public class VoucherGrantTransactionService {
         if (notificationOutboxMapper.insertPending(notification) != 1) {
             throw new IllegalStateException("发券通知 Outbox 写入失败");
         }
+        // The grant row is the issuance record (idempotency, quota); the coupon is the asset.
+        couponIssuer.issueForGrant(grant);
         return GrantTransactionResult.created(grant);
     }
 

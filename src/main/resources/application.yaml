@@ -135,6 +135,23 @@ local-deals:
     notification-batch-size: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_BATCH_SIZE:50}"
     notification-max-attempts: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_ATTEMPTS:10}"
     notification-max-backoff: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_BACKOFF:5m}"
+  order:
+    pay-timeout: "${LOCAL_DEALS_ORDER_PAY_TIMEOUT:15m}"
+    close-topic: "${LOCAL_DEALS_ORDER_CLOSE_TOPIC:order-close-topic}"
+    close-consumer-group: "${LOCAL_DEALS_ORDER_CLOSE_CONSUMER_GROUP:order-close-consumer-group}"
+    scan:
+      # Fallback for lost timer messages and unfinished Redis releases; safe on every node.
+      enabled: "${LOCAL_DEALS_ORDER_SCAN_ENABLED:true}"
+      fixed-delay: "${LOCAL_DEALS_ORDER_SCAN_FIXED_DELAY:10s}"
+      grace: "${LOCAL_DEALS_ORDER_SCAN_GRACE:30s}"
+  payment:
+    # Shared with the mock channel. Override outside local development.
+    callback-secret: "${LOCAL_DEALS_PAYMENT_CALLBACK_SECRET:local-dev-mock-channel-secret}"
+    mock-channel:
+      notify-base-url: "${LOCAL_DEALS_PAYMENT_NOTIFY_BASE_URL:http://127.0.0.1:${server.port}}"
+  coupon:
+    expiry-enabled: "${LOCAL_DEALS_COUPON_EXPIRY_ENABLED:true}"
+    verify-limit-per-minute: "${LOCAL_DEALS_COUPON_VERIFY_LIMIT_PER_MINUTE:120}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"

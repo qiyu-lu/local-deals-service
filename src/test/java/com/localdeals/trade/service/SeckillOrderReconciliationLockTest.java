@@ -106,7 +106,7 @@ class SeckillOrderReconciliationLockTest {
                 throw new IllegalStateException("test did not release consumer");
             }
             return null;
-        }).when(voucherOrderService).createVoucherOrder(any());
+        }).when(voucherOrderService).createPendingOrder(any());
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<?> consumerFuture = null;

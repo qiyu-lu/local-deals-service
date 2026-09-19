@@ -384,8 +384,10 @@ class M6cBatchBusinessIT {
 
     private void addMembers(MarketingTag tag, List<Long> users) {
         for (Long user : users) {
-            jdbcTemplate.update("INSERT INTO tb_voucher_order(id,user_id,voucher_id,pay_type,status) VALUES(?,?,?,?,?)",
-                    ORDER_ID.incrementAndGet(), user, VOUCHER_ID, 1, 2);
+            jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
+                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
+                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
+                    ORDER_ID.incrementAndGet(), user, VOUCHER_ID);
             marketingAdminService.addMember(tag.getId(), user, new MarketingTagMemberRequest());
         }
     }
@@ -540,7 +542,7 @@ class M6cBatchBusinessIT {
                 "WHERE t.code LIKE ?", "M6C_%");
         jdbcTemplate.update("DELETE FROM tb_voucher_campaign WHERE name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_marketing_tag WHERE code LIKE ?", "M6C_%");
-        jdbcTemplate.update("DELETE o FROM tb_voucher_order o JOIN tb_user u ON u.id=o.user_id " +
+        jdbcTemplate.update("DELETE o FROM trade_order o JOIN tb_user u ON u.id=o.user_id " +
                 "WHERE u.nick_name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_user WHERE nick_name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_admin_account WHERE username LIKE ?", ACCOUNT_PREFIX + "%");
