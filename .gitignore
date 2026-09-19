@@ -38,25 +38,14 @@ build/
 !.env.example
 
 
-### mysql and ridis data ###
-/mysql-data/
-/redis-data/
-/es-data/
+### local container data (dev stack bind mounts) ###
+/*-data/
 
-### benchmark generated files ###
-/benchmark/m5a/
-/benchmark/m5b/
-/benchmark/m5c/
-/benchmark/m5d/
-/benchmark/*.csv
-/benchmark/*.jtl
-/benchmark/*.log
-/benchmark/*-consumer-progress-final.txt
-/benchmark/*-prometheus-before.txt
-/benchmark/*-prometheus-after.txt
-/benchmark/report*/
-/benchmark/pre-m8/
-/benchmark/seckill/
-/benchmark/redis-stream-reliability/
+### benchmark: raw data stays local; only scripts, summary.csv and conclusions are committed ###
+/benchmark/*
+!/benchmark/v2/
+/benchmark/v2/run/
+/benchmark/v2/tools/
+/benchmark/**/raw/
 jmeter.log
 .superpowers/

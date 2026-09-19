@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
 import org.springframework.context.annotation.Bean;
 
-@MapperScan("com.localdeals.mapper")
+@MapperScan("com.localdeals.*.mapper")
 @SpringBootApplication
 public class LocalDealsApplication {
 

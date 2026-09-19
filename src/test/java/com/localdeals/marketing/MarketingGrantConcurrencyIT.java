@@ -1,12 +1,12 @@
 package com.localdeals.marketing;
 
-import com.localdeals.dto.AdminPrincipal;
-import com.localdeals.dto.VoucherGrantCommand;
-import com.localdeals.entity.VoucherGrant;
-import com.localdeals.exception.ApiStatusException;
-import com.localdeals.service.MarketingAdminService;
-import com.localdeals.service.VoucherGrantService;
-import com.localdeals.utils.AdminPrincipalHolder;
+import com.localdeals.merchant.dto.AdminPrincipal;
+import com.localdeals.marketing.dto.VoucherGrantCommand;
+import com.localdeals.marketing.entity.VoucherGrant;
+import com.localdeals.platform.exception.ApiStatusException;
+import com.localdeals.marketing.service.MarketingAdminService;
+import com.localdeals.marketing.service.VoucherGrantService;
+import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

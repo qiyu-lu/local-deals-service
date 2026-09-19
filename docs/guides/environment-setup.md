@@ -1,31 +1,27 @@
 # 本地环境与常见问题
 
-## MySQL / Redis 容器
+## 依赖容器
 
-当前本机仍复用原黑马点评环境中的 Docker 容器：
-
-```text
-MySQL: hmdp-mysql
-Redis: hmdp-redis
-```
-
-重构后的业务库不是旧的 `hmdp`，而是在同一个 MySQL 容器中的新库：
-
-```text
-local_deals
-```
-
-因此压测脚本在当前本机运行时需要显式传入容器名：
+开发环境用主 Compose 启动（固定端口 3306/6379/9876/10911/9200，数据 bind mount 到 `./*-data/`）：
 
 ```bash
-scripts/run-seckill-benchmark.sh \
-  --threads 100 \
-  --loops 1 \
-  --stock 100 \
-  --user-count 1000
+docker compose up -d mysql redis namesrv broker elasticsearch
+docker compose --profile dev up -d nginx canal-server   # 需要前端或 Canal 时
 ```
 
-脚本从 `.env` 中的 `LOCAL_DEALS_*` 变量自动读取 MySQL/Redis 连接信息（主机、端口、密码），不需要传入容器名。
+业务库为 `local_deals`，由 Flyway 在应用启动时迁移。
+
+集成测试与压测使用隔离栈（独立 compose project、`127.0.0.1` 上的独立端口、named volume），
+不会碰开发环境的数据：
+
+```bash
+scripts/stack.sh up                 # MySQL/Redis/RocketMQ/ES
+scripts/stack.sh it '*IT'           # 在隔离栈上用 Java 8 跑集成测试
+scripts/stack.sh build && scripts/stack.sh app-start
+scripts/bench.sh users 100000       # 压测用户与 token
+scripts/bench.sh step 500 1000 2000 # 开环阶梯压测，结果写 benchmark/v2/<milestone>/summary.csv
+scripts/stack.sh down               # 删除隔离栈及其 volume
+```
 
 ## 后端接口检查
 

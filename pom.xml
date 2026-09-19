@@ -132,6 +132,14 @@
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
 
+        <!-- Throw-away MySQL/Redis for integration tests in CI (LOCAL_DEALS_IT_CONTAINERS=true) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <version>1.19.8</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Awaitility（用于 CanalSyncIT 异步等待） -->
         <dependency>
             <groupId>org.awaitility</groupId>

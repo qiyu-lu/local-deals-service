@@ -1,47 +1,108 @@
+# One compose file for both the local dev stack and isolated test/benchmark stacks.
+#
+#   Dev (fixed names/ports, bind-mounted data, nginx + canal):
+#     docker compose --profile dev up -d
+#   Isolated (own project name, ports, named volumes; no nginx/canal):
+#     scripts/stack.sh up            # see scripts/stack.sh for the variables it sets
+#
+# Every variable below defaults to the dev value, so plain `docker compose` keeps working.
 services:
   mysql:
     image: mysql:8.0
-    container_name: local-deals-mysql
-    restart: always
+    container_name: ${STACK_NAME:-local-deals}-mysql
+    restart: ${STACK_RESTART:-always}
     ports:
-      - "3306:3306"
+      - "${STACK_BIND:-0.0.0.0}:${MYSQL_PORT:-3306}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
-      MYSQL_DATABASE: local_deals
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-local_deals}
     volumes:
-      - ./mysql-data:/var/lib/mysql
+      - ${MYSQL_VOLUME:-./mysql-data}:/var/lib/mysql
     command:
-      --default-authentication-plugin=mysql_native_password
+      - --default-authentication-plugin=mysql_native_password
     networks:
       - local-deals-net
 
   redis:
     image: redis:6.2
-    container_name: local-deals-redis
-    restart: always
+    container_name: ${STACK_NAME:-local-deals}-redis
+    restart: ${STACK_RESTART:-always}
     ports:
-      - "6379:6379"
+      - "${STACK_BIND:-0.0.0.0}:${REDIS_PORT:-6379}:6379"
     volumes:
-      - ./redis-data:/data
+      - ${REDIS_VOLUME:-./redis-data}:/data
     command: redis-server --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?Set LOCAL_DEALS_REDIS_PASSWORD in .env}
+    networks:
+      - local-deals-net
+
+  namesrv:
+    image: apache/rocketmq:4.9.4
+    container_name: ${STACK_NAME:-local-deals}-namesrv
+    restart: ${STACK_RESTART:-always}
+    command: sh mqnamesrv
+    ports:
+      - "${STACK_BIND:-0.0.0.0}:${NAMESRV_PORT:-9876}:9876"
+    networks:
+      - local-deals-net
+
+  broker:
+    image: apache/rocketmq:4.9.4
+    container_name: ${STACK_NAME:-local-deals}-broker
+    restart: ${STACK_RESTART:-always}
+    depends_on:
+      - namesrv
+    # The broker advertises 127.0.0.1:<BROKER_PORT>, so host processes (the app, benchmarks)
+    # reach it through the identical published port.
+    environment:
+      BROKER_PORT: ${BROKER_PORT:-10911}
+      STACK_NAME: ${STACK_NAME:-local-deals}
+      # 4.9 marks the store read-only above 90% host disk usage; dev/bench hosts are often fuller.
+      JAVA_OPT_EXT: >-
+        -Drocketmq.broker.diskSpaceWarningLevelRatio=0.98
+        -Drocketmq.broker.diskSpaceCleanForciblyRatio=0.97
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/broker.conf <<EOF
+        brokerClusterName=$${STACK_NAME}
+        brokerName=$${STACK_NAME}
+        brokerId=0
+        brokerIP1=127.0.0.1
+        listenPort=$${BROKER_PORT}
+        namesrvAddr=namesrv:9876
+        autoCreateTopicEnable=true
+        autoCreateSubscriptionGroup=true
+        brokerRole=ASYNC_MASTER
+        flushDiskType=ASYNC_FLUSH
+        deleteWhen=04
+        fileReservedTime=24
+        diskMaxUsedSpaceRatio=98
+        EOF
+        exec sh mqbroker -c /tmp/broker.conf
+    ports:
+      - "${STACK_BIND:-0.0.0.0}:${BROKER_PORT:-10911}:${BROKER_PORT:-10911}"
     networks:
       - local-deals-net
 
   elasticsearch:
     build: ./docker/elasticsearch
-    container_name: local-deals-es
-    restart: always
+    image: hm-dianping-elasticsearch:latest
+    container_name: ${STACK_NAME:-local-deals}-es
+    restart: ${STACK_RESTART:-always}
     ports:
-      - "9200:9200"
+      - "${STACK_BIND:-0.0.0.0}:${ES_PORT:-9200}:9200"
     environment:
       - discovery.type=single-node
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
     volumes:
-      - ./es-data:/usr/share/elasticsearch/data
+      - ${ES_VOLUME:-./es-data}:/usr/share/elasticsearch/data
     networks:
       - local-deals-net
 
   nginx:
+    profiles: ["dev"]
     image: nginx:1.22
     container_name: local-deals-nginx
     restart: always
@@ -58,24 +119,32 @@ services:
         ipv4_address: 172.30.55.10
 
   canal-server:
+    profiles: ["dev"]
     build: ./docker/canal
     container_name: local-deals-canal
     restart: always
     network_mode: host
     environment:
-      - canal.instance.master.address=127.0.0.1:3306
+      - canal.instance.master.address=127.0.0.1:${MYSQL_PORT:-3306}
       - canal.instance.dbUsername=root
       - canal.instance.dbPassword=${MYSQL_ROOT_PASSWORD}
       - canal.instance.filter.regex=local_deals\\.tb_shop,local_deals\\.tb_blog
-      - canal.mq.servers=127.0.0.1:9876
+      - canal.mq.servers=127.0.0.1:${NAMESRV_PORT:-9876}
       - canal.mq.topic=mysql-sync-topic
       - canal.serverMode=rocketmq
     depends_on:
       - mysql
+      - broker
+
+# Isolated stacks point *_VOLUME at these names; the dev stack bind-mounts ./*-data instead.
+volumes:
+  mysql-data: {}
+  redis-data: {}
+  es-data: {}
 
 networks:
   local-deals-net:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.30.55.0/24
+        - subnet: ${STACK_SUBNET:-172.30.55.0/24}

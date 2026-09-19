@@ -64,7 +64,7 @@
       <div class="shop-list">
         <div v-for="s in shops" class="shop-item" @click="selectShop(s)">
           <div class="shop-name">{{s.name}}</div>
-          <div>{{s.area}}</div>
+          <div>{{s.address}}</div>
         </div>
       </div>
     </div>
@@ -97,7 +97,7 @@
     },
     methods: {
       queryShops() {
-        axios.get("/shop/of/name?name=" + this.shopName)
+        axios.get("/shop/search", { params: { keyword: this.shopName } })
           .then(({data}) => this.shops = data)
           .catch(this.$message.error)
       },

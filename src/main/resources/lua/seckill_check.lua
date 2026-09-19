@@ -2,11 +2,10 @@
 Atomic seckill admission used by the RocketMQ local transaction.
 
 KEYS[1] stock String                    seckill:stock:{voucherId}
-KEYS[2] legacy purchased-user Set       seckill:order:{voucherId}
-KEYS[3] activity metadata Hash          seckill:meta:{voucherId}
-KEYS[4] exact reservation Hash          seckill:reservation:{voucherId}
-KEYS[5] order status Hash               seckill:order:status:{orderId}
-KEYS[6] global PROCESSING due-time ZSET  seckill:order:processing
+KEYS[2] activity metadata Hash          seckill:meta:{voucherId}
+KEYS[3] exact reservation Hash          seckill:reservation:{voucherId}
+KEYS[4] order status Hash               seckill:order:status:{orderId}
+KEYS[5] global PROCESSING due-time ZSET  seckill:order:processing
 
 ARGV[1] userId
 ARGV[2] voucherId
@@ -23,11 +22,10 @@ Return codes (0/1/2 retain the original public contract):
 ]]
 
 local stockKey = KEYS[1]
-local legacyOrderKey = KEYS[2]
-local metaKey = KEYS[3]
-local reservationKey = KEYS[4]
-local orderStatusKey = KEYS[5]
-local processingIndexKey = KEYS[6]
+local metaKey = KEYS[2]
+local reservationKey = KEYS[3]
+local orderStatusKey = KEYS[4]
+local processingIndexKey = KEYS[5]
 
 local userId = ARGV[1]
 local voucherId = ARGV[2]
@@ -65,18 +63,13 @@ if not stock or stock <= 0 then
     return 1
 end
 
--- The old Set remains authoritative for pre-migration purchases. New admissions also
--- write an exact userId -> orderId reservation so transaction checks cannot commit a
--- different half-message merely because the user bought this voucher before.
-if redis.call('SISMEMBER', legacyOrderKey, userId) == 1 then
-    return 2
-end
+-- The exact userId -> orderId reservation is both the duplicate-purchase guard and the
+-- ownership evidence used by the consumer, compensation and reconciliation scripts.
 if redis.call('HEXISTS', reservationKey, userId) == 1 then
     return 2
 end
 
 redis.call('DECR', stockKey)
-redis.call('SADD', legacyOrderKey, userId)
 redis.call('HSET', reservationKey, userId, orderId)
 redis.call('HSET', orderStatusKey,
         'status', 'PROCESSING',

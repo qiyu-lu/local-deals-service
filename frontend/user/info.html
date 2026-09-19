@@ -67,25 +67,6 @@
           </div>
         </div>
       </el-tab-pane>
-      <el-tab-pane label="评价" name="2">评价</el-tab-pane>
-      <el-tab-pane label="粉丝(0)" name="3">粉丝(0)</el-tab-pane>
-      <el-tab-pane :label="'关注(' + myFollows.length + ')'" name="4">
-        <div style="padding: 12px;">
-          <div v-if="myFollows.length === 0" style="text-align:center;color:#9ca3af;padding:40px 0;">
-            还没有关注任何人
-          </div>
-          <div v-for="u in myFollows" :key="u.id"
-               style="display:flex;align-items:center;padding:10px 4px;border-bottom:1px solid #f3f4f6;"
-               @click="toOtherInfo(u.id)">
-            <img :src="u.icon || '/imgs/icons/default-icon.png'" alt=""
-                 style="width:42px;height:42px;border-radius:50%;object-fit:cover;flex-shrink:0;">
-            <div style="margin-left:12px;flex:1;">
-              <div style="font-size:14px;font-weight:600;color:#111827;">{{u.nickName}}</div>
-            </div>
-            <i class="el-icon-arrow-right" style="color:#9ca3af;"></i>
-          </div>
-        </div>
-      </el-tab-pane>
       <el-tab-pane label="券包" name="5">
         <div style="padding: 12px;">
           <div v-if="grantList.length === 0" style="text-align:center;color:#9ca3af;padding:40px 0;">
@@ -117,7 +98,6 @@
       activeName: "1",
       info: {},
       blogs: [],
-      myFollows: [], // 我关注的用户列表
       grantList: [], // 持久化券包事实
       grantSocket: null,
       seenGrantEvents: {},
@@ -125,45 +105,15 @@
       grantPollAttempts: 0,
       grantPollDeadline: 0,
       grantPollState: 'IDLE',
-      blogs2: [], // 关注的人的播客
-      params: {
-        minTime: 0, // 上一次拉取到的时间戳
-        offset: 0, // 偏移量
-      },
-      count: 5,
-      isReachBottom: false,
     },
     created() {
       this.queryUser();
     },
     methods: {
-      load() {
-        this.count += 2;
-      },
       queryBlogs() {
         axios.get("/blog/of/me")
           .then(({data}) => this.blogs = data)
           .catch(this.$message.error)
-      },
-      queryBlogsOfFollow(clear) {
-        if (clear) {
-          this.params.offset = 0;
-          this.params.minTime = new Date().getTime() + 1;
-        }
-        let {minTime, offset: os} = this.params;
-        axios.get("/blog/of/follow", {
-            params: {offset: os, lastId: minTime || new Date().getTime() + 1}
-          })
-          .then(({data}) => {
-            if (!data) {
-              return;
-            }
-            let {list, ...params} = data;
-            list.forEach(b => b.img = b.images.split(",")[0])
-            this.blogs2 = clear ? list : this.blogs2.concat(list);
-            this.params = params;
-          })
-          .catch(e => console.log(e))
       },
       queryUser() {
         // 查询用户信息
@@ -216,21 +166,10 @@
           .catch(this.$message.error)
       },
       handleClick(r) {
-        if (r.name === '4') {
-          this.queryMyFollows();
-        }
         if (r.name === '5') {
           this.queryGrants();
           this.connectGrantNotifications();
         }
-      },
-      queryMyFollows() {
-        axios.get("/follow/my-follows")
-          .then(({data}) => { this.myFollows = data || []; })
-          .catch(e => console.log(e));
-      },
-      toOtherInfo(userId) {
-        location.href = 'other-info.html?id=' + userId;
       },
       queryGrants() {
         return axios.get("/voucher-grants/mine")
@@ -347,45 +286,6 @@
         socket.onerror = null;
         if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
           socket.close();
-        }
-      },
-      addLike(b) {
-        const desired = !Boolean(b.isLike);
-        axios({method: desired ? "put" : "delete", url: "/blog/" + b.id + "/like"})
-          .then(({data}) => {
-            b.isLike = data.desired;
-            if (data.changed) {
-              b.liked = Math.max(0, (b.liked || 0) + (data.desired ? 1 : -1));
-            }
-          })
-          .catch(err => {
-            this.$message.error(err)
-          })
-      },
-      queryBlogById(b) {
-        axios.get("/blog/" + b.id)
-          .then(({data}) => {
-            b.liked = data.liked;
-            b.isLike = data.isLike;
-          })
-          .catch(() => {
-            this.$message.error
-            b.liked++;
-          })
-      },
-      onScroll(e) {
-        let scrollTop = e.target.scrollTop;
-        let offsetHeight = e.target.offsetHeight;
-        let scrollHeight = e.target.scrollHeight;
-        if (scrollTop === 0) {
-          // 到顶部了，查询一次
-          this.queryBlogsOfFollow(true);
-        } else if (scrollTop + offsetHeight + 1 > scrollHeight && !this.isReachBottom) {
-          this.isReachBottom = true
-          // 再次查询下一页数据
-          this.queryBlogsOfFollow();
-        } else {
-          this.isReachBottom = false
         }
       }
     },

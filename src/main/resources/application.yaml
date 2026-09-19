@@ -36,7 +36,7 @@ spring:
     rest:
       uris: http://localhost:9200
 mybatis-plus:
-  type-aliases-package: com.localdeals.entity # 别名扫描包
+  type-aliases-package: com.localdeals.*.entity # 别名扫描包
 logging:
   level:
     # Keep mapper parameters (including password hashes and user data) out of production logs.
@@ -71,7 +71,7 @@ local-deals:
     shop-type-ttl: "${LOCAL_DEALS_CACHE_SHOP_TYPE_TTL:100m}"
     shop-type-empty-ttl: "${LOCAL_DEALS_CACHE_SHOP_TYPE_EMPTY_TTL:30s}"
   observability:
-    sampling-enabled: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_ENABLED:false}"
+    sampling-enabled: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_ENABLED:true}"
     initial-delay: "${LOCAL_DEALS_OBSERVABILITY_INITIAL_DELAY:10s}"
     sampling-interval: "${LOCAL_DEALS_OBSERVABILITY_SAMPLING_INTERVAL:30s}"
   admin:
@@ -109,18 +109,15 @@ local-deals:
   websocket:
     allowed-origins: "${LOCAL_DEALS_WEBSOCKET_ALLOWED_ORIGINS:http://localhost:8088,http://localhost:5173}"
   blog-hot-rank:
-    # Build first, verify parity, then enable reads. Unsafe cache states always fall back to MySQL.
-    read-enabled: "${LOCAL_DEALS_BLOG_HOT_RANK_READ_ENABLED:false}"
-    refresh-enabled: "${LOCAL_DEALS_BLOG_HOT_RANK_REFRESH_ENABLED:false}"
+    # Unsafe cache states (not ready, stale, Redis down) always fall back to MySQL.
+    refresh-enabled: "${LOCAL_DEALS_BLOG_HOT_RANK_REFRESH_ENABLED:true}"
     top-k: "${LOCAL_DEALS_BLOG_HOT_RANK_TOP_K:1000}"
     page-size: "${LOCAL_DEALS_BLOG_HOT_RANK_PAGE_SIZE:10}"
     initial-delay: "${LOCAL_DEALS_BLOG_HOT_RANK_INITIAL_DELAY:10s}"
     fixed-delay: "${LOCAL_DEALS_BLOG_HOT_RANK_FIXED_DELAY:30s}"
     max-stale: "${LOCAL_DEALS_BLOG_HOT_RANK_MAX_STALE:2m}"
   blog-like:
-    # Upgrade-safe defaults: explicitly enable only after legacy identities are imported/audited.
-    write-enabled: "${LOCAL_DEALS_BLOG_LIKE_WRITE_ENABLED:false}"
-    worker-enabled: "${LOCAL_DEALS_BLOG_LIKE_WORKER_ENABLED:false}"
+    worker-enabled: "${LOCAL_DEALS_BLOG_LIKE_WORKER_ENABLED:true}"
     initial-delay: "${LOCAL_DEALS_BLOG_LIKE_INITIAL_DELAY:5s}"
     fixed-delay: "${LOCAL_DEALS_BLOG_LIKE_FIXED_DELAY:200ms}"
     batch-size: "${LOCAL_DEALS_BLOG_LIKE_BATCH_SIZE:500}"
@@ -128,13 +125,10 @@ local-deals:
     cleanup-fixed-delay: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_FIXED_DELAY:1s}"
     cleanup-batch-size: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_BATCH_SIZE:2000}"
     cleanup-max-batches: "${LOCAL_DEALS_BLOG_LIKE_CLEANUP_MAX_BATCHES:5}"
-    legacy-backfill-on-startup: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BACKFILL_ON_STARTUP:false}"
-    legacy-scan-count: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_SCAN_COUNT:500}"
-    legacy-batch-size: "${LOCAL_DEALS_BLOG_LIKE_LEGACY_BATCH_SIZE:500}"
   voucher-batch:
-    # M6C workers are maintenance capabilities and must be explicitly enabled for a demo/worker node.
-    job-worker-enabled: "${LOCAL_DEALS_VOUCHER_BATCH_JOB_WORKER_ENABLED:false}"
-    notification-worker-enabled: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_WORKER_ENABLED:false}"
+    # Worker start/stop switches; every node runs them by default.
+    job-worker-enabled: "${LOCAL_DEALS_VOUCHER_BATCH_JOB_WORKER_ENABLED:true}"
+    notification-worker-enabled: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_WORKER_ENABLED:true}"
     initial-delay: "${LOCAL_DEALS_VOUCHER_BATCH_INITIAL_DELAY:5s}"
     fixed-delay: "${LOCAL_DEALS_VOUCHER_BATCH_FIXED_DELAY:1s}"
     batch-size: "${LOCAL_DEALS_VOUCHER_BATCH_SIZE:50}"
@@ -145,28 +139,15 @@ local-deals:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"
     reconciliation:
-      # Three independent, fail-closed rollout gates. Keep all false until the
-      # stop-write/backfill/observe procedure in docs/seckill-reconciliation.md is complete.
-      enabled: "${LOCAL_DEALS_SECKILL_RECONCILIATION_ENABLED:false}"
-      compensation-enabled: "${LOCAL_DEALS_SECKILL_COMPENSATION_ENABLED:false}"
-      backfill-on-startup: "${LOCAL_DEALS_SECKILL_BACKFILL_ON_STARTUP:false}"
+      # Operational switches: the worker, and separately the stock-releasing compensation.
+      enabled: "${LOCAL_DEALS_SECKILL_RECONCILIATION_ENABLED:true}"
+      compensation-enabled: "${LOCAL_DEALS_SECKILL_COMPENSATION_ENABLED:true}"
       initial-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_INITIAL_DELAY:30s}"
       fixed-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_FIXED_DELAY:10s}"
       stale-after: "${LOCAL_DEALS_SECKILL_RECONCILIATION_STALE_AFTER:2m}"
       retry-delay: "${LOCAL_DEALS_SECKILL_RECONCILIATION_RETRY_DELAY:1m}"
       final-timeout: "${LOCAL_DEALS_SECKILL_RECONCILIATION_FINAL_TIMEOUT:15m}"
       batch-size: "${LOCAL_DEALS_SECKILL_RECONCILIATION_BATCH_SIZE:100}"
-      scan-count: "${LOCAL_DEALS_SECKILL_BACKFILL_SCAN_COUNT:500}"
-    stream:
-      key: "stream.orders"
-      group: "g1"
-      consumer: "c1"
-      dead-letter-key: "stream.orders.dlq"
-      read-count: 10
-      worker-count: 1
-      block: 2s
-      max-retry: 3
-      retry-key-prefix: "seckill:stream:retry:"
   es-sync:
     topic: "${LOCAL_DEALS_ES_SYNC_TOPIC:mysql-sync-topic}"
     consumer-group: "${LOCAL_DEALS_ES_SYNC_CONSUMER_GROUP:es-sync-consumer-group}"

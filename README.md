@@ -41,32 +41,16 @@ flowchart LR
 | 营销闭环 | 标签、签到、统一 Grant、有限批量 Job 与通知 Outbox |
 | 运行保障 | 入口限流、有界缓存降级、Prometheus 指标与专用环境故障演练 |
 
-详细设计、执行证据和历史实验由 [文档索引](docs/README.md) 统一组织。
+设计与决策记录见 [文档索引](docs/README.md)。
 
 ## 可量化数据
 
-| 验证项 | 正式结果 |
-| --- | --- |
-| Java 8 默认安全测试 | 321/321 PASS，0 failure/error/skip |
-| RocketMQ S1 正确性 | 三轮均 1000/1000 成功 |
-| RocketMQ S1 P99 | 64 / 45 / 61 ms |
-| RocketMQ S1 中位吞吐 | 208.855 req/s |
-| RocketMQ S1 一致性 | 零重复、零超卖、最终 MQ main/retry/DLQ lag = 0/0/0 |
-| RocketMQ S2 库存竞争 | accepted/rejected_stock = 100/900 |
-| M6C 批量发券 | 1000/1000 发券；idempotent/skipped/failed = 0/0/0；重复 Grant = 0 |
-| M5D 故障矩阵 | F1–F5 均保留专用故障证据；F4 明确为 consumer-level |
-
-数据来自专用单机环境，只用于当前实现的正确性、恢复性和本机观测，不是生产 SLA。
-S1 的 `1000 threads` 是 JMeter 配置，不表示 1000 个请求严格同时到达；历史 Redis Stream
-实验与当前 RocketMQ 链路不可直接计算性能提升百分比。
-
-正式数据、运行边界和失败轮次见
-[Pre-M8 最终结果](docs/evidence/pre-m8/pre-m8-baseline-results.md) 与
-[M7 结果](docs/evidence/m7/m7-results.md)。
+V2 的对照组基线（M0，未做任何优化）见 [M0 基线与瓶颈分析](benchmark/v2/m0/baseline.md)；
+V1 的历史证据保留在 tag `v1-final` 的 `docs/evidence/`，与 V2 口径不同，不直接比较。
 
 ## 技术栈
 
-版本按当前 `pom.xml`、`docker-compose.yml`、`docker-compose.pre-m8.yml` 和
+版本按当前 `pom.xml`、`docker-compose.yml` 和
 `frontend/admin/package.json` 核对：
 
 - 后端：Java 8、Spring Boot 2.3.12.RELEASE、MyBatis-Plus 3.4.3、Flyway 6.4.4。
@@ -84,12 +68,12 @@ Redis Stream 仅存在于历史归档，不属于当前正式秒杀链路。
 ### 环境要求
 
 - JDK 8 与 Maven 3.x。
-- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、Elasticsearch 7.17.18 和 nginx。
-- 可访问的 RocketMQ NameServer/Broker；仓库默认连接 `localhost:9876`，主 Compose 不负责启动 Broker。
+- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、RocketMQ 4.9.4、Elasticsearch 7.17.18 和 nginx。
+- 主 Compose 已包含 RocketMQ NameServer/Broker（默认 `9876`/`10911`，端口被占用时用 `NAMESRV_PORT`/`BROKER_PORT` 覆盖）。
 - Node.js 与 npm 仅在需要重新构建管理端时使用。
 
 更完整的版本检查、IDE 设置和常见问题见
-[环境搭建](docs/guides/environment-setup.md)。
+[环境与常见问题](docs/guides/environment-setup.md)。
 
 ### 准备环境变量
 
@@ -108,11 +92,10 @@ set +a
 ### 启动 Docker 依赖
 
 ```bash
-docker compose up -d mysql redis elasticsearch
+docker compose up -d mysql redis namesrv broker elasticsearch
 ```
 
-RocketMQ topic 应在联调前通过管理面预创建，不要依赖首个请求自动建 Topic。
-完整依赖准备和安全配置见环境搭建指南。
+集成测试与压测使用独立端口、独立 volume 的隔离栈：`scripts/stack.sh up`（见脚本头部说明）。
 
 ### 启动后端
 
@@ -140,7 +123,7 @@ health 端点不展示内部详情；业务接口和 management 端口应保持�
 ```bash
 npm --prefix frontend/admin ci
 npm --prefix frontend/admin run build
-docker compose up -d nginx
+docker compose --profile dev up -d nginx
 ```
 
 - 用户端：`http://localhost:8088/`
@@ -155,17 +138,13 @@ docker compose up -d nginx
 mvn -o test
 ```
 
-外部集成测试、Flyway 升级样本、故障演练和压测必须使用对应阶段的隔离脚本、专用
-run-id 与显式端口；入口见详细文档，不在 Quick Start 中展开。
+集成测试在隔离栈上运行：`scripts/stack.sh up && scripts/stack.sh it '*IT'`。
 
 ## 文档入口
 
-- [详细文档索引](docs/README.md)
-- [环境搭建](docs/guides/environment-setup.md)
-- [系统设计与证据边界](docs/evidence/m7/m7-evidence-index.md)
-- [项目演示手册](docs/guides/project-demo.md)
-- [Pre-M8 最终结果](docs/evidence/pre-m8/pre-m8-baseline-results.md)
-- [Modernization 路线](docs/modernization-roadmap.md)
+- [文档索引](docs/README.md)
+- [V2 重构计划与进度](docs/plan/v2-high-concurrency-plan.md)
+- [环境与常见问题](docs/guides/environment-setup.md)
 
 ## 已知边界
 

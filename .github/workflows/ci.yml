@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "v2/**"]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+      - name: mvn test
+        run: mvn -B test
+
+  integration:
+    # MySQL/Redis integration tests against Testcontainers (see ContainersInitializer).
+    # Tests that need a real RocketMQ broker or Elasticsearch run locally on scripts/stack.sh.
+    runs-on: ubuntu-latest
+    env:
+      LOCAL_DEALS_IT_CONTAINERS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+      - name: integration tests
+        run: >-
+          mvn -B test -DfailIfNoTests=false
+          -Dtest='*IT,!SeckillWithRocketMQIT,!SeckillOrderRetryIT,!CanalSyncIT,!ShopSearchAfterIT,!ShopSearchBeforeIT'

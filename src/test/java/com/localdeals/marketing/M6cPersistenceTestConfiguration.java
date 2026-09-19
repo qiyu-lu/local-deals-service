@@ -1,9 +1,9 @@
 package com.localdeals.marketing;
 
-import com.localdeals.config.VoucherBatchProperties;
-import com.localdeals.mapper.VoucherBatchItemMapper;
-import com.localdeals.mapper.VoucherBatchJobMapper;
-import com.localdeals.service.VoucherBatchJobService;
+import com.localdeals.marketing.config.VoucherBatchProperties;
+import com.localdeals.marketing.mapper.VoucherBatchItemMapper;
+import com.localdeals.marketing.mapper.VoucherBatchJobMapper;
+import com.localdeals.marketing.service.VoucherBatchJobService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.mapper.MapperFactoryBean;
 import org.springframework.boot.test.context.TestComponent;
