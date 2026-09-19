@@ -18,7 +18,7 @@ class TrafficControlPropertiesTest {
         runner.run(context -> {
             TrafficControlProperties properties = context.getBean(TrafficControlProperties.class);
             assertThat(properties.getSeckill().getWindow()).isEqualTo(Duration.ofSeconds(1));
-            assertThat(properties.getSeckill().getActivityLimit()).isEqualTo(300);
+            assertThat(properties.getSeckill().getUserLimit()).isEqualTo(2);
             assertThat(properties.getRead().getDbMaxConcurrent()).isEqualTo(4);
             assertThat(properties.getRead().getSharedLoadWait()).isEqualTo(Duration.ofMillis(750));
             assertThat(properties.getSearch().getConnectTimeout()).isEqualTo(Duration.ofMillis(500));
@@ -26,14 +26,14 @@ class TrafficControlPropertiesTest {
         });
         runner.withPropertyValues(
                         "local-deals.traffic.seckill.window=2s",
-                        "local-deals.traffic.seckill.activity-limit=500",
+                        "local-deals.traffic.seckill.ip-limit=500",
                         "local-deals.traffic.read.db-max-concurrent=8",
                         "local-deals.traffic.read.shared-load-wait=1s",
                         "local-deals.traffic.search.socket-timeout=1500ms")
                 .run(context -> {
                     TrafficControlProperties properties = context.getBean(TrafficControlProperties.class);
                     assertThat(properties.getSeckill().getWindow()).isEqualTo(Duration.ofSeconds(2));
-                    assertThat(properties.getSeckill().getActivityLimit()).isEqualTo(500);
+                    assertThat(properties.getSeckill().getIpLimit()).isEqualTo(500);
                     assertThat(properties.getRead().getDbMaxConcurrent()).isEqualTo(8);
                     assertThat(properties.getRead().getSharedLoadWait()).isEqualTo(Duration.ofSeconds(1));
                     assertThat(properties.getSearch().getSocketTimeout()).isEqualTo(Duration.ofMillis(1500));

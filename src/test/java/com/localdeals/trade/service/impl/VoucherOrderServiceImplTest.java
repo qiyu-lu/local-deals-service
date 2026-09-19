@@ -10,6 +10,7 @@ import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -54,6 +55,7 @@ class VoucherOrderServiceImplTest {
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
         ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
+        ReflectionTestUtils.setField(service, "localDealsMetrics", mock(LocalDealsMetrics.class));
         ReflectionTestUtils.invokeMethod(service, "registerMetrics");
 
         UserDTO user = new UserDTO();

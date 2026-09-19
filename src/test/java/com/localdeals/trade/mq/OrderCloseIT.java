@@ -1,5 +1,9 @@
 package com.localdeals.trade.mq;
 
+import com.localdeals.platform.config.TrafficControlProperties;
+import com.localdeals.trade.config.SeckillProperties;
+import com.localdeals.trade.service.SeckillAdmissionService;
+
 import com.localdeals.trade.service.OrderCloseService;
 import com.localdeals.trade.service.OrderCloseService.Outcome;
 import com.localdeals.trade.service.OrderTimeoutScanner;
@@ -48,8 +52,6 @@ class OrderCloseIT {
     private static final long USER = 9_202_001L;
     private static final int STOCK = 5;
 
-    @Autowired
-    private SeckillOrderProducer producer;
     @Autowired
     private SeckillOrderConsumer seckillConsumer;
     @Autowired
@@ -119,7 +121,7 @@ class OrderCloseIT {
     @Test
     void theSameUserCanBuyAgainAfterTheOrderIsClosed() {
         buy(USER, BASE + 3);
-        assertThat(admit(USER, BASE + 4)).isEqualTo(SeckillOrderProducer.ADMISSION_DUPLICATE);
+        assertThat(admit(USER, BASE + 4)).isEqualTo(SeckillAdmissionService.DUPLICATE);
 
         fixture.expire(BASE + 3);
         assertThat(closeService.closeIfExpired(BASE + 3, "SYSTEM")).isEqualTo(Outcome.CLOSED);
@@ -175,15 +177,15 @@ class OrderCloseIT {
     }
 
     private void buy(long userId, long orderNo) {
-        assertThat(admit(userId, orderNo)).isEqualTo(SeckillOrderProducer.ADMISSION_ACCEPTED);
+        assertThat(admit(userId, orderNo)).isEqualTo(SeckillAdmissionService.ACCEPTED);
         seckillConsumer.onMessage(new SeckillOrderMessage(fixture.voucherId, userId, orderNo));
     }
 
     private int admit(long userId, long orderNo) {
-        SeckillOrderProducer.LocalTransactionContext context =
-                new SeckillOrderProducer.LocalTransactionContext(fixture.voucherId, userId, orderNo);
-        producer.executeLocalTransaction(null, context);
-        return context.getAdmissionResult();
+        TrafficControlProperties noLimits = new TrafficControlProperties();
+        noLimits.getSeckill().setEnabled(false);
+        return new SeckillAdmissionService(redis, new SeckillProperties(), noLimits)
+                .admit(fixture.voucherId, userId, orderNo, "127.0.0.1").code();
     }
 
     private int redisStock() {

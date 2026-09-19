@@ -41,14 +41,6 @@ class SeckillOrderStateIT {
     private static final Long ORDER_ID = 90071992547409931L;
     private static final Long SECOND_ORDER_ID = 90071992547409932L;
 
-    private static final DefaultRedisScript<Long> ADMISSION_SCRIPT;
-
-    static {
-        ADMISSION_SCRIPT = new DefaultRedisScript<>();
-        ADMISSION_SCRIPT.setLocation(new ClassPathResource("lua/seckill_check.lua"));
-        ADMISSION_SCRIPT.setResultType(Long.class);
-    }
-
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
@@ -335,13 +327,11 @@ class SeckillOrderStateIT {
     }
 
     private long admit(Long userId, Long orderId) {
-        Long result = stringRedisTemplate.execute(
-                ADMISSION_SCRIPT,
-                Arrays.asList(stockKey(), metaKey(), reservationKey(),
-                        statusKey(orderId), SECKILL_PROCESSING_INDEX_KEY),
-                userId.toString(), VOUCHER_ID.toString(), orderId.toString(),
-                "120");
-        return result == null ? -1L : result;
+        com.localdeals.platform.config.TrafficControlProperties noLimits =
+                new com.localdeals.platform.config.TrafficControlProperties();
+        noLimits.getSeckill().setEnabled(false);
+        return new SeckillAdmissionService(stringRedisTemplate, new SeckillProperties(), noLimits)
+                .admit(VOUCHER_ID, userId, orderId, "127.0.0.1").code();
     }
 
     private void setActivity(long beginAt, long endAt) {

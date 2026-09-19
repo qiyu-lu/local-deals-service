@@ -18,7 +18,8 @@ import com.localdeals.trade.service.ISeckillVoucherService;
 import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.trade.service.OrderStateMachine;
 import com.localdeals.trade.service.SeckillOrderStateService;
-import com.localdeals.trade.service.SeckillTrafficGuard;
+import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.Counter;
@@ -32,11 +33,18 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.IP;
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.REDIS;
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.USER;
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficResource.SECKILL;
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficResult.REJECTED;
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficResult.UNAVAILABLE;
+
 /**
  * Voucher seckill service.
  *
- * <p>The HTTP thread performs Redis Lua admission control synchronously via a RocketMQ
- * transaction message ({@link SeckillOrderProducer}). MySQL persistence is completed
+ * <p>The HTTP thread admits with one Redis round trip ({@link SeckillAdmissionService}); only an
+ * admitted order is published ({@link SeckillOrderProducer}). MySQL persistence is completed
  * asynchronously by {@link com.localdeals.trade.mq.SeckillOrderConsumer}.</p>
  */
 @Slf4j
@@ -54,13 +62,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private SeckillOrderProducer seckillOrderProducer;
 
     @Resource
-    private com.localdeals.trade.service.SeckillAdmissionService seckillAdmissionService;
+    private SeckillAdmissionService seckillAdmissionService;
+
+    @Resource
+    private LocalDealsMetrics localDealsMetrics;
 
     @Resource
     private SeckillOrderStateService seckillOrderStateService;
 
-    @Resource
-    private SeckillTrafficGuard seckillTrafficGuard;
 
     @Resource
     private OrderStateMachine orderStateMachine;
@@ -79,6 +88,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private Counter requestUnavailableCounter;
     private Counter duplicateOrderCounter;
     private Counter stockRollbackCounter;
+    private Counter publishFailureCounter;
 
     @PostConstruct
     private void registerMetrics() {
@@ -98,64 +108,98 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
                 .tag("result", "duplicate").register(meterRegistry);
         stockRollbackCounter = Counter.builder("local_deals.seckill.db.orders")
                 .tag("result", "stock_rollback").register(meterRegistry);
+        publishFailureCounter = Counter.builder("local_deals.seckill.publish")
+                .tag("result", "failure").register(meterRegistry);
     }
 
     @Override
     public Result seckillVoucher(Long voucherId, String clientIp) {
         Long userId = UserHolder.getUser().getId();
-        try {
-            seckillTrafficGuard.check(voucherId, userId, clientIp);
-        } catch (ApiStatusException e) {
-            if (HttpStatus.TOO_MANY_REQUESTS.equals(e.getStatus())) {
-                requestRateRejectedCounter.increment();
-            } else {
-                requestUnavailableCounter.increment();
-            }
-            throw e;
+        long orderId = allocateOrderId(voucherId, userId);
+        SeckillAdmissionService.Admission admission = admit(voucherId, userId, orderId, clientIp);
+        if (admission.code() == SeckillAdmissionService.ORDER_ID_IN_USE) {
+            // Only possible while two instances briefly share a worker id; the script wrote nothing.
+            log.warn("Seckill order id already in use; retrying with a new one. orderId={}", orderId);
+            orderId = allocateOrderId(voucherId, userId);
+            admission = admit(voucherId, userId, orderId, clientIp);
         }
 
-        final long orderId;
+        switch (admission.code()) {
+            case SeckillAdmissionService.ACCEPTED:
+                requestAcceptedCounter.increment();
+                publishBestEffort(new SeckillOrderMessage(voucherId, userId, orderId));
+                return Result.ok(Long.toString(orderId));
+            case SeckillAdmissionService.OUT_OF_STOCK:
+                requestStockRejectedCounter.increment();
+                return Result.fail(ApiErrorCodes.SECKILL_OUT_OF_STOCK, "库存不足");
+            case SeckillAdmissionService.DUPLICATE:
+                requestDuplicateRejectedCounter.increment();
+                return Result.fail(ApiErrorCodes.SECKILL_DUPLICATE, "您已抢过该优惠券");
+            case SeckillAdmissionService.NOT_STARTED:
+                requestActivityRejectedCounter.increment();
+                return Result.fail(ApiErrorCodes.SECKILL_NOT_STARTED, "秒杀活动尚未开始");
+            case SeckillAdmissionService.ENDED:
+                requestActivityRejectedCounter.increment();
+                return Result.fail(ApiErrorCodes.SECKILL_ENDED, "秒杀活动已结束或暂停");
+            case SeckillAdmissionService.USER_RATE_LIMITED:
+            case SeckillAdmissionService.IP_RATE_LIMITED:
+                requestRateRejectedCounter.increment();
+                localDealsMetrics.recordTraffic(SECKILL, REJECTED,
+                        admission.code() == SeckillAdmissionService.USER_RATE_LIMITED ? USER : IP);
+                throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                        ApiErrorCodes.SECKILL_RATE_LIMITED, "请求过于频繁，请稍后重试");
+            case SeckillAdmissionService.META_NOT_READY:
+                requestUnavailableCounter.increment();
+                throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        ApiErrorCodes.SECKILL_STATE_UNAVAILABLE,
+                        "活动正在初始化，请稍后重试");
+            default:
+                requestUnavailableCounter.increment();
+                log.error("Unexpected seckill admission result. voucherId={} code={}",
+                        voucherId, admission.code());
+                throw submitUnavailable();
+        }
+    }
+
+    private long allocateOrderId(Long voucherId, Long userId) {
         try {
-            orderId = orderIdGenerator.nextId(userId);
+            return orderIdGenerator.nextId(userId);
         } catch (RuntimeException e) {
             requestUnavailableCounter.increment();
             log.warn("Unable to allocate seckill order id. voucherId={}, userId={}",
                     voucherId, userId, e);
             throw submitUnavailable();
         }
+    }
 
-        int luaResult = seckillOrderProducer.sendSeckillTransaction(voucherId, userId, orderId);
+    private SeckillAdmissionService.Admission admit(Long voucherId, Long userId, long orderId, String clientIp) {
+        try {
+            return seckillAdmissionService.admit(voucherId, userId, orderId, clientIp);
+        } catch (RuntimeException e) {
+            // The script is atomic but its reply can be lost after it ran. If the exact
+            // reservation exists, the request was admitted.
+            if (isAcceptedDespiteAdmissionError(voucherId, userId, orderId)) {
+                log.warn("Seckill admission reply lost after the reservation was written. orderId={}", orderId, e);
+                return new SeckillAdmissionService.Admission(SeckillAdmissionService.ACCEPTED, -1L);
+            }
+            localDealsMetrics.recordTraffic(SECKILL, UNAVAILABLE, REDIS);
+            requestUnavailableCounter.increment();
+            log.warn("Seckill admission unavailable. voucherId={}, userId={}", voucherId, userId, e);
+            throw submitUnavailable();
+        }
+    }
 
-        switch (luaResult) {
-            case 0:
-                requestAcceptedCounter.increment();
-                return Result.ok(Long.toString(orderId));
-            case 1:
-                requestStockRejectedCounter.increment();
-                return Result.fail(ApiErrorCodes.SECKILL_OUT_OF_STOCK, "库存不足");
-            case 2:
-                requestDuplicateRejectedCounter.increment();
-                return Result.fail(ApiErrorCodes.SECKILL_DUPLICATE, "您已抢过该优惠券");
-            case 3:
-                requestActivityRejectedCounter.increment();
-                return Result.fail(ApiErrorCodes.SECKILL_NOT_STARTED, "秒杀活动尚未开始");
-            case 4:
-                requestActivityRejectedCounter.increment();
-                return Result.fail(ApiErrorCodes.SECKILL_ENDED, "秒杀活动已结束或暂停");
-            case 5:
-                requestUnavailableCounter.increment();
-                throw new ApiStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        ApiErrorCodes.SECKILL_STATE_UNAVAILABLE,
-                        "活动正在初始化，请稍后重试");
-            default:
-                // The client call can fail after Redis admission. If the exact reservation
-                // exists, expose its id so the caller can recover through the status API.
-                if (isAcceptedDespiteProducerError(voucherId, userId, orderId)) {
-                    requestAcceptedCounter.increment();
-                    return Result.ok(Long.toString(orderId));
-                }
-                requestUnavailableCounter.increment();
-                throw submitUnavailable();
+    /**
+     * The reservation is already durable in Redis. If the message is lost here the order stays
+     * PROCESSING and the reconciler repairs it, so the caller still gets its order id.
+     */
+    private void publishBestEffort(SeckillOrderMessage message) {
+        try {
+            seckillOrderProducer.publish(message);
+        } catch (RuntimeException e) {
+            publishFailureCounter.increment();
+            log.warn("Seckill order message not published; left to the reconciler. orderId={}",
+                    message.getOrderId(), e);
         }
     }
 
@@ -164,7 +208,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
                 ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE, "系统繁忙，请稍后重试");
     }
 
-    private boolean isAcceptedDespiteProducerError(Long voucherId, Long userId, Long orderId) {
+    private boolean isAcceptedDespiteAdmissionError(Long voucherId, Long userId, Long orderId) {
         try {
             SeckillOrderStateService.Snapshot state = seckillOrderStateService.find(orderId);
             return state != null && orderId.equals(state.getOrderId()) && userId.equals(state.getUserId()) &&

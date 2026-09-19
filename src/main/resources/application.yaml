@@ -91,7 +91,6 @@ local-deals:
     seckill:
       enabled: "${LOCAL_DEALS_SECKILL_RATE_LIMIT_ENABLED:true}"
       window: "${LOCAL_DEALS_SECKILL_RATE_WINDOW:1s}"
-      activity-limit: "${LOCAL_DEALS_SECKILL_ACTIVITY_LIMIT:300}"
       user-limit: "${LOCAL_DEALS_SECKILL_USER_LIMIT:2}"
       ip-limit: "${LOCAL_DEALS_SECKILL_IP_LIMIT:100}"
     read:

@@ -1,24 +1,34 @@
 --[[
-Atomic seckill admission used by the RocketMQ local transaction.
+The whole seckill admission in one round trip: rate limits, activity window, duplicate buyer,
+stock and the exact PROCESSING reservation. Nothing is written unless every check passes,
+except the rate-limit counters of a request that passed its limits.
 
 KEYS[1] stock String                    seckill:stock:{voucherId}
 KEYS[2] activity metadata Hash          seckill:meta:{voucherId}
 KEYS[3] exact reservation Hash          seckill:reservation:{voucherId}
 KEYS[4] order status Hash               seckill:order:status:{orderId}
 KEYS[5] global PROCESSING due-time ZSET  seckill:order:processing
+KEYS[6] user rate-window prefix         traffic:seckill:{voucherId}:user:{userId}:
+KEYS[7] IP rate-window prefix           traffic:seckill:{voucherId}:ip:{sha256(ip)}:
 
 ARGV[1] userId
 ARGV[2] voucherId
 ARGV[3] orderId (kept as a string; never convert a 64-bit ID to a Lua number)
 ARGV[4] stale-after interval in seconds
+ARGV[5] rate window in milliseconds
+ARGV[6] user limit per window (0 = off)
+ARGV[7] IP limit per window (0 = off)
 
-Return codes (0/1/2 retain the original public contract):
+Returns {code, remainingStock}; remainingStock is -1 when the stock was not read.
 0 accepted
 1 out of stock
 2 duplicate purchase
 3 activity has not started
 4 activity ended or is not ACTIVE
 5 activity metadata is absent or invalid
+6 user rate limited
+7 IP rate limited
+8 order id already owns a status (the caller takes a new id)
 ]]
 
 local stockKey = KEYS[1]
@@ -31,9 +41,40 @@ local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
 local staleAfterSeconds = tonumber(ARGV[4])
+local windowMillis = tonumber(ARGV[5])
+local userLimit = tonumber(ARGV[6])
+local ipLimit = tonumber(ARGV[7])
 
-if not staleAfterSeconds or staleAfterSeconds <= 0 then
-    return 5
+if not staleAfterSeconds or staleAfterSeconds <= 0
+        or not windowMillis or windowMillis < 1000
+        or not userLimit or userLimit < 0
+        or not ipLimit or ipLimit < 0 then
+    return {5, -1}
+end
+
+-- Redis server time is shared by every application instance.
+local redisTime = redis.call('TIME')
+local now = tonumber(redisTime[1])
+
+if userLimit > 0 or ipLimit > 0 then
+    local bucket = tostring(math.floor((now * 1000 + math.floor(tonumber(redisTime[2]) / 1000)) / windowMillis))
+    local userRateKey = KEYS[6] .. bucket
+    local ipRateKey = KEYS[7] .. bucket
+    if userLimit > 0 and (tonumber(redis.call('GET', userRateKey)) or 0) >= userLimit then
+        return {6, -1}
+    end
+    if ipLimit > 0 and (tonumber(redis.call('GET', ipRateKey)) or 0) >= ipLimit then
+        return {7, -1}
+    end
+    local ttlMillis = windowMillis * 2 + 1000
+    if userLimit > 0 then
+        redis.call('INCR', userRateKey)
+        redis.call('PEXPIRE', userRateKey, ttlMillis)
+    end
+    if ipLimit > 0 then
+        redis.call('INCR', ipRateKey)
+        redis.call('PEXPIRE', ipRateKey, ttlMillis)
+    end
 end
 
 local meta = redis.call('HMGET', metaKey, 'status', 'beginAt', 'endAt')
@@ -41,35 +82,36 @@ local activityStatus = meta[1]
 local beginAt = tonumber(meta[2])
 local endAt = tonumber(meta[3])
 if not activityStatus or not beginAt or not endAt or beginAt > endAt then
-    return 5
+    return {5, -1}
 end
-
 if activityStatus ~= 'ACTIVE' then
-    return 4
+    return {4, -1}
 end
-
--- Redis server time is shared by every application instance.
-local redisTime = redis.call('TIME')
-local now = tonumber(redisTime[1])
 if now < beginAt then
-    return 3
+    return {3, -1}
 end
 if now > endAt then
-    return 4
+    return {4, -1}
 end
 
 local stock = tonumber(redis.call('GET', stockKey))
 if not stock or stock <= 0 then
-    return 1
+    return {1, 0}
 end
 
 -- The exact userId -> orderId reservation is both the duplicate-purchase guard and the
 -- ownership evidence used by the consumer, compensation and reconciliation scripts.
 if redis.call('HEXISTS', reservationKey, userId) == 1 then
-    return 2
+    return {2, stock}
 end
 
-redis.call('DECR', stockKey)
+-- A status Hash belongs to exactly one order. Two instances holding the same Snowflake
+-- worker id (a lost lease) could issue the same id; the second one is refused here.
+if redis.call('EXISTS', orderStatusKey) == 1 then
+    return {8, stock}
+end
+
+local remaining = redis.call('DECR', stockKey)
 redis.call('HSET', reservationKey, userId, orderId)
 redis.call('HSET', orderStatusKey,
         'status', 'PROCESSING',
@@ -85,4 +127,4 @@ redis.call('HSET', orderStatusKey,
 redis.call('PERSIST', orderStatusKey)
 redis.call('ZADD', processingIndexKey, now + staleAfterSeconds, orderId)
 
-return 0
+return {0, remaining}
