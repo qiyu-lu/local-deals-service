@@ -46,6 +46,9 @@ class SeckillOrderConsumerTest {
     @Mock
     private RLock lock;
 
+    @Mock
+    private OrderTimeoutScheduler orderTimeoutScheduler;
+
     private SimpleMeterRegistry registry;
 
     @BeforeEach
@@ -261,5 +264,29 @@ class SeckillOrderConsumerTest {
         assertThatCode(() -> consumer.onMessage(msg))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("DB connection timeout");
+    }
+
+    @Test
+    void persistedOrderSchedulesItsTimeoutCloseAfterRedisSuccess() {
+        SeckillOrderMessage msg = new SeckillOrderMessage(17L, 23L, 4242L);
+        when(seckillOrderStateService.markSuccess(msg)).thenReturn(true);
+
+        consumer.onMessage(msg);
+
+        InOrder inOrder = inOrder(voucherOrderService, seckillOrderStateService, orderTimeoutScheduler);
+        inOrder.verify(voucherOrderService).createPendingOrder(msg);
+        inOrder.verify(seckillOrderStateService).markSuccess(msg);
+        inOrder.verify(orderTimeoutScheduler).scheduleClose(4242L);
+    }
+
+    @Test
+    void aBrokerFailureWhileSchedulingTheCloseStillAcksTheOrder() {
+        SeckillOrderMessage msg = new SeckillOrderMessage(17L, 23L, 4243L);
+        when(seckillOrderStateService.markSuccess(msg)).thenReturn(true);
+        when(orderTimeoutScheduler.scheduleClose(4243L)).thenThrow(new IllegalStateException("broker down"));
+
+        // The order is committed; the fallback scan closes it if the timer message never exists.
+        assertThatCode(() -> consumer.onMessage(msg)).doesNotThrowAnyException();
+        verify(webSocketNotifier).notify(23L, true, 4243L, 17L);
     }
 }

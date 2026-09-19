@@ -54,6 +54,9 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     @Resource
     private LocalDealsMetrics localDealsMetrics;
 
+    @Resource
+    private OrderTimeoutScheduler orderTimeoutScheduler;
+
     private Counter consumeSuccessCounter;
     private Counter consumeFailureCounter;
 
