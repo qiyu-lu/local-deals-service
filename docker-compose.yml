@@ -56,10 +56,6 @@ services:
     environment:
       BROKER_PORT: ${BROKER_PORT:-10911}
       STACK_NAME: ${STACK_NAME:-local-deals}
-      # 4.9 marks the store read-only above 90% host disk usage; dev/bench hosts are often fuller.
-      JAVA_OPT_EXT: >-
-        -Drocketmq.broker.diskSpaceWarningLevelRatio=0.98
-        -Drocketmq.broker.diskSpaceCleanForciblyRatio=0.97
     command:
       - sh
       - -c
@@ -77,9 +73,12 @@ services:
         flushDiskType=ASYNC_FLUSH
         deleteWhen=04
         fileReservedTime=24
-        diskMaxUsedSpaceRatio=98
         EOF
         exec sh mqbroker -c /tmp/broker.conf
+    # The commit log is the big writer: 4.9 turns the store read-only above 90% usage of the
+    # disk it lives on, so point BROKER_STORE at a disk with room (uid 3000 must own it).
+    volumes:
+      - ${BROKER_STORE:-rocketmq-store}:/home/rocketmq/store
     ports:
       - "${STACK_BIND:-0.0.0.0}:${BROKER_PORT:-10911}:${BROKER_PORT:-10911}"
     networks:
@@ -141,6 +140,7 @@ volumes:
   mysql-data: {}
   redis-data: {}
   es-data: {}
+  rocketmq-store: {}
 
 networks:
   local-deals-net:
