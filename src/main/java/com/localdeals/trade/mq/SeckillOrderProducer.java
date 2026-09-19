@@ -47,6 +47,15 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
     @Resource
     private SeckillProperties seckillProperties;
 
+    public SeckillOrderProducer() {
+    }
+
+    /** Stub for the red commit. */
+    public SeckillOrderProducer(RocketMQTemplate rocketMQTemplate, SeckillProperties seckillProperties) {
+        this.rocketMQTemplate = rocketMQTemplate;
+        this.seckillProperties = seckillProperties;
+    }
+
     /** @throws RuntimeException when the broker did not store the message */
     public void publish(SeckillOrderMessage message) {
         SendResult result = rocketMQTemplate.sendMessageInTransaction(

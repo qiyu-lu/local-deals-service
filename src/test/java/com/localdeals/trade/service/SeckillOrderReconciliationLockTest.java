@@ -83,6 +83,7 @@ class SeckillOrderReconciliationLockTest {
         properties.getReconciliation().setEnabled(true);
         reconciler = new SeckillOrderReconciler(
                 stateService, voucherOrderService, redissonClient, webSocketNotifier,
+                org.mockito.Mockito.mock(com.localdeals.trade.mq.SeckillOrderProducer.class),
                 properties, new SimpleMeterRegistry());
     }
 

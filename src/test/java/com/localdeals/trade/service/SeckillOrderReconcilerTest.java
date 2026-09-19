@@ -3,6 +3,7 @@ package com.localdeals.trade.service;
 import com.localdeals.trade.config.SeckillProperties;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.mq.SeckillOrderMessage;
+import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,8 @@ class SeckillOrderReconcilerTest {
     private RLock schedulingLock;
     @Mock
     private WebSocketNotifier webSocketNotifier;
+    @Mock
+    private SeckillOrderProducer producer;
 
     private SeckillProperties properties;
     private SeckillOrderReconciler reconciler;
@@ -55,7 +58,7 @@ class SeckillOrderReconcilerTest {
 
         reconciler = new SeckillOrderReconciler(
                 stateService, voucherOrderService, redissonClient, webSocketNotifier,
-                properties, new SimpleMeterRegistry());
+                producer, properties, new SimpleMeterRegistry());
 
         lenient().when(stateService.findDueOrderIds(100))
                 .thenReturn(Collections.singletonList(ORDER_ID));
@@ -105,8 +108,12 @@ class SeckillOrderReconcilerTest {
         verify(webSocketNotifier).notify(USER_ID, true, ORDER_ID, VOUCHER_ID);
     }
 
+    /**
+     * The reservation is the outbox: an admitted order whose message never reached the broker
+     * (send failed, or the process died right after the Lua) is published again.
+     */
     @Test
-    void absentOrderBeforeHardDeadlineIsDeferred() {
+    void absentOrderBeforeHardDeadlineIsRedrivenWithTheExactMessage() {
         when(voucherOrderService.classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID))
                 .thenReturn(SeckillOrderPersistenceResult.absent());
         when(stateService.claimForReconciliation(any())).thenReturn(
@@ -114,8 +121,21 @@ class SeckillOrderReconcilerTest {
 
         reconciler.reconcileDueOrders();
 
+        verify(producer).publish(message());
         verify(stateService, never()).compensate(any(), anyString());
         verifyNoInteractions(webSocketNotifier);
+    }
+
+    @Test
+    void aFailedRedriveLeavesTheReservationForTheNextRound() {
+        when(voucherOrderService.classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID))
+                .thenReturn(SeckillOrderPersistenceResult.absent());
+        doThrow(new IllegalStateException("broker unavailable")).when(producer).publish(any());
+
+        reconciler.reconcileDueOrders();
+
+        verify(producer).publish(message());
+        verify(stateService, never()).compensate(any(), anyString());
     }
 
     @Test
@@ -127,6 +147,7 @@ class SeckillOrderReconcilerTest {
 
         reconciler.reconcileDueOrders();
 
+        verify(producer, never()).publish(any());
         verify(stateService, never()).compensate(any(), anyString());
         verify(stateService, never()).quarantineProcessingOrder(anyLong(), anyString());
     }

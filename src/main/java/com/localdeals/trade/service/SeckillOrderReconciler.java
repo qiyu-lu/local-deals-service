@@ -50,6 +50,7 @@ public class SeckillOrderReconciler {
                                   IVoucherOrderService voucherOrderService,
                                   RedissonClient redissonClient,
                                   WebSocketNotifier webSocketNotifier,
+                                  com.localdeals.trade.mq.SeckillOrderProducer producer,
                                   SeckillProperties seckillProperties,
                                   MeterRegistry meterRegistry) {
         this.stateService = stateService;
