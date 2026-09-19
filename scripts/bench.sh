@@ -52,6 +52,12 @@ container_ns() {
   cat "/sys/fs/cgroup/cpu,cpuacct/docker/${id}/cpuacct.usage"
 }
 
+# Sum of max offsets over all queues of a topic: messages ever written to it.
+topic_offset() {
+  docker exec "${STACK_NAME}-broker" sh mqadmin topicStatus -n namesrv:9876 -t "$1" 2>/dev/null |
+    awk -v b="$STACK_NAME" '$1 == b { s += $4 } END { print s + 0 }'
+}
+
 token_count() { wc -l <"${PROJECT_DIR}/benchmark/v2/run/tokens.csv"; }
 
 # Each run starts where the previous one stopped so a user never repeats inside the
@@ -110,6 +116,8 @@ one_run() { # kind rate stock duration
   name="${kind}-r${rate}-s${stock}-$(date +%H%M%S)"
   pid="$(app_pid)"
   hz="$(getconf CLK_TCK)"
+  local half0 half1 msg0 msg1
+  half0="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg0="$(topic_offset seckill-order-topic)"
   for svc in mysql redis broker; do dep0[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
   sample_orders "$voucher" "${RAW_DIR}/${name}-orders.csv" &
   local sampler=$!
@@ -129,13 +137,16 @@ PY
 )"
   drain="$(wait_drain "$voucher" "$accepted")"
   sleep 1; kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
+  half1="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg1="$(topic_offset seckill-order-topic)"
   python3 - "$SUMMARY" "${RAW_DIR}/${name}.json" "$kind" "$rate" "$stock" "$voucher" "$drain" \
     "$(python3 -c "print(round(($ticks1-$ticks0)/$hz/($ended-$started),2))")" \
     "$(python3 -c "print(round(($ended-$started),1))")" \
     "${dep0[mysql]}:${dep1[mysql]}" "${dep0[redis]}:${dep1[redis]}" "${dep0[broker]}:${dep1[broker]}" \
-    "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" <<'PY'
+    "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" \
+    "$(( half1 - half0 ))" "$(( msg1 - msg0 ))" <<'PY'
 import csv, json, os, sys
-summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit = sys.argv[1:]
+summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit, \
+    half_msgs, order_msgs = sys.argv[1:]
 samples = [tuple(float(x) for x in line.split(',')) for line in open(raw[:-5] + '-orders.csv') if ',' in line]
 m = json.load(open(raw))['metrics']
 wall = float(wall)
@@ -172,6 +183,8 @@ row = {
     'persist_orders_per_s': persist_rate(),
     'app_cpu_cores': float(app_cpu), 'mysql_cpu_cores': cores(mysql_ns),
     'redis_cpu_cores': cores(redis_ns), 'broker_cpu_cores': cores(broker_ns),
+    # messages written during the run, drain included: half messages and order messages
+    'half_msgs': int(half_msgs), 'order_msgs': int(order_msgs),
     'raw': os.path.basename(raw),
 }
 new = not os.path.exists(summary)
