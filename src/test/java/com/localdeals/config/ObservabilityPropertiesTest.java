@@ -10,11 +10,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ObservabilityPropertiesTest {
 
     @Test
-    void defaultsAreDisabledAndBounded() {
+    void defaultsSampleAndAreBounded() {
         ObservabilityProperties properties = new ObservabilityProperties();
 
         assertThatCode(properties::validate).doesNotThrowAnyException();
-        org.assertj.core.api.Assertions.assertThat(properties.isSamplingEnabled()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(properties.isSamplingEnabled()).isTrue();
         org.assertj.core.api.Assertions.assertThat(properties.getSamplingInterval())
                 .isEqualTo(Duration.ofSeconds(30));
     }

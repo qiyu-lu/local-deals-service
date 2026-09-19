@@ -10,10 +10,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class BlogHotRankPropertiesTest {
 
     @Test
-    void defaultsAreFailClosedAndBounded() {
+    void defaultsRefreshTheRankAndAreBounded() {
         BlogHotRankProperties properties = new BlogHotRankProperties();
 
-        assertThat(properties.isRefreshEnabled()).isFalse();
+        assertThat(properties.isRefreshEnabled()).isTrue();
         assertThat(properties.getTopK()).isEqualTo(1_000);
         assertThat(properties.getPageSize()).isEqualTo(10);
         assertThat(properties.getInitialDelay()).isEqualTo(Duration.ofSeconds(10));

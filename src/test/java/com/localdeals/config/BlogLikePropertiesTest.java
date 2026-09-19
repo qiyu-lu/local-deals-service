@@ -14,7 +14,7 @@ class BlogLikePropertiesTest {
         BlogLikeProperties properties = new BlogLikeProperties();
         properties.validate();
 
-        assertThat(properties.isWorkerEnabled()).isFalse();
+        assertThat(properties.isWorkerEnabled()).isTrue();
         assertThat(properties.getCleanupFixedDelay()).isEqualTo(Duration.ofSeconds(1));
         assertThat(properties.getCleanupBatchSize()).isEqualTo(2_000);
         assertThat(properties.getCleanupMaxBatches()).isEqualTo(5);

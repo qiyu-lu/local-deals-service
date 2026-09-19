@@ -8,6 +8,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SeckillPropertiesTest {
 
     @Test
+    void reconciliationAndCompensationRunByDefault() {
+        SeckillProperties properties = new SeckillProperties();
+
+        org.assertj.core.api.Assertions.assertThat(properties.getReconciliation().isEnabled()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(properties.getReconciliation().isCompensationEnabled()).isTrue();
+    }
+
+    @Test
     void disabledWorkerRemainsASafeKillSwitchEvenIfCompensationFlagIsStillSet() {
         SeckillProperties properties = new SeckillProperties();
         properties.getReconciliation().setEnabled(false);
