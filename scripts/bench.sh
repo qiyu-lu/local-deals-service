@@ -9,7 +9,8 @@
 #   scripts/bench.sh profile SECONDS NAME       async-profiler flame graph of the running app
 #
 # Every run writes raw k6 JSON/logs under benchmark/v2/<MILESTONE>/raw/ (gitignored) and appends
-# one row per run to benchmark/v2/<MILESTONE>/summary.csv.
+# one row per run to benchmark/v2/<MILESTONE>/summary.csv. The commit column is HEAD unless
+# BENCH_COMMIT names the build under test (e.g. a jar built from an older tag).
 #
 # CPU isolation: the app runs under taskset (APP_CPUS, see stack.sh), dependency containers are
 # pinned with DEPS_CPUS, and k6 runs in a container pinned to K6_CPUS. CPU columns are cores used
@@ -132,7 +133,7 @@ PY
     "$(python3 -c "print(round(($ticks1-$ticks0)/$hz/($ended-$started),2))")" \
     "$(python3 -c "print(round(($ended-$started),1))")" \
     "${dep0[mysql]}:${dep1[mysql]}" "${dep0[redis]}:${dep1[redis]}" "${dep0[broker]}:${dep1[broker]}" \
-    "$(git -C "$PROJECT_DIR" rev-parse --short HEAD)" <<'PY'
+    "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" <<'PY'
 import csv, json, os, sys
 summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit = sys.argv[1:]
 samples = [tuple(float(x) for x in line.split(',')) for line in open(raw[:-5] + '-orders.csv') if ',' in line]

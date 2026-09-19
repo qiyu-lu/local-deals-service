@@ -7,7 +7,8 @@
 #   scripts/stack.sh env                print the variables the app/tests need (eval-able)
 #   scripts/stack.sh it 'Seckill*IT'    run tests against this stack
 #   scripts/stack.sh build              package the app jar with APP_JAVA_HOME (Java 21)
-#   scripts/stack.sh app-start|app-stop start/stop the jar (pinned with taskset when APP_CPUS set)
+#   scripts/stack.sh app-start|app-stop start/stop the jar (pinned with taskset when APP_CPUS set;
+#                                       APP_JAR runs another build, e.g. an older tag)
 #   scripts/stack.sh pin                pin dependency containers to DEPS_CPUS
 #   scripts/stack.sh status|down
 set -euo pipefail
@@ -185,6 +186,10 @@ build() {
 
 app_jar() {
   local jar
+  if [[ -n "${APP_JAR:-}" ]]; then
+    [[ -f "$APP_JAR" ]] || fail "APP_JAR does not exist: ${APP_JAR}"
+    echo "$APP_JAR"; return
+  fi
   for jar in "${PROJECT_DIR}"/target/*.jar; do
     [[ -f "$jar" && "$jar" != *-sources.jar && "$jar" != *.original ]] && { echo "$jar"; return; }
   done
