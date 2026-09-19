@@ -34,10 +34,25 @@ public class ReservationReleaseService {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final TradeOrderMapper tradeOrderMapper;
+    private final ISeckillVoucherService seckillVoucherService;
 
-    public ReservationReleaseService(StringRedisTemplate stringRedisTemplate, TradeOrderMapper tradeOrderMapper) {
+    public ReservationReleaseService(StringRedisTemplate stringRedisTemplate, TradeOrderMapper tradeOrderMapper,
+                                     ISeckillVoucherService seckillVoucherService) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.tradeOrderMapper = tradeOrderMapper;
+        this.seckillVoucherService = seckillVoucherService;
+    }
+
+    /**
+     * The order's unit goes back: DB stock in the caller's transaction (only the winner of the
+     * CLOSE / REFUND_SUCCESS transition calls this, so it happens once), Redis after commit.
+     */
+    public void returnUnit(TradeOrder order) {
+        if (!seckillVoucherService.update().setSql("stock = stock + 1")
+                .eq("voucher_id", order.getVoucherId()).update()) {
+            throw new IllegalStateException("Seckill stock row is missing. voucherId=" + order.getVoucherId());
+        }
+        releaseAfterCommit(order);
     }
 
     /** @return true when Redis is released (now or earlier) and the pending flag is cleared. */

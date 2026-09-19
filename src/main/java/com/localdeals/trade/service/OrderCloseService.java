@@ -36,16 +36,13 @@ public class OrderCloseService {
 
     private final OrderStateMachine stateMachine;
     private final TradeOrderMapper tradeOrderMapper;
-    private final ISeckillVoucherService seckillVoucherService;
     private final ReservationReleaseService releaseService;
     private final Map<Outcome, Counter> counters = new EnumMap<>(Outcome.class);
 
     public OrderCloseService(OrderStateMachine stateMachine, TradeOrderMapper tradeOrderMapper,
-                             ISeckillVoucherService seckillVoucherService,
                              ReservationReleaseService releaseService, MeterRegistry meterRegistry) {
         this.stateMachine = stateMachine;
         this.tradeOrderMapper = tradeOrderMapper;
-        this.seckillVoucherService = seckillVoucherService;
         this.releaseService = releaseService;
         for (Outcome outcome : Outcome.values()) {
             counters.put(outcome, Counter.builder("local_deals.order.close")
@@ -63,8 +60,7 @@ public class OrderCloseService {
     private Outcome close(long orderNo, String operator) {
         if (stateMachine.fire(orderNo, OrderEvent.CLOSE, operator)) {
             TradeOrder order = tradeOrderMapper.selectById(orderNo);
-            restoreDbStock(order.getVoucherId());
-            releaseService.releaseAfterCommit(order);
+            releaseService.returnUnit(order);
             log.info("Unpaid order closed. orderNo={} operator={}", orderNo, operator);
             return Outcome.CLOSED;
         }
@@ -80,12 +76,5 @@ public class OrderCloseService {
             return Outcome.ALREADY_CLOSED;
         }
         return order.getStatus() == OrderStatus.PENDING_PAY ? Outcome.NOT_DUE : Outcome.NOT_PENDING;
-    }
-
-    /** Same transaction as the transition: a rolled-back close can never leak a unit of stock. */
-    void restoreDbStock(Long voucherId) {
-        if (!seckillVoucherService.update().setSql("stock = stock + 1").eq("voucher_id", voucherId).update()) {
-            throw new IllegalStateException("Seckill stock row is missing. voucherId=" + voucherId);
-        }
     }
 }

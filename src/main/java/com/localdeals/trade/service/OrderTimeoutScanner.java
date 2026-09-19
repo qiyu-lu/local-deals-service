@@ -8,7 +8,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Fallback for lost timer messages and for Redis releases that failed after commit. Safe on
+ * Fallback for lost timer messages, Redis releases that failed after commit, and refunds
+ * the channel has not confirmed. Safe on
  * every instance at once: closing is a compare-and-set and the release Lua is idempotent.
  */
 @Slf4j
@@ -18,13 +19,16 @@ public class OrderTimeoutScanner {
     private final TradeOrderMapper tradeOrderMapper;
     private final OrderCloseService closeService;
     private final ReservationReleaseService releaseService;
+    private final RefundService refundService;
     private final OrderProperties properties;
 
     public OrderTimeoutScanner(TradeOrderMapper tradeOrderMapper, OrderCloseService closeService,
-                               ReservationReleaseService releaseService, OrderProperties properties) {
+                               ReservationReleaseService releaseService, RefundService refundService,
+                               OrderProperties properties) {
         this.tradeOrderMapper = tradeOrderMapper;
         this.closeService = closeService;
         this.releaseService = releaseService;
+        this.refundService = refundService;
         this.properties = properties;
     }
 
@@ -54,6 +58,11 @@ public class OrderTimeoutScanner {
             if (releaseService.release(order)) {
                 done++;
             }
+        }
+        try {
+            done += refundService.retryStale(scan.getBatchSize());
+        } catch (RuntimeException e) {
+            log.error("Refund retry pass failed; next scan retries", e);
         }
         return done;
     }

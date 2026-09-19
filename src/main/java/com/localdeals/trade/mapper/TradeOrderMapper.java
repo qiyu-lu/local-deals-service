@@ -49,6 +49,14 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
             "AND active_flag = 1")
     TradeOrder selectActive(@Param("userId") long userId, @Param("voucherId") long voucherId);
 
+    /** Deadline checked on the database clock, the same one the close uses. */
+    @Select("SELECT COUNT(*) FROM trade_order WHERE order_no = #{orderNo} AND status = 'PENDING_PAY' " +
+            "AND expire_at > NOW(3)")
+    int countPayable(@Param("orderNo") long orderNo);
+
+    @Select("SELECT * FROM trade_order WHERE user_id = #{userId} ORDER BY create_time DESC LIMIT #{limit}")
+    List<TradeOrder> selectByUser(@Param("userId") long userId, @Param("limit") int limit);
+
     @Update("UPDATE trade_order SET release_pending = NULL WHERE order_no = #{orderNo} AND release_pending = 1")
     int clearReleasePending(@Param("orderNo") long orderNo);
 

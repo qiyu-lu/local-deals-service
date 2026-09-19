@@ -37,7 +37,7 @@ public interface UserCouponMapper extends BaseMapper<UserCoupon> {
     int markUsed(@Param("id") long id, @Param("adminId") long adminId);
 
     @Update("UPDATE user_coupon SET status = #{to} WHERE coupon_no = #{couponNo} AND status = #{from}")
-    int transition(@Param("couponNo") String couponNo, @Param("from") String from, @Param("to") String to);
+    int changeStatus(@Param("couponNo") String couponNo, @Param("from") String from, @Param("to") String to);
 
     @Update("UPDATE user_coupon SET status = 'EXPIRED' WHERE status = 'AVAILABLE' AND valid_to <= NOW(3) " +
             "LIMIT #{limit}")

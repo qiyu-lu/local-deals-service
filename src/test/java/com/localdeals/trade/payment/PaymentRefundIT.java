@@ -49,6 +49,7 @@ class PaymentRefundIT {
     private static final long BASE = 9_205_000L;
     private static final long USER = 9_205_001L;
     private static final int STOCK = 100;
+    private static final long HEAD_START_MS = 20;
 
     @Autowired
     private IVoucherOrderService orderService;
@@ -176,9 +177,13 @@ class PaymentRefundIT {
             PaymentNotification notification = paid(payNo, "TXN-" + orderNo);
             int stockBefore = fixture.dbStock();
 
+            // Rounds 0-9 start both at once; 10-14 give the callback a head start, 15-19 the close,
+            // so both interleavings are exercised whatever the natural winner is on this machine.
+            long payDelay = i >= 15 ? HEAD_START_MS : 0;
+            long closeDelay = i >= 10 && i < 15 ? HEAD_START_MS : 0;
             List<Object> outcomes = concurrently(2, List.of(
-                    () -> callbackService.onPaid(notification),
-                    () -> closeService.closeIfExpired(orderNo, "SYSTEM")));
+                    () -> after(payDelay, () -> callbackService.onPaid(notification)),
+                    () -> after(closeDelay, () -> closeService.closeIfExpired(orderNo, "SYSTEM"))));
 
             String status = fixture.orderStatus(orderNo);
             int coupons = count("SELECT COUNT(*) FROM user_coupon WHERE source_ref = ?", Long.toString(orderNo));
@@ -199,6 +204,9 @@ class PaymentRefundIT {
             }
         }
         assertThat(paidWins + closeWins).isEqualTo(20);
+        assertThat(paidWins).isPositive();
+        assertThat(closeWins).isPositive();
+        System.out.printf("race 1 (payment vs close): payment won %d, close won %d%n", paidWins, closeWins);
     }
 
     /** Plan race 4a: refund while a refund is in flight. */
@@ -236,17 +244,21 @@ class PaymentRefundIT {
     /** Plan race 4, the dangerous interleaving: verification at the shop vs a refund request. */
     @Test
     void verifyAndRefundRacingLetExactlyOneWin() throws Exception {
+        int verifyWins = 0;
         for (int i = 0; i < 10; i++) {
             long orderNo = paidOrder(200 + i);
             long buyer = USER + 200 + i;
             String code = couponCode(orderNo);
 
+            long verifyDelay = i >= 7 ? HEAD_START_MS : 0;
+            long refundDelay = i >= 4 && i < 7 ? HEAD_START_MS : 0;
             List<Object> results = concurrently(2, List.of(
-                    () -> attempt(() -> couponService.verify(code, merchant())),
-                    () -> attempt(() -> refundService.apply(buyer, orderNo))));
+                    () -> after(verifyDelay, () -> attempt(() -> couponService.verify(code, merchant()))),
+                    () -> after(refundDelay, () -> attempt(() -> refundService.apply(buyer, orderNo)))));
 
             String status = fixture.orderStatus(orderNo);
             if ("USED".equals(status)) {
+                verifyWins++;
                 assertThat(results.get(1)).isEqualTo(ApiErrorCodes.ORDER_ALREADY_USED);
                 assertThat(couponStatus(orderNo)).isEqualTo("USED");
                 assertThat(count("SELECT COUNT(*) FROM refund_record WHERE order_no = ?", orderNo)).isZero();
@@ -256,6 +268,9 @@ class PaymentRefundIT {
                 assertThat(couponStatus(orderNo)).isEqualTo("FROZEN");
             }
         }
+        assertThat(verifyWins).isPositive();
+        assertThat(verifyWins).isLessThan(10);
+        System.out.printf("race 4 (verify vs refund): verify won %d, refund won %d%n", verifyWins, 10 - verifyWins);
     }
 
     @Test
@@ -333,6 +348,13 @@ class PaymentRefundIT {
         principal.setMerchantId(fixture.merchantId);
         principal.setScopeType(AdminPrincipal.SCOPE_MERCHANT);
         return principal;
+    }
+
+    private static <T> T after(long delayMs, Callable<T> call) throws Exception {
+        if (delayMs > 0) {
+            Thread.sleep(delayMs);
+        }
+        return call.call();
     }
 
     private static Object attempt(Callable<?> call) throws Exception {

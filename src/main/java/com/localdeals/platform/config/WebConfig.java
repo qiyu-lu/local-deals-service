@@ -37,7 +37,12 @@ public class WebConfig implements WebMvcConfigurer {
     ));
     public static final List<String> PUBLIC_POST_PATHS = Collections.unmodifiableList(Arrays.asList(
             "/user/code",
-            "/user/login"
+            "/user/login",
+            // Called by the payment channel; authenticated by the HMAC signature.
+            "/payment/callback",
+            "/payment/refund-callback",
+            // The mock channel's cashier stands in for a third-party page.
+            "/mock-channel/payments/{payNo}/pay"
     ));
 
     @Resource
