@@ -1,957 +1,829 @@
 # 09. 三条核心业务面试讲述稿
 
-这份文档只负责三条最能体现设计思路的业务：秒杀、点赞与热榜、营销发券。登录、缓存、GEO、Elasticsearch、后台 RBAC、身份隔离和 WebSocket 鉴权见 [08. 补充模块面试讲述手册](08-interview-playbook.md)。
+> 本文是秒杀、点赞与热榜、营销发券三条业务的唯一完整面试版本。后台身份、基于角色的访问控制（RBAC）、商户隔离与实时会话同样属于核心复杂链路，统一放在 [08. 补充模块面试讲述手册](08-interview-playbook.md)。[03](03-seckill-order-chain.md)、[04](04-blog-like-hot-rank-chain.md)、[05](05-marketing-grant-chain.md) 保留源码级底稿，不再与本文各自维护一套重复口述。
 
-## 0. 怎样使用这份材料
+## 0. 使用方式、事实依据与术语
 
-每条业务的面试回答分成三层：
+### 0.1 三层阅读法
 
-1. **概括版**：先用 30～60 秒回答“做了什么、为什么这样做、最终事实在哪里”。
-2. **完整版**：面试官继续追问时，再按业务问题、整体方案、核心实现、设计原因、异常与一致性展开。
-3. **5 个高频追问**：用于准备深挖，不要在第一轮回答里主动把所有细节一次背完。
+1. 面试开场只使用“模块定位”和“30～60 秒概括版”。
+2. 追问设计时使用“2～3 分钟完整口述版”和“核心机制与设计取舍”。
+3. 排查或复习源码时，从“端到端主链路”进入异常表、状态与源码索引。
 
-每组追问之后继续保留原来的**详细技术链路**。概括版和完整版负责形成自然口述，详细层继续保存状态码、Lua / SQL 协议、冲突分类、恢复分支和配置门禁。
+本文件中的正常链路只保留发生顺序；返回码、门禁和失败分类集中在各模块后半部分。事实优先级始终是当前源码、配置和数据库迁移，其次是测试所覆盖的局部行为，最后才是旧笔记与设计材料。
 
-完整版不是从 Controller 一路背到 Mapper。它先给出业务闭环，再只展开会影响正确性的实现。面试口述层只解释 Redis 对象承担的业务角色；具体 key、类名、表名和 Lua 返回码留在随后保留的详细技术链路与文末源码反查中。
+### 0.2 术语
 
-三条链的共同方法是：
+| 术语 | 本文含义 |
+| --- | --- |
+| 幂等 | 同一业务动作重复执行，结果仍收敛到同一份事实，不重复产生副作用 |
+| half message | RocketMQ 事务消息中暂不对消费者可见的半消息，等待本地事务结果后再提交或回滚 |
+| Outbox | 与业务事实同一数据库事务写入的持久待办，由后台任务稍后处理 |
+| generation fence | 代际栅栏；只允许当前一代构建结果发布，拒绝旧任务晚到覆盖 |
+| top-K | 只保存排序最靠前的 K 个对象，而不是完整业务集合 |
+| REQUIRES_NEW | Spring 事务传播方式；暂停外层事务并为当前调用开启独立事务 |
+| TTL | Time To Live，数据的剩余存活时间 |
+| MQ / DLQ / ACK | MQ 是消息队列；DLQ 是死信队列；ACK 表示消费者确认本次消息处理结束 |
+| best-effort | 尽力执行但不承诺最终完成；失败不能反向改写已经成立的业务事实 |
+| reservation / PROCESSING | reservation 是秒杀用户到 exact orderId 的精确预约；PROCESSING 是 Redis 已接受预约但尚未确认 Redis 终态 |
+| Grant | 用户已经取得某个活动券权益的 MySQL 长期事实 |
+| ZSET | Redis Sorted Set，按 score 排序的集合 |
+| marker | 完成标记；用于证明一条待办或一次切换已经在数据库中确认 |
+| exactly-once | 副作用恰好执行一次；仅有消息重试或幂等设计不能直接证明这一语义 |
+| P99 / SLA | P99 是 99% 请求不超过的延迟分位；SLA 是对服务水平的约定 |
+| Broker / Consumer | Broker 是保存并投递消息的服务端；Consumer 是接收消息并执行后续业务的消费者 |
+| Worker / Reconciler | Worker 处理持久待办；Reconciler 按事实重新检查长期未决状态 |
+| SingleFlight / bulkhead | SingleFlight 合并单实例同 key 的重复工作；bulkhead 是限制一类依赖并发的并发舱 |
 
-| 业务 | 长期事实 | 允许滞后的部分 | 核心难点 |
-| --- | --- | --- | --- |
-| 秒杀 | MySQL 正式订单和数据库库存 | Redis 过程状态、在线提示 | Redis、MQ、MySQL 不能共同事务 |
-| 点赞与热榜 | MySQL 点赞关系 | 聚合计数和 Redis top-K | 写关系要准确，榜单又要读得快 |
-| 营销发券 | MySQL Grant 权益 | 批量进度和在线通知 | 多入口、最后额度、规则变化和任务中断 |
+### 0.3 三条链的共同判断顺序
+
+~~~text
+确定不可丢的长期事实
+        ↓
+定义重复请求和重复消息怎样收敛
+        ↓
+为跨组件步骤留下协议状态或持久待办
+        ↓
+异常时按事实分类，再决定重试、补偿或隔离
+~~~
+
+“抛异常”只表示调用方没有得到确定结果，不等于远端没有执行。补偿也不是失败的默认动作；只有能证明副作用仍归当前操作所有，并确认长期事实没有成立时才允许补偿。
 
 ---
 
-## 1. 三条链为什么值得放在一起讲
+## 1. 三种一致性方案为什么不同
 
-这三条业务采用的工具不同，但设计顺序相同：
+| 业务 | 最先成立的关键事实 | 怎样留下后续工作 | 重复怎样收敛 | 异常时先查什么 | 当前主要边界 |
+| --- | --- | --- | --- | --- | --- |
+| 秒杀 | Redis 精确预约先成立，MySQL 正式订单后成立 | 事务消息、PROCESSING 与待检查索引 | 精确预约、消息校验、数据库唯一约束和状态迁移 | orderId 对应的 MySQL 订单，再核对 Redis 所有权 | 对账默认关闭；Redis 协议证据无法从数据库完整重建 |
+| 点赞与热榜 | MySQL 用户—Blog 关系 | 同事务点赞 Outbox | 目标状态、关系唯一键、事件行锁与精确 marker | 点赞关系、聚合字段和待处理事件 | 聚合会滞后；永久坏事件无自动隔离 |
+| 营销发券 | MySQL Grant 权益 | 新建 Grant 时同事务写通知 Outbox；批量另有 Job 与 Item | 服务端幂等身份、活动锁、条件更新和唯一约束 | Grant，其次才是 Item 与通知状态 | worker 默认关闭；历史 Grant 无通知回填，通知也无送达或已读保证 |
 
-~~~text
-先确定不可丢的长期事实
-        ↓
-让重复请求或重复消息收敛到同一结果
-        ↓
-跨组件时留下可恢复的状态或持久待办
-        ↓
-发生异常后根据事实继续，而不是根据异常猜结论
-~~~
-
-秒杀先在 Redis 建立资格，再异步形成 MySQL 订单，所以需要事务消息和过程状态；点赞关系本来就在 MySQL，最自然的是把关系和 Outbox 放在一个事务；发券也以 MySQL 权益为事实，因此把额度、Grant 和通知待办一起提交。选择技术的依据是“事实先落在哪里”，不是哪种方案听起来更高级。
+方案不同是因为事实落点不同。秒杀要先在 Redis 快速准入，因此需要事务消息和跨组件状态；点赞关系与发券权益原本就在 MySQL，关系或 Grant 与 Outbox 同事务更直接。任何方案都不能因为使用了锁、MQ 或 Lua 就被描述成“绝对一致”。
 
 ---
 
 ## 2. 秒杀：同步准入，异步落单，按事实收敛
 
-### 2.1 概括版
+### 2.1 模块定位
 
-我把秒杀拆成同步准入和异步落单两段。入口先按照活动、用户和可信 IP 做三维流量保护，通过后生成贯穿全链路的订单号，再发送 RocketMQ 事务消息。事务回调里的 Redis Lua 会原子校验活动、库存和重复购买，同时写入精确到订单号的预约与 PROCESSING 状态；只有预占成功，消息才对消费者可见。消费端再次确认消息拥有这笔预约，然后在 MySQL 事务里先插订单、再条件扣库存，数据库提交后把 Redis 状态推进到 SUCCESS。MySQL 是正式订单事实，Redis 保存准入和过程证据；遇到不确定结果时保留现场、重试或按事实对账，只有证据充分时才补偿，所有权异常则根据证据进入重试、延后检查或隔离，绝不盲目恢复库存。
+秒杀链路解决突发流量下的限量抢购，并把低延迟资格判断与数据库正式落单拆开。最值得讲的设计是：每份资格精确归属于一个 orderId，失败后也只有在所有权和数据库事实都明确时才恢复快速库存。
 
-### 2.2 完整版
+### 2.2 30～60 秒面试概括版
 
-#### 业务场景与要解决的问题
+> 秒杀同时面对突发流量、重复请求，以及 Redis 预占后如何形成 MySQL 正式订单的问题。我把它拆成同步准入和异步落单两段：入口先做活动、用户和可信来源的流量保护，通过后生成贯穿全链路的订单号；准入脚本原子检查活动、库存和重复购买，并留下精确预约与 PROCESSING，只有成功后事务消息才可消费。消费端再次核对预约，再由 MySQL 唯一约束和条件扣库存最终仲裁。数据库提交后才标 SUCCESS。网络或数据库结果不确定时不立即恢复库存；只有能证明订单未成立且预约仍属当前订单时才补偿，所有权冲突则暂停并隔离。
 
-秒杀同时有三个压力：大量请求会在很短时间进入系统；同一用户可能重复提交；Redis 适合快速预占，但正式订单和库存最终还要落到 MySQL。最危险的不是一次明确的“库存不足”，而是系统在 Redis、消息队列和数据库之间中断后，不知道这笔请求究竟做到哪一步。
+### 2.3 2～3 分钟完整口述版
 
-所以这条链要同时守住四件事：同一用户对同一张券最多一单；数据库库存不能减成负数；只有真正拥有当前预约的消息才能写库；只有能够证明正式订单没有成立时才允许恢复 Redis 库存。
+> 秒杀同时有突发流量、重复请求和跨存储一致性三个难点。Redis 适合快速挡流量和预占资格，但正式订单与数据库库存最终还要落到 MySQL。最危险的现场不是明确“库存不足”，而是系统在 Redis、Broker 和数据库之间中断后，不知道请求到底执行到哪一步。
+>
+> 我的方案分成入口保护、资格预占和正式落单三层。入口按活动、用户和可信 IP 做固定窗口保护。通过后才生成 orderId，它会贯穿 HTTP 响应、Redis 状态、MQ 消息和 MySQL 行。生产者先发 half message，本地事务回调再执行 Redis 准入脚本；脚本在第一次写操作前检查活动、时间、库存和重复购买，通过后一次性扣快速库存、写精确预约、PROCESSING 与待检查索引。
+>
+> 消费端不会看到消息就直接扣数据库库存。它先取得用户维度的锁，再检查状态中的用户、券、订单号和预约完全匹配。MySQL 事务先插订单，再执行 stock 大于零的条件更新。先插订单让重复消息在再次扣库存前被主键或一人一券约束识别；用户锁只减少竞争，数据库约束才是最终边界。
+>
+> 事务消息缩小了“Redis 已预占但普通消息丢失”的窗口，却没有把 Redis、MQ 和 MySQL 变成一个全局事务。所以 Broker 仍会回查，Consumer 仍会重试，状态查询和可选 Reconciler 也要按事实修复。PROCESSING 只表示 Redis 已接受预约但尚未确认 Redis 终态；此时 MySQL 可能还没有订单，也可能订单已经提交而 markSuccess 失败。
+>
+> 明确库存不足或用户—券冲突时，数据库事务已经回滚，Consumer 会先暂停新准入，再按精确预约立即补偿。orderId 已属于其他订单则是所有权冲突，只能隔离，不能自动补偿。数据库查询失败、响应超时或状态缺失都不等于订单不存在。当前定时对账、对账自动补偿和启动回填默认关闭，Redis 全量丢失也无法从 MySQL 重建全部预约与隔离证据，所以我会把它描述为“有受控恢复路径”，而不是自动最终收敛。
 
-#### 整体方案
+### 2.4 端到端主链路
 
-我把正常链路分成三层，而不是把所有工作都塞在同步请求里：
+1. 接口接收 voucherId；用户身份来自消费者会话，客户端 IP 按可信代理规则解析。
+2. 流量保护同时检查活动、用户和 IP 三类固定窗口；全部通过后才继续。
+3. 系统预先生成 orderId。它只是跨阶段关联标识，此时还没有数据库订单。
+4. 生产者把携带 userId、voucherId、orderId 的 half message 交给 Broker。
+5. 本地事务执行 Redis 准入脚本，校验活动元数据、时间、快速库存和重复购买。
+6. 准入成功后，脚本原子扣快速库存，写精确预约、PROCESSING 状态与待检查索引；Broker 随后提交消息。
+7. Consumer 取得用户锁，并再次确认隔离状态、三个归属 ID 和精确预约。
+8. MySQL 事务先插正式订单，再以 stock 大于零为条件扣减数据库库存。
+9. 数据库提交后，成功脚本把 exact PROCESSING 迁移为 SUCCESS，移出待检查索引并保留预约证据。
+10. WebSocket 只尽力提示客户端刷新；客户端可使用 orderId 查询当前结果。
 
-~~~text
-入口保护
-活动、用户、IP 三维限流
-        ↓
-资格预占
-全局订单号 + MQ half message + Redis 原子预约
-        ↓
-正式落单
-Consumer 核对所有权 + MySQL 事务 + Redis 终态
+### 2.5 核心机制与设计取舍
 
-不确定结果 → 事务回查 / MQ 重试 / 状态查询 / 可选对账
-所有权异常 → 重试 / 延后检查 / 已确认后隔离，不做猜测性补偿
-~~~
+#### 机制一：三维入口流量保护
 
-Controller 接收秒杀券 ID，并按照可信代理规则解析客户端 IP；用户 ID 来自已恢复的登录上下文。通过流量保护后才生成 orderId。这个 ID 会同时出现在 Redis 状态、MQ 消息、MySQL 订单和结果查询中，让一次尚未落库的请求也有稳定身份。
-
-#### 核心实现与技术亮点
-
-**第一层是三维流量保护。** 活动维度限制整个热点入口，用户维度限制单个账号反复重试，IP 维度限制同一网络来源的集中请求。三个维度由一次 Lua 原子判断和自增，时间使用 Redis 服务端时间，使多个应用实例采用同一窗口基准。任一维度超限时，三个计数都不增加；全部通过后才统一计数。当前是固定窗口，旧 bucket 的 TTL 设为两倍窗口再加一秒，只是清理余量，并不会把它变成滑动窗口。
-
-**第二层是事务消息与 Redis 预约。** 系统先把消费者不可见的 half message 交给 Broker，再在本地事务回调中执行 Redis Lua。Lua 在产生副作用前检查活动元数据、活动状态和时间、快速库存、旧版已购标记以及精确预约；通过后一次性完成库存预占、已购标记、userId 到 orderId 的预约、PROCESSING 状态和待检查索引。
-
-这六类 Redis 对象承担的角色不同：
-
-| 对象 | 作用 |
+| 问题 | 回答 |
 | --- | --- |
-| 快速库存 | 在高并发入口预占有限名额 |
-| 旧版已购集合 | 兼容已有的一人一券标记 |
-| 活动元数据 | 在写入前判断状态和起止时间 |
-| 精确预约 | 证明当前用户的资格属于哪个 orderId |
-| 订单状态 | 保存三个所有权 ID 和 PROCESSING / SUCCESS / FAILED |
-| 待检查索引 | 用 ZSET 按下一次检查时间找到未决订单 |
+| 解决什么具体问题 | 在订单号、消息和库存预占之前限制热点活动及异常重试 |
+| 防止什么竞态或故障 | 多实例采用不同本机时间；一个维度已经计数、另一维度才发现超限 |
+| 为什么更直接的方案不够 | 只限活动会让单用户或单来源反复占用入口；应用本地计数无法在多实例间共享 |
+| 本身不能解决什么 | 固定窗口边界仍可能突发；阈值不是容量证明，也不负责一人一券 |
 
-PROCESSING 表示“Redis 已经预占，MySQL 还没有确认正式订单”，不是“用户还没有支付”。状态暂时不过期，用来保留故障现场；ZSET 只是到期检查索引，不代表到点就能直接释放库存。
+脚本使用 Redis TIME 作为共同时间基准。活动、用户和 IP 三个计数只有在全部通过时才一起增加；被拒请求不改变任何一个计数。IP 以摘要进入 key，只有直连来源属于可信代理时才采信 X-Real-IP 或 X-Forwarded-For。无法解析的来源会落到同一个 unknown 桶；代理链的头部清洗仍是部署责任。
 
-**第三层是消费端的数据库最终仲裁。** Consumer 先校验消息，按用户取得分布式锁，再用只读 Lua 确认隔离状态、PROCESSING 状态、精确预约和三个 ID。只有完全匹配的 PROCESSING 才进入 MySQL 事务。事务先插入订单，再执行库存大于零的条件更新；如果库存更新失败，订单插入一起回滚。
+旧窗口 key 的 TTL 是两倍窗口再加一秒，只提供清理余量，不会把固定窗口变成滑动窗口。请求一旦通过流量保护，后续准入或 MQ 失败也不会退还计数，因为该计数描述入口请求量，不是库存或用户权益。
 
-先插订单的好处是重复消息能在再次扣库存前被数据库约束识别。已存在订单与消息三个 ID 完全一致，是同一消息重放，直接幂等返回；同一用户和券对应另一 orderId，或者当前 orderId 已属于其他用户或券，则必须按不同风险分类，不能统称“重复下单”。
+#### 机制二：提前生成业务订单号
 
-#### 为什么这样设计
-
-流量保护放在生成订单号和预占库存之前，是为了让明显无效请求不消耗核心资源。固定窗口实现简单、Redis 操作少，适合入口保护；它在窗口交界处仍可能出现突发，因此默认阈值只是配置，不是容量结论。
-
-事务消息解决的是“Redis 已经接受资格，但普通 MQ 消息没能发出去”的崩溃窗口。只有 Redis 留下完整预约，half message 才能变得可消费；Redis 明确拒绝则丢弃消息；结果未知则由 Broker 后续回查。它没有把 Redis、MQ 和 MySQL 变成全局事务，所以后面仍需要消费幂等、数据库约束和恢复机制。
-
-预约必须精确到 orderId。只记录“用户买过这张券”只能证明历史事实，无法证明一条携带新订单号的异常消息是不是原请求。精确预约与状态中的三个 ID 一起构成消息所有权证据，也为成功确认和补偿限定了精确目标。
-
-数据库继续保留订单主键、一人一券约束和条件扣库存，是因为 MQ 可能重复投递，Redis 也不能代替正式事实仲裁。分布式锁用于减少同一用户并发，不是最终正确性的唯一基础。
-
-#### 异常、一致性与当前边界
-
-Redis Lua 明确返回库存不足、重复购买、活动未开始、活动结束或暂停、活动元数据异常时，拒绝发生在首次写入前，可以直接回滚 half message，本次没有库存需要恢复。Lua 执行抛错或结果不确定时不能当失败，因为可能是执行成功但响应丢失。Broker 回查时，已隔离、预约缺失或不匹配、状态所有权不匹配以及 FAILED 都返回 ROLLBACK；精确 PROCESSING 或 SUCCESS 返回 COMMIT；状态查询无结果、status 缺失、未知状态或 Redis 异常才继续 UNKNOWN。
-
-Consumer 遇到暂时数据库异常会保留 PROCESSING 并让 MQ 重试。“数据库查询失败”绝不等于“订单不存在”。如果 MySQL 已经提交、Redis 的 markSuccess 暂时失败，正式订单仍然成立，状态接口可以按 MySQL 返回成功，后续重放或可选对账会再次尝试修复 Redis；Redis 继续不可用或预约损坏时修复仍可能失败，但绝不能因此补库存。
-
-只有能证明当前精确预约应该撤销时才补偿。Consumer 已明确分类出的数据库库存不足或同用户同券冲突，可以暂停新准入后精确补偿；对账中的长期超时还要再次确认 MySQL 事实，并受独立补偿开关控制。数据库确认 orderId 已属于其他订单时，Consumer 会暂停并隔离；Redis 校验阶段发现所有权不匹配时先作为污染消息走 MQ 重试和死信，对账也只有在可信用户锁内确认冲突后才隔离。合法 orderId 暂时无法解析用户时则保留并延后检查。
-
-数据库提交后，成功脚本会再次确认预约，把 PROCESSING 改成 SUCCESS，移出待检查索引并给终态设置保留时间；成功 reservation 继续保留为归属证据。WebSocket 只提示客户端刷新，失败不会回滚订单。HTTP 返回 orderId 只表示请求已受理并留下可查询状态，不表示 MySQL 订单已经同步创建。
-
-当前实现边界：
-
-| 状态 | 内容 |
+| 问题 | 回答 |
 | --- | --- |
-| 已实现 | 可信 IP、三维限流、事务消息、Redis 原子预约、精确 reservation、事务回查、消费幂等、数据库约束、状态查询、成功迁移、补偿与隔离代码路径 |
-| 默认开启 | 秒杀入口流量保护 |
-| 已实现但默认关闭 | 定时对账、对账中的自动补偿、启动历史状态回填 |
-| 未实现 / 不能声称 | 支付超时取消、MQ exactly-once、全局强事务、WebSocket 必达、生产容量或 SLA |
+| 解决什么具体问题 | 在异步落库前就为本次受理建立稳定关联号 |
+| 防止什么竞态或故障 | HTTP 已返回、消息和 Redis 状态却无法与后续数据库行关联 |
+| 为什么更直接的方案不够 | 等数据库自增 ID 会让同步响应依赖异步落库完成 |
+| 本身不能解决什么 | ID 只证明一次请求有标识，不证明订单已经成立；生成过程仍依赖 Redis 日序列 |
 
-### 2.3 面试官最可能追问的 5 个问题
+orderId 由应用时间戳和 Redis 日序列组成。HTTP 返回十进制字符串，避免 JavaScript 对 64 位整数的精度损失。客户端由此获得可查询关联号；尤其在生产异常恢复分支中，只看到状态 Hash 不能一概证明 reservation 完整、Broker 已提交或 MySQL 已落单。
 
-1. **为什么不用“Redis 扣库存后发送普通消息”？**
-   - 回答要点：两步之间存在进程崩溃窗口；事务消息先保存不可见消息，再由 Redis 预占结果决定提交或回滚；后续 MySQL 仍靠幂等和恢复，它不是全局事务。
+#### 机制三：事务消息与精确预约
 
-2. **为什么预约一定要精确到 orderId？**
-   - 回答要点：已购集合只能证明用户过去买过，不能证明当前消息的所有权；用户、券相同但订单号不同的旧消息不能被错误提交；精确预约同时服务回查、消费校验和补偿。
-
-3. **怎样防止超卖和重复下单？**
-   - 回答要点：Redis 原子预占减少数据库竞争；MySQL 条件更新阻止库存减成负数；一人一券和订单主键约束最终防重；相同消息重放在再次扣库存前收敛。准确说“由多层边界防护”，不要夸成绝对不会出现任何异常。
-
-4. **MySQL 成功但 Redis 状态没改成功怎么办？**
-   - 回答要点：MySQL 正式订单优先；查询可按数据库事实返回成功；MQ 重放或可选对账会再次尝试修复 Redis，但不承诺一定成功；不能恢复库存，也不能因为 WebSocket 没通知就判失败。
-
-5. **为什么看到失败不能立即补库存？**
-   - 回答要点：网络或数据库异常不能证明订单不存在；必须同时确认预约归属、数据库没有对应订单且补偿只执行一次；证据不足保留 PROCESSING，污染消息先重试，只有确认后的高风险冲突才隔离；对账补偿当前默认关闭。
-
-### 2.4 详细技术链路：从 HTTP 请求到最终状态（保留原复习层）
-
-#### 请求入口、身份和返回契约
-
-秒杀入口接收的是 voucherId，不是 orderId。登录拦截器先恢复消费者身份，Controller 按可信代理规则解析客户端 IP，只把 voucherId 与 clientIp 交给 Service；userId 由 Service 从 UserHolder 取得，orderId 要在流量保护通过后才生成。
-
-只有直连地址来自配置的可信代理时才采信转发头：优先使用合法的 X-Real-IP，否则使用 X-Forwarded-For 第一项，最后才回到直连地址。这样客户端不能简单伪造转发头绕过 IP 维度限制。
-
-成功返回的 orderId 使用十进制字符串，避免 64 位整数在 JavaScript 客户端丢失精度。几类结果的传输语义不同：
-
-| 结果 | 当前接口语义 |
+| 问题 | 回答 |
 | --- | --- |
-| 未登录 | HTTP 401 |
-| TrafficGuard 超限 | HTTP 429 |
-| 库存不足、重复下单、未开始、已结束或暂停 | 当前为 HTTP 200 中的业务失败结果 |
-| 活动元数据、ID、MQ 或 Redis 不可用且无法恢复 | HTTP 503 |
-| 返回 orderId | 请求已受理，不表示 MySQL 已同步创建订单 |
+| 解决什么具体问题 | 缩小 Redis 已接受资格、普通消息尚未可靠交给 Broker 的异常窗口 |
+| 防止什么竞态或故障 | 应用在预占与发送之间退出；旧消息借用“用户买过”记录写入另一订单号 |
+| 为什么更直接的方案不够 | Redis 扣库存后发送普通消息没有 Broker 回查依据；已购 Set 只证明历史，不能证明当前 orderId 所有权 |
+| 本身不能解决什么 | 它不是 Redis、MQ、MySQL 的全局事务，也无法在 Redis 全量丢失后恢复预约 |
 
-#### TrafficGuard 的完整固定窗口协议
+准入脚本维护快速库存、legacy 已购 Set、活动 metadata、userId 到 exact orderId 的 reservation、包含三个归属 ID 的状态 Hash，以及按下次检查时间排序的 PROCESSING ZSET。不同对象分别解决入口容量、历史兼容、活动规则、消息所有权、过程判断与扫描索引，不能合并解释成一份缓存。
 
-流量保护围绕同一 voucherId 构造三个前缀：
+#### 机制四：数据库事务与最终约束
 
-- 活动维度；
-- voucherId 与 userId 维度；
-- voucherId 与客户端 IP 摘要维度，Redis key 中不直接暴露原始 IP。
-
-三个前缀共享同一券 ID 的 Redis hash tag，Lua 再追加当前时间 bucket。脚本接收四个参数：窗口毫秒数、活动上限、用户上限、IP 上限。
-
-完整判断顺序是：
-
-1. 用 Redis TIME 取得统一服务端时间；
-2. 计算当前固定窗口 bucket；
-3. 读取三个 bucket key 的计数；
-4. 依次判断活动、用户和 IP 是否达到上限；
-5. 任一超限立即返回，三个计数都不改变；
-6. 全部通过才统一自增，并设置两倍窗口加一秒的 TTL。
-
-TrafficGuard 的返回值是：
-
-| 返回值 | 含义 | 动作 |
-| --- | --- | --- |
-| 0 | 三个维度都通过 | 继续生成 orderId |
-| 1 | 活动维度超限 | HTTP 429 |
-| 2 | 用户维度超限 | HTTP 429 |
-| 3 | IP 维度超限 | HTTP 429 |
-| null、异常或其他值 | 无法确认流控结果 | 失败关闭，HTTP 503 |
-
-当前默认窗口为 1 秒，活动、用户、IP 上限分别是 300、2、100。它们只是配置默认值，不是压测容量或生产 SLA。固定窗口在边界可能出现突发；较长 TTL 只负责回收旧 bucket，不会消除这个特性。
-
-被挡住的请求不会生成订单号、发送消息或触碰库存。已经通过流控、但后续失败的请求也不会回退流控计数，因为计数记录的是入口请求量，不是用户权益。
-
-#### orderId、half message 与 Redis admission
-
-RedisIdWorker 用应用时间戳和 Redis 日序列组合 64 位 ID。它只生成业务关联标识，不创建数据库订单。消息载荷固定包含 voucherId、userId 与 orderId。
-
-生产者先向 Broker 发送消费者不可见的 half message；Broker 接收成功后回调本地事务。当前本地事务是 Redis admission Lua，不是 MySQL 下单事务。Lua 使用六类 Redis 对象：
-
-| Redis 对象 | 准确角色 |
+| 问题 | 回答 |
 | --- | --- |
-| 快速库存 String | Redis 入口库存，不是 MySQL 最终库存 |
-| legacy 已购 Set | 兼容历史数据，当前仍检查和写入 |
-| 活动 metadata Hash | 保存 status、beginAt、endAt |
-| reservation Hash | userId 到 exact orderId |
-| 单订单状态 Hash | 保存状态和三个所有权字段 |
-| 全局 PROCESSING ZSET | member 是 orderId，score 是下一次检查时间 |
+| 解决什么具体问题 | 形成正式订单，并对重复与库存做最终仲裁 |
+| 防止什么竞态或故障 | MQ 重投再次扣库存；Redis 快速库存与数据库库存不一致；同用户同券并发落单 |
+| 为什么更直接的方案不够 | 只靠用户分布式锁不能覆盖重启、锁服务异常、消息重投或其他写入口 |
+| 本身不能解决什么 | MySQL 提交后不能自动更新 Redis 状态或发送 WebSocket |
 
-Lua 的四个参数是 userId、voucherId、orderId 与 staleAfterSeconds。脚本先校验 stale 参数和活动 metadata，再要求活动为 ACTIVE，并用 Redis TIME 判断开始和结束时间；随后检查快速库存、legacy Set 和 exact reservation。所有 guard 都通过后才开始写入。
+先插订单再条件扣库存，使主键或用户—券唯一冲突在库存更新前暴露。库存更新要求 stock 大于零；失败会让订单插入随同一事务回滚。DuplicateKey 之后仍需读取现有行，区分 exact replay、用户—券冲突和 orderId 归属冲突。
 
-成功时原子完成：
+#### 机制五：按证据对账、精确补偿与隔离
 
-1. Redis 快速库存减一；
-2. legacy Set 加入 userId；
-3. reservation 写入 userId 到 orderId；
-4. 状态 Hash 写入 PROCESSING、三个所有权 ID、创建/更新时间和初始对账次数；
-5. PERSIST 状态 Hash，使未决现场暂时没有短 TTL；
-6. ZSET 写入 orderId，score 为 Redis 当前时间加 staleAfter。
-
-64 位 orderId 在 Lua 中保持十进制字符串，不能转成可能丢精度的 Lua number。ZSET score 是首次检查时间，不是支付截止时间。
-
-admission 的完整返回和 Broker 决策是：
-
-| Lua 返回 | 业务结果 | 本地事务状态 | HTTP 业务结果 |
-| --- | --- | --- | --- |
-| 0 | 预约成功 | COMMIT | 返回 orderId |
-| 1 | Redis 快速库存不足 | ROLLBACK | 库存不足 |
-| 2 | legacy Set 或 reservation 已存在 | ROLLBACK | 重复下单 |
-| 3 | 活动未开始 | ROLLBACK | 活动未开始 |
-| 4 | 活动已结束、暂停或非 ACTIVE | ROLLBACK | 活动结束或暂停 |
-| 5 | metadata 或 stale 参数非法 | ROLLBACK | HTTP 503 |
-| null、异常或未知值 | 无法确认 | UNKNOWN | 尝试状态恢复，否则 HTTP 503 |
-
-首次 admission 的 1～5 都发生在第一次写操作之前，所以本次不需要恢复库存。这个解释不能套到 transaction check 的 ROLLBACK；回查回滚还可能表示隔离、预约不匹配或预约此前已经补偿。
-
-sendMessageInTransaction 返回异常或生产者结果为 -1 时，Service 不会立刻断言失败，而会读取当前 orderId 的状态 Hash。如果三个 ID 完整匹配且状态为 PROCESSING 或 SUCCESS，仍可返回原 orderId；否则返回 503。这个 HTTP 恢复分支主要检查状态 Hash，不等同于 Broker 的完整 reservation 回查。
-
-#### transaction check 的精确决策
-
-UNKNOWN 由 Broker 在之后调用 transaction check，不是 HTTP Service 当场主动回查。决策顺序是：
-
-1. 原消息无法解析或三个 ID 缺失：ROLLBACK；
-2. quarantine 中存在 orderId：ROLLBACK；
-3. reservation 不存在，或不等于消息 orderId：ROLLBACK；
-4. 状态不存在、结果结构异常或 status 缺失：UNKNOWN；
-5. status 已存在，但所有权字段缺失或三个 ID 不匹配：ROLLBACK；
-6. 所有权精确匹配且为 PROCESSING 或 SUCCESS：COMMIT；
-7. 精确 FAILED：ROLLBACK；
-8. 其他未知状态：UNKNOWN；
-9. Redis 查询异常：UNKNOWN。
-
-这里宁可在状态缺失时继续 UNKNOWN，也不能猜测 Lua 没有执行；但 reservation 已明确不存在或不匹配时，消息没有资格所有权，可以回滚。
-
-#### Consumer 前置校验和 MySQL 落单
-
-消息为空、任一 ID 缺失、用户锁依赖异常或未取得锁时，Consumer 都抛异常让 MQ 重试，不直接丢弃。Consumer 与 reconciler 共用用户维度的业务锁，使同一用户的落单与对账尽量串行。
-
-只读 reservation 校验 Lua 返回五种决策：
-
-| Lua 值 | 决策 | 含义 | Consumer 动作 |
-| --- | --- | --- | --- |
-| 0 | RETRYABLE_STATE_MISSING | 状态缺失、所有权字段不完整，或状态值未知 | 抛错重试 |
-| 1 | PROCESS | exact PROCESSING 且 reservation 匹配 | 进入 MySQL |
-| 2 | ALREADY_SUCCESS | 已是 exact SUCCESS | 不访问 MySQL，ACK |
-| 3 | ALREADY_FAILED | 已是 exact FAILED | 不访问 MySQL，ACK |
-| 4 | POISONED | 已隔离、完整字段不匹配或 PROCESSING reservation 不匹配 | 抛错，进入 MQ retry / DLQ 路径 |
-
-字段缺失或状态值未知表示证据暂时无法确认；字段完整但所有权值不匹配才是污染消息。Consumer 遇到 POISONED 不会主动写 quarantine。
-
-MySQL 事务执行顺序是：
-
-1. 尝试插入正式订单；
-2. 执行 stock = stock - 1 且 stock > 0 的条件更新；
-3. 条件更新影响零行时抛库存耗尽异常；
-4. 两步在同一个事务中，库存失败会回滚订单插入。
-
-先插订单使重复消息先触发数据库约束，不会在识别重放前再次扣库存。DuplicateKey 之后必须读取现有事实并分类：
-
-| 数据库现场 | 分类 | 后续动作 |
-| --- | --- | --- |
-| 相同 orderId，userId 和 voucherId 也相同 | exact replay | 幂等返回，不再次扣库存，随后仍尝试 markSuccess |
-| 相同 userId 和 voucherId 已有另一 orderId | reservation conflict | 暂停活动，精确补偿当前预约 |
-| 当前 orderId 已属于其他 userId 或 voucherId | orderId ownership conflict | 暂停活动并 quarantine，不自动补偿，继续重试 / DLQ |
-| 其他数据库或网络错误 | transient failure | 事务回滚，让 MQ 重试 |
-
-数据库最终边界包括订单主键、userId 与 voucherId 的唯一约束，以及库存大于零的条件更新。用户分布式锁只能减少并发，不能替代这些约束。
-
-#### markSuccess、状态查询和 WebSocket
-
-MySQL 提交后，markSuccess Lua 会再次确认 reservation 仍指向当前 orderId，并核对状态中的三个 ID：
-
-- PROCESSING 精确匹配时改为 SUCCESS，更新时间、移除失败原因、移出 PROCESSING ZSET，并为状态 Hash 设置 7 天 TTL；
-- exact SUCCESS 重放时幂等清理 ZSET，并刷新状态 TTL；
-- reservation 不匹配或状态所有权不匹配时返回失败；
-- 成功 reservation 不删除，继续作为归属证据。
-
-若 MySQL 已提交但 markSuccess 失败，Consumer 会抛异常交给 MQ 重放；状态查询在 Redis 仍为 PROCESSING 且 MySQL 有 exact order 时也会再次尝试修复；reconciler 同样可以再次尝试。即使 Redis 继续不可用或预约损坏，owner 状态查询仍可以依据 MySQL 返回 SUCCESS，但不能承诺 Redis 一定修好，更不能恢复库存。
-
-状态接口按“先保护所有权，再按事实降级”的顺序读取：
-
-1. 先读取 Redis 状态；如果其中的 userId 不是当前用户，直接拒绝，不再用数据库探测订单；
-2. Redis 为 PROCESSING 时，按 orderId 查询当前用户拥有的 MySQL 订单，且 voucherId 也一致才返回 SUCCESS，并尽力调用 markSuccess 修复 Redis；
-3. 其他合法 Redis 状态直接返回；
-4. Redis 状态缺失或 Redis 访问异常时，才按 `orderId + 当前 userId` 回查 MySQL；
-5. MySQL 已有 owner 订单就返回 SUCCESS，但不会凭空重建缺失的 Redis reservation 和状态；
-6. 两边都没有事实时，Redis 异常返回“状态暂不可用”，正常 MISS 返回“不存在或状态已过期”。
-
-这些失败当前通过 `Result.fail` 表达，通常仍是 HTTP 200；它与提交接口对限流返回 429、对基础设施不确定返回 503 的 HTTP 语义不同。
-
-WebSocket 只在终态后尽力通知。通知异常只记录日志，不回滚数据库或 Redis 状态，也不证明用户在线、收到或读过。状态接口才是查询兜底。
-
-#### 精确补偿和 Consumer 永久失败
-
-补偿 Lua 要求：orderId 不在 quarantine，exact reservation 仍存在，状态仍是完全匹配的 PROCESSING；所有检查先于第一次写操作。首次成功补偿会：
-
-1. Redis 快速库存加一；
-2. 删除 exact reservation；
-3. 删除 legacy Set 中的用户；
-4. 状态改为 FAILED 并记录原因；
-5. 移出 PROCESSING ZSET；
-6. 为终态设置保留 TTL。
-
-| 补偿返回 | 含义 |
+| 问题 | 回答 |
 | --- | --- |
-| 1 | 本次完成补偿 |
-| 2 | 已经是同一 exact FAILED，视为幂等成功，不再加库存 |
-| 0 | quarantine、reservation 或状态不匹配，禁止补偿 |
+| 解决什么具体问题 | 让长期 PROCESSING 根据数据库事实继续推进，同时防止错误回库存 |
+| 防止什么竞态或故障 | 数据库已提交却因 Redis 未标成功而补偿；重复补偿多加库存；对账与 Consumer 同时处理一名用户 |
+| 为什么更直接的方案不够 | “超时就失败”把未知当永久失败；只看状态而不看 reservation 无法确认被补偿资源属于谁 |
+| 本身不能解决什么 | 对账不重发 MQ；默认关闭；所有权冲突需要隔离或人工判断；Redis 全量丢失后证据不足 |
 
-Consumer 的明确永久失败分支还要区分：
+Consumer 与 Reconciler 共用用户维度锁。补偿要求未隔离、reservation 仍指向当前 orderId、状态仍为三个 ID 完全匹配的 PROCESSING。orderId 归属冲突进入 quarantine；quarantine 是隔离区，不是新的业务终态。
 
-- DB_STOCK_EXHAUSTED：MySQL 插入已回滚，先暂停活动，再立即 exact compensate，成功后 ACK；
-- DB_ORDER_CONFLICT：同样暂停并立即精确补偿；
-- DB_ORDER_ID_CONFLICT：暂停并 quarantine，不补偿，继续抛错进入 retry / DLQ；
-- 补偿或隔离本身失败：继续抛异常，由 MQ 重试。
+### 2.6 异常分类与状态收敛
 
-前两类 Consumer 即时补偿不受 reconciler 补偿开关控制；默认关闭的是定时对账中的破坏性补偿。
+| 异常现场 | 当前能够确认的事实 | 处理方式 | 是否重试 | 是否允许补偿 |
+| --- | --- | --- | --- | --- |
+| 流量维度超限 | 只知道入口预算已满，尚未生成 orderId | 返回 429 | 窗口后可重试 | 否 |
+| 准入明确库存不足、重复、未开始或非 ACTIVE | 守卫在首次写操作前拒绝，本次没有预占 | 回滚 half message 并返回业务拒绝 | 条件变化前通常无意义 | 否 |
+| 准入元数据或参数非法 | 无法安全执行准入，且脚本未写入 | 回滚 half message，当前返回 503 | 修复数据后 | 否 |
+| 本地事务回调中的 Lua 抛错、返回空值或未知值 | 回调无法确认准入结果 | Producer 向 Broker 返回 UNKNOWN，等待事务回查 | 是 | 否 |
+| sendMessageInTransaction 调用抛错或 Producer 结果非法 | Broker 可能尚未收到 half message，也可能已收到但调用方没有拿到可信结果 | HTTP 只按 exact 状态 Hash 尝试恢复，无法恢复时返回 503；不假定 Broker 已进入 UNKNOWN | 客户端可按业务语义重试或查询 | 否 |
+| Broker 回查发现 reservation 缺失、不匹配、隔离、归属冲突或 FAILED | 消息没有当前提交资格 | ROLLBACK | 通常否 | 否 |
+| Broker 回查状态缺失、status 缺失、未知或 Redis 异常 | 暂时不能确认本地事务结果 | 返回 UNKNOWN | 是 | 否 |
+| Consumer 消息缺字段、用户锁忙或数据库暂时异常 | 没有确定的永久失败事实 | 抛错交给 MQ 重投 | 是 | 否 |
+| 消费校验状态缺失、字段不完整或未知 | 所有权证据暂时不足 | 保留现场并重投 | 是 | 否 |
+| 消费校验完整归属不匹配或已隔离 | 当前消息是 POISONED，不具备 exact 所有权 | Consumer 抛错，进入 retry / DLQ；本身不新建隔离 | 是 | 否 |
+| 已是同一归属的 SUCCESS 或 FAILED | 已有终态 | 幂等 ACK，不访问 MySQL | 否 | 否 |
+| MySQL exact order 已存在 | 同一消息重放，正式订单已成立 | 不再扣库存，继续尝试 markSuccess | 状态未收敛时是 | 否 |
+| 数据库库存耗尽 | 本次订单插入已回滚，是确认的永久失败 | 暂停活动并立即 exact compensate | 补偿失败时重试 | 是 |
+| Consumer 的 MySQL 事务确认用户—券已有另一 orderId | 本次插入已回滚，数据库已有冲突订单 | 暂停活动并立即 exact compensate | 补偿失败时重试 | 是 |
+| Reconciler 查询到 USER_VOUCHER_CONFLICT | 数据库已有另一 orderId，但当前只是对账分支 | 暂停活动；仅在对账补偿开关开启时 exact compensate，否则保留 PROCESSING | 按对账调度 | 有条件 |
+| 当前 orderId 已属于其他用户或券 | Redis 与数据库所有权冲突 | 暂停活动并 quarantine；继续 retry / DLQ | 是 | **否** |
+| MySQL 已提交，markSuccess 失败 | 正式订单已成立，Redis 终态未确认 | MQ 重放、状态查询或启用后的对账再修复 | 是 | **否** |
+| 长期 PROCESSING，数据库查询失败 | 不能证明订单不存在 | 保留并延后检查 | 是 | 否 |
+| 长期 PROCESSING，数据库明确无订单 | 已有缺单证据，但仍需期限和开关判断 | 未到最终期限继续等；超时且开关开启才补偿 | 按配置 | 有条件 |
+| 合法 orderId 暂时无法解析可信 userId | 无法取得与 Consumer 相同的用户锁 | 延后检查，不在锁外猜测性隔离 | 是 | 否 |
+| 新秒杀券的 MySQL 事务已提交，但 after-commit Redis 预热失败 | 券与数据库库存已成立，在线准入元数据尚未就绪 | 只记录错误；等待非 test 启动初始化器或人工修复 | 当前路径不自动重试 | 不得回滚已提交的券 |
+| WebSocket 通知失败 | 订单终态不受影响 | 记录日志，客户端查询状态 | 当前无持久补发 | 否 |
 
-#### PROCESSING 对账与 quarantine
+不能立即补偿的根本原因是：超时、网络异常或数据库异常只说明“现在不知道”，不说明订单不存在。MySQL 可能已经提交；此时恢复快速库存会多放进一个买家。安全补偿至少要求 exact reservation 和状态所有权仍成立、订单未隔离，并且写库侧已确认本次事务回滚或数据库长期事实不存在。
 
-当前对账配置默认值是：
+准入的 1～5 都在第一次写操作前返回，因此本次不需要恢复库存；这个结论不能套到 Broker transaction check 的 ROLLBACK。后者还可能意味着预约已经被补偿、已隔离或所有权已经冲突。
 
-| 配置 | 默认值 |
-| --- | --- |
-| reconciler enabled | false |
-| compensation enabled | false |
-| startup backfill | false |
-| initial delay | 30 秒 |
-| fixed delay | 10 秒 |
-| stale after | 2 分钟 |
-| retry delay | 1 分钟 |
-| final timeout | 15 分钟 |
-| batch size | 100 |
-| startup backfill scan count | 500 |
+### 2.7 状态、事实和不变量
 
-在线 reconciler 与启动时 PROCESSING 索引 backfill 不能在同一进程同时启用，配置校验会直接拒绝这种组合；backfill 是一次性迁移工具，不是另一套在线对账 worker。
+最终业务事实位于 MySQL：
 
-启用后，reconciler 使用 Redis TIME 从 ZSET 有界读取 due orderId，不会先删除。非法 raw member 可以在扫描阶段直接隔离；合法 orderId 如果无法解析出可信 userId，就不能取得与 Consumer 相同的业务锁，只能把检查时间后移并保留现场。
+- tb_voucher_order 保存正式订单；
+- tb_seckill_voucher.stock 保存数据库库存；
+- V2 的用户—券唯一约束和订单主键是最终防重边界。
 
-对于能够解析用户的订单，对账先取得 scheduler 仲裁锁，再取得共享用户锁，随后用 claim Lua 原子复核状态、reservation、index 与 quarantine。claim 的完整决策是：
+Redis 保存准入和恢复协议：
 
-| Lua 值 | claim 决策 | 对账动作 |
-| --- | --- | --- |
-| 1 | CLAIMED | 增加尝试次数、推迟 due score，并查询 writer MySQL |
-| 2 | NOT_DUE | 跳过，等待到期 |
-| 3 | TERMINAL | 清理或跳过终态 |
-| 4 | OWNERSHIP_MISMATCH | 在用户锁内确认后 quarantine |
-| 5 | STATE_INVALID | 在用户锁内确认后 quarantine |
-| 6 | RESERVATION_MISMATCH | 在用户锁内确认后 quarantine |
-| 7 | INDEX_MISSING | 跳过，不凭空重建索引 |
-| 8 | QUARANTINED | 跳过已隔离订单 |
-
-只有 CLAIMED 才会记录本次检查时间并进入 writer MySQL 分类：
-
-| writer DB 分类 | 对账动作 |
-| --- | --- |
-| exact order | 再次尝试 markSuccess |
-| ABSENT，尚未到最终超时 | 保持 PROCESSING，等待下轮 |
-| ABSENT，已超时但补偿关闭 | 保持 PROCESSING |
-| ABSENT，已超时且补偿开启 | exact compensate 为 FAILED |
-| user + voucher 属于另一 orderId | 先暂停活动；补偿开关开启才精确补偿，否则保留 |
-| orderId 属于其他订单 | 始终暂停并 quarantine，不自动补偿 |
-| 数据库查询异常 | 保持 PROCESSING，禁止解释成 ABSENT |
-
-reconciler 不负责重新发送 MQ，消息交付重试仍由 RocketMQ 负责。
-
-quarantine 是独立安全边界，不是 SUCCESS / FAILED 之外的新业务状态：
-
-- ZSET score 记录进入隔离的 Redis 时间，不是过期时间；
-- reason Hash 保存隔离原因；
-- 隔离会移除 PROCESSING due member，但不修改业务 status；
-- 不删除 reservation，也不恢复库存；
-- transaction check 遇到隔离返回 ROLLBACK；
-- Consumer 校验遇到隔离返回 POISONED；
-- compensation 遇到隔离会拒绝执行。
-
-状态机可以概括为：
+- 快速库存、活动元数据与 SUSPENDED 状态；
+- legacy 已购 Set、精确 reservation；
+- 订单状态 Hash、PROCESSING due ZSET；
+- quarantine 成员与原因。
 
 ~~~text
 Redis admission 成功
         ↓
     PROCESSING
-        ├─ MySQL exact order 已提交
-        │      └─ 再次尝试 markSuccess → SUCCESS
-        ├─ Consumer 明确 stock / pair 永久失败
-        │      └─ suspend + exact compensate → FAILED
-        ├─ 对账证明长期 ABSENT 且补偿开关开启
-        │      └─ exact compensate → FAILED
-        ├─ orderId 已属于其他 DB 订单
-        │      └─ suspend + quarantine，不补偿
-        ├─ 合法 orderId 但身份暂时无法解析
-        │      └─ 保留 PROCESSING，延后检查
-        └─ DB / Redis 暂时异常
-               └─ 保留现场，MQ 重试或下轮再查
+      ├─ MySQL exact order 已提交
+      │      └─ exact markSuccess → SUCCESS
+      ├─ Consumer 确认库存或用户—券永久失败
+      │      └─ suspend + exact compensate → FAILED
+      ├─ 对账确认长期无订单且授权补偿
+      │      └─ exact compensate → FAILED
+      ├─ orderId 归属冲突
+      │      └─ suspend + quarantine，状态不迁移
+      └─ 依赖异常或证据暂缺
+             └─ 保留 PROCESSING
 ~~~
 
-四个不变量始终不变：
+PROCESSING 的准确含义是“Redis 已接受预约，但 Redis 尚未确认成功或失败终态”。数据库订单可能还不存在，也可能已提交而 markSuccess 失败。它不是未支付状态。MySQL 订单表自身的 status 字段描述支付或使用生命周期，也不是这张状态机的一部分。
 
-1. 同一用户对同一张秒杀券，MySQL 最多一笔订单；
-2. 数据库库存不能减成负数；
-3. 只有持有 voucherId、userId、orderId 精确预约的消息才能写 MySQL；
-4. 只有证明预约归属且确认数据库没有相应订单时，才允许恢复 Redis 库存。
+quarantine 不属于 PROCESSING、SUCCESS、FAILED 状态机。隔离会移出 due 索引并记录原因，但不改业务 status、不删 reservation、不恢复库存；事务回查、消费与补偿都会据此停止危险动作。due ZSET 的 score 是下一次检查时间，不是支付截止时间。
+
+状态查询的实际顺序也要准确描述：
+
+1. Redis 有完整 owner 信息且不是 PROCESSING 时，接口直接按 Redis 状态返回。
+2. Redis owner 与当前用户不匹配时，拒绝访问，不再用数据库探测。
+3. Redis 是 PROCESSING 时，才查询当前用户拥有的 exact MySQL 订单，并尽力修复成功状态。
+4. Redis 缺失或异常时，按 orderId 与当前 userId 回查数据库；即使返回成功，也不会凭空重建缺失的 reservation。
+
+当前状态读取还有一个明确校验边界：SeckillOrderStateService.find() 只要求 status、userId、voucherId、orderId 四个字段非空。它没有再次确认 Hash 内的 orderId 等于当前 key 对应的请求 orderId，也没有把 status 限定在已知枚举内。因此，一个字段完整但 status 非 PROCESSING 的异常 Hash 可能在不查 MySQL 的情况下直接返回；这属于当前实现缺口，不能描述成状态记录已经过完整协议校验。
+
+PROCESSING 状态被 PERSIST，不设短 TTL；SUCCESS 和 FAILED 设置 7 天 TTL。成功后 reservation 仍保留为所有权证据。
+
+系统必须长期守住：
+
+1. 同一用户对同一张秒杀券最多一笔 MySQL 订单。
+2. 数据库库存只能在大于零时扣减，不能减成负数。
+3. 只有 exact PROCESSING 加精确预约匹配的消息才能尝试写库。
+4. 只有预约仍属当前订单且数据库确认未成立时才能恢复快速库存。
+5. 隔离订单禁止自动补偿。
+6. MySQL 已提交后，Redis 或 WebSocket 失败不能反向撤销正式订单。
+
+Redis 全量丢失是当前明确边界。启动初始化可以从数据库重建活动元数据和快速库存，并为缺失活动写 ACTIVE；它不能重建 reservation、已购 Set、订单状态、due、quarantine 和原 SUSPENDED 证据。启动回填也只能扫描仍存在的状态 Hash。当前没有自动恢复 SUSPENDED → ACTIVE 的业务流程。非 test 环境的活动初始化器会在数据库行非法、数据库读取失败或 Redis 回填失败时阻止启动；PROCESSING 启动回填遇到无法证明安全归属的 canonical 状态，也会汇总为 unsafe 并使启动失败。
+
+### 2.8 面试官最可能追问的 5 个问题
+
+1. **为什么不用 Redis 扣库存后直接发普通消息？**
+   - 两步之间存在进程退出窗口。事务消息让 Broker 先保存 half message，再按 Redis 准入结果提交、回滚或回查；MySQL 仍需要消费幂等和最终约束。
+
+2. **为什么 orderId 要提前生成，还要保存精确预约？**
+   - 提前 ID 让 HTTP、Redis、消息和数据库共用关联号；精确预约证明当前消息拥有这个 ID。已购 Set 只能证明历史，不能证明当前消息归属。
+
+3. **用户锁、Redis 库存和数据库约束分别做什么？**
+   - 用户锁减少 Consumer 与 Reconciler 的竞争；Redis 快速库存承接入口预占；数据库唯一约束和条件更新是最终仲裁。三者不能互相替代。
+
+4. **数据库已提交，但 Redis 仍是 PROCESSING 怎么办？**
+   - 不能补偿。MQ 重投会识别 exact replay 并再次标成功；状态查询和启用后的对账也会尝试修复。正式订单仍以 MySQL 为准。
+
+5. **Redis 全量丢失能自动恢复吗？**
+   - 不能。数据库可帮助恢复库存和活动基础信息，却没有精确预约、隔离和暂停证据；当前源码没有完整的无损重建闭环。
+
+### 2.9 源码、协议、配置与验证边界
+
+#### HTTP 与查询语义
+
+| 结果 | 当前接口语义 |
+| --- | --- |
+| 未登录 | HTTP 401 |
+| 三维入口流量超限 | HTTP 429 |
+| 库存不足、重复、未开始、结束或暂停 | HTTP 200 中的业务失败结果 |
+| 元数据、ID、Redis 或 MQ 不可用且无法恢复 | HTTP 503 |
+| 返回 orderId | 客户端获得可查询关联号；不能一概证明 reservation 完整、Broker 已提交或 MySQL 已落单 |
+| 状态查询失败 | 通常由统一 Result.fail 表达，不等同于提交接口的 HTTP 错误映射 |
+
+#### 关键协议返回
+
+| 协议 | 返回或决策 | 含义 |
+| --- | --- | --- |
+| TrafficGuard | 0 / 1 / 2 / 3 | 通过 / 活动超限 / 用户超限 / IP 超限；空、异常或其他值失败关闭 |
+| admission | 0 / 1 / 2 / 3 / 4 / 5 | 接受 / 库存不足 / 重复 / 未开始 / 结束或非 ACTIVE / 元数据或参数非法 |
+| Consumer reservation | 0 / 1 / 2 / 3 / 4 | 状态暂缺 / 可处理 / 已成功 / 已失败 / POISONED |
+| compensation | 1 / 2 / 0 | 本次补偿 / 已是 exact FAILED 的幂等成功 / 所有权或状态不允许 |
+
+Broker transaction check 的核心决策：
+
+| 现场 | Broker 决策 |
+| --- | --- |
+| 消息非法、已隔离、reservation 缺失或不匹配、状态 owner 不匹配、exact FAILED | ROLLBACK |
+| exact PROCESSING 或 SUCCESS | COMMIT |
+| 状态缺失、status 缺失、未知状态或 Redis 异常 | UNKNOWN |
+
+HTTP 在事务发送异常后的恢复只核对状态 Hash 中的三个 ID 与 PROCESSING 或 SUCCESS，不验证 reservation；Broker 回查才执行完整预约检查。
+
+启用 Reconciler 后，它从 due ZSET 有界读取成员而不先删除。claim 脚本的决策集中如下：
+
+| claim 值 | 含义与动作 |
+| --- | --- |
+| 1 CLAIMED | 增加尝试信息、后移 due score，再查询 writer MySQL |
+| 2 NOT_DUE | 尚未到检查时间，本轮跳过 |
+| 3 TERMINAL | 已是终态，清理或跳过 |
+| 4 / 5 / 6 | 所有权不匹配、状态非法或预约不匹配；只在共享用户锁内确认后隔离 |
+| 7 INDEX_MISSING | 跳过，不凭空重建索引 |
+| 8 QUARANTINED | 跳过已隔离订单 |
+
+扫描阶段遇到无法解析的非法原始成员可以隔离；合法 orderId 但暂时无法解析可信 userId 时，只能延后检查，因为此时无法取得与 Consumer 相同的用户锁。
+
+CLAIMED 后的数据库分类决定真正收敛动作：
+
+| writer MySQL 事实 | 对账动作 |
+| --- | --- |
+| exact order | 再次尝试 markSuccess |
+| 明确 ABSENT，尚未到 final timeout | 保持 PROCESSING，等待下轮 |
+| 明确 ABSENT，已超时但补偿关闭 | 保持 PROCESSING |
+| 明确 ABSENT，已超时且补偿开启 | exact compensate 为 FAILED |
+| 同用户—券属于另一 orderId | 暂停活动；只有补偿开关开启才补偿，否则保留 |
+| 当前 orderId 属于其他订单 | 始终暂停并 quarantine，不补偿 |
+| 数据库查询异常 | 保持 PROCESSING，禁止解释为 ABSENT |
+
+#### 默认配置
+
+| 配置 | 默认值 |
+| --- | --- |
+| 固定窗口 | 1 秒 |
+| 活动 / 用户 / IP 限额 | 300 / 2 / 100 |
+| reconciler / 对账补偿 / 启动回填 | false / false / false |
+| initial delay / fixed delay | 30 秒 / 10 秒 |
+| stale after / retry delay / final timeout | 2 分钟 / 1 分钟 / 15 分钟 |
+| batch size / backfill scan count | 100 / 500 |
+
+启动回填与在线 Reconciler 不能在同一进程同时开启。Consumer 对明确库存耗尽和用户—券冲突的即时补偿不受“对账补偿”开关控制。当前 RocketMQ 是正式消费路径；配置对象中仍保留 legacy Redis Stream 字段，但活跃业务代码没有引用，不能说成同时运行两套订单消费链。consumeFromWhere 的 FIRST_OFFSET 只影响没有消费位点的新组初始化，不表示每次重启都重放全部消息。
+
+新建秒杀券时，MySQL 主记录和库存记录先在一个事务中提交；提交后的 Redis 预热只是尽力执行。预热失败只记录日志，接口仍可能已返回创建成功，此时活动会处于“数据库已创建、在线准入元数据尚未就绪”的状态，直到进程重启时初始化器重新回填或人工修复。该 after-commit 路径不是持久待办。
+
+#### 源码索引
+
+| 阶段 | 入口 |
+| --- | --- |
+| HTTP、可信 IP 与流控 | [VoucherOrderController](../../src/main/java/com/localdeals/controller/VoucherOrderController.java)、[SeckillTrafficGuard](../../src/main/java/com/localdeals/service/SeckillTrafficGuard.java)、[流控脚本](../../src/main/resources/lua/seckill_traffic_guard.lua) |
+| ID 与生产 | [RedisIdWorker](../../src/main/java/com/localdeals/utils/RedisIdWorker.java)、[SeckillOrderProducer](../../src/main/java/com/localdeals/mq/SeckillOrderProducer.java)、[准入脚本](../../src/main/resources/lua/seckill_check.lua) |
+| 消费与 MySQL | [SeckillOrderConsumer](../../src/main/java/com/localdeals/mq/SeckillOrderConsumer.java)、[VoucherOrderServiceImpl](../../src/main/java/com/localdeals/service/impl/VoucherOrderServiceImpl.java)、[V2 约束](../../src/main/resources/db/migration/V2__voucher_order_constraints.sql) |
+| 状态、补偿与隔离 | [SeckillOrderStateService](../../src/main/java/com/localdeals/service/SeckillOrderStateService.java)、[成功脚本](../../src/main/resources/lua/seckill_mark_success.lua)、[补偿脚本](../../src/main/resources/lua/seckill_compensate.lua)、[隔离脚本](../../src/main/resources/lua/seckill_reconcile_quarantine.lua) |
+| 活动创建与 Redis 预热 | [VoucherServiceImpl](../../src/main/java/com/localdeals/service/impl/VoucherServiceImpl.java)、[Redis 初始化器](../../src/main/java/com/localdeals/init/SeckillVoucherRedisInitializer.java) |
+| 对账与启动恢复 | [SeckillOrderReconciler](../../src/main/java/com/localdeals/service/SeckillOrderReconciler.java)、[PROCESSING 回填](../../src/main/java/com/localdeals/init/SeckillProcessingIndexBackfillRunner.java) |
+| 配置 | [SeckillProperties](../../src/main/java/com/localdeals/config/SeckillProperties.java)、[application.yaml](../../src/main/resources/application.yaml) |
+| 详细底稿 | [03. 秒杀订单链路](03-seckill-order-chain.md) |
+
+测试源码分别覆盖脚本协议、MySQL 回滚与冲突、部分真实 Redis 行为、生产者或 Consumer 生命周期。SeckillWithRocketMQIT 虽使用真实 Broker 和 Redis，但会替换订单服务与通知，不是 Redis → MQ → MySQL 的完整链路；SeckillOrderRetryIT 也没有证明最终进入 DLQ。本次文档重写不把这些局部测试扩大成生产消息 exactly-once、Redis 高可用、吞吐或恢复时限证明。
 
 ---
 
 ## 3. 点赞与热榜：关系是事实，聚合可追踪，榜单可重建
 
-### 3.1 概括版
+### 3.1 模块定位
 
-点赞链路我没有把“点赞关系、点赞数、排行榜”当成一份数据。用户与 Blog 的点赞关系是 MySQL 长期事实，接口用“最终应该已点赞或未点赞”的目标状态，因此重复请求不会把结果反转；关系真正变化时，在同一事务中写一条增量 Outbox，后台再批量更新博客点赞数。Redis 热榜只是从 MySQL 聚合字段生成的 top-K 读模型，读取时会确认快照完整、版本一致且没有过期，不可信就经过数据库并发保护回退 MySQL；重建则先写完整临时榜，再通过版本栅栏原子发布。
+这条链解决重复点赞、聚合计数异步更新和热榜快照并发发布三个问题。核心设计是把用户—Blog 关系、MySQL 聚合和 Redis top-K 明确分层：关系必须准确，聚合可以重放，榜单可以验证并重建。
 
-### 3.2 完整版
+### 3.2 30～60 秒面试概括版
 
-#### 业务场景与要解决的问题
+> 点赞会遇到重复点击和网络重试，聚合计数又不适合拖慢每次关系写入；热榜重建时还可能出现半成品或旧任务晚到。我把关系、聚合和排行榜分成三层：用户与 Blog 的关系是 MySQL 事实，接口表达“最终已点赞或未点赞”，避免 toggle 重放反转；关系变化时，同事务写正一或负一 Outbox，worker 再批量更新聚合并精确标记事件。Redis 只保存可重建 top-K，读取前后校验代际、数量和时效，不可信就受并发舱保护回退 MySQL；重建先写临时榜，再由 generation fence 原子发布。事务失败可重试、坏榜可重建，但永久坏 Outbox 当前没有自动隔离或 DLQ。
 
-点赞按钮很容易被重复点击，客户端超时也会重试。关系必须准确，但如果每次关系变化都同步更新聚合数和整个排行榜，写链路会被放大；如果只更新 Redis，又会把可丢的缓存误当成用户点赞事实。
+### 3.3 2～3 分钟完整口述版
 
-这条链真正需要解决三个问题：重复请求必须幂等；关系变化不能永久丢掉计数增量；读者不能看到尚未完整构建或已经过期的榜单。
+> 点赞按钮会被重复点击，客户端超时也会重试。如果接口是无条件 toggle，同一个请求执行两次会把结果翻回去；如果关系变化后再单独更新计数，应用可能在两步之间退出；如果重建热榜时直接覆盖正式 ZSET，读者还可能看到半成品或旧任务晚到的结果。
+>
+> 我的方案分成三层。tb_blog_like 保存谁赞了哪篇 Blog，是关系事实。tb_blog.liked 是用于排序的 MySQL 聚合，允许短暂滞后。Redis 热榜只保存有限 top-K，是可丢失的读模型。写接口使用 PUT 或 DELETE 表达目标状态；事务先锁定父 Blog，再插入或删除关系。只有关系恰好变化一行时，才在同一事务写一条增量 Outbox。
+>
+> 聚合 worker 先尝试 Redis 锁减少多个实例重复争抢。正常没抢到就跳过本轮；锁服务异常时仍进入数据库，由行锁和事务保证正确性。它按事件 ID 锁定有限批，校验每条增量只能是正一或负一，按 Blog ID 固定顺序聚合并做非负更新，最后精确标记本批原事件。聚合更新和 marker 同事务，所以中途失败会整批回滚。
+>
+> 热榜读取不能只看 ZSET 是否为空。元数据会记录 ready、generation、count、capacity 和 publishedAt。读前校验完整性和时效，取出成员后再核对代际与数量，避免切版时混读。合法空榜直接返回；非空榜只提供排序 ID，仍需在 DB_READ 并发舱中回 MySQL 补 Blog、作者和当前用户点赞状态。任何不可信状态都按 MISS 回退数据库。
+>
+> 重建时，builder 在查 MySQL 前先取得新 generation，写这一代的临时榜，校验数量后再通过 Lua 原子发布。临时 key 防半成品可见，generation 防旧 builder 晚到，跨实例锁只减少重复工作。当前点赞新写、聚合 worker、热榜读与刷新、旧数据回填都默认关闭；V8 切换还要求停写导入旧 Redis 身份并记录完成标记。关系可以从 MySQL 保住，但坏 Outbox 目前没有自动隔离，可能反复阻塞前部批次，这也是当前边界。
 
-#### 整体方案
+### 3.4 端到端主链路
 
-我把数据拆成三层：
+1. 客户端提交“最终已点赞”或“最终未点赞”，而不是无条件翻转。
+2. 服务从登录上下文取得 userId，并在事务中对目标 Blog 做共享锁存在性检查。
+3. “已点赞”尝试插入关系；“未点赞”按双方 ID 删除关系。
+4. 唯一键冲突或删除零行表示目标已满足；只有关系变化一行才继续。
+5. 关系变化与一条正一或负一的点赞 Outbox 在同一事务提交。
+6. worker 锁定有限批待处理事件，按 Blog ID 聚合净增量。
+7. MySQL 按固定 Blog ID 顺序更新非负聚合，并精确标记原事件已处理；两者同事务提交。
+8. 热榜 builder 从 MySQL 读取 top-K，写当前 generation 的临时榜。
+9. 发布脚本校验 generation、capacity 和成员数量，再原子替换正式榜与元数据。
+10. 读取侧校验完整快照；非空命中按顺序回库补全，不可信或映射不完整时回退 MySQL。
 
-| 层次 | 含义 | 一致性要求 |
+### 3.5 核心机制与设计取舍
+
+#### 机制一：目标状态命令与关系唯一键
+
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 让重复点赞、取消和网络重放收敛到用户声明的最终状态 |
+| 防止什么竞态或故障 | 同一 toggle 执行两次反转结果；同用户同 Blog 产生多条关系 |
+| 为什么更直接的方案不够 | 直接给 liked 加一不知道是谁点过；toggle 无法区分首次请求和重试 |
+| 本身不能解决什么 | 关系唯一键不维护聚合数，也不能让 Redis 热榜同步更新 |
+
+父 Blog 的共享锁必须存活在外层事务中，用于缩小“确认 Blog 存在后又被并发删除”的窗口；数据库外键仍是最终关系完整性约束。正常写入影响行数只允许零或一。
+
+#### 机制二：关系与增量 Outbox 同事务
+
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 在关系成立时持久留下聚合待办 |
+| 防止什么竞态或故障 | 关系已经提交，应用在单独更新计数或 after-commit 之前退出 |
+| 为什么更直接的方案不够 | 同步维护每个派生对象会放大写路径；普通回调没有可恢复待办 |
+| 本身不能解决什么 | Outbox 只保证待办入库，不保证 worker 已开启或事件能被自动隔离 |
+
+关系没有变化时不写 Outbox，避免重试产生虚假增量。关系变化但 Outbox 插入失败时，整个事务回滚。
+
+#### 机制三：有限批、固定顺序与数据库最终锁
+
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 多个 worker 安全消费事件，并减少同一 Blog 的更新次数 |
+| 防止什么竞态或故障 | 同一事件重复应用、聚合变负、不同事务反向加锁增加死锁概率 |
+| 为什么更直接的方案不够 | Redis 分布式锁会失效或不可用，不能代替 FOR UPDATE 与同事务 marker |
+| 本身不能解决什么 | 永久非法事件当前没有 DLQ 或隔离，可能让前部批次重复回滚 |
+
+worker 在 READ COMMITTED 事务中按事件 ID 升序、LIMIT、FOR UPDATE 取得待办。每条 delta 必须是正一或负一；按 Blog ID 有序聚合。净增量为零时不更新 Blog，但仍精确标记所有原事件。非零更新必须恰好影响一行且结果非负，marker 行数也必须等于选中事件数。
+
+Redis 锁正常返回“未抢到”时，本轮退出；获取锁抛异常时才降级到数据库行锁流程。二者语义不同。
+
+#### 机制四：可验证读取与受控 MySQL 回退
+
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 区分合法空榜、尚未构建、损坏和切版中的快照 |
+| 防止什么竞态或故障 | 把坏榜当空榜；把旧元数据和新成员拼成一页；缓存故障导致无界回库 |
+| 为什么更直接的方案不够 | 仅判断 ZSET 存在或设置 TTL，无法证明 generation、数量和配置一致 |
+| 本身不能解决什么 | 数据库回退仍有成本；本地并发舱不是集群总保护，也不让榜单强实时 |
+
+元数据必须满足 ready、正 generation、非负 count、当前 capacity 和有效 publishedAt。ZSET 基数要与 count 一致且不超过 top-K；成员必须是合法 Blog ID。读完后再次检查 generation 与 count。合法 ready 且 count 为零可直接返回，不进入 DB_READ；非空命中与 MISS 回退都需要数据库许可。
+
+MISS 或非空榜详情映射不完整时，当前请求直接返回 MySQL 的 liked 降序、id 降序结果。只有 refreshEnabled 开启才在当前 JVM 内异步 SingleFlight 触发重建；请求不会等待重建完成，真正构建仍需跨实例锁和 generation 仲裁。
+
+#### 机制五：临时榜与 generation fence
+
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 只发布一份构建完整且属于当前代际的热榜 |
+| 防止什么竞态或故障 | 读到构建一半的 ZSET；较慢旧 builder 覆盖更新结果 |
+| 为什么更直接的方案不够 | 直接清空并重写正式榜会暴露半成品；只用锁无法防锁过期或旧任务晚到 |
+| 本身不能解决什么 | 发布正确不代表 MySQL 聚合正确；Redis 仍可能丢失或陈旧 |
+
+builder 在加载 MySQL 前推进 generation。候选按 MySQL 的 liked 降序、id 降序读取并暂存；实际写入数量必须与候选数完全一致，否则构建失败。Blog ID 以补齐到 19 位的字符串作为成员，使 liked 同分时的 Redis 逆序与 MySQL 的 id 降序保持一致。非空榜写临时 key 并设置 TTL；空榜不创建临时 ZSET，而是直接发布 ready、count 为零的元数据。发布脚本检查自己仍是当前 generation，并核对候选数、capacity 和实际成员数。
+
+新 Blog 提交后只会尽力以 NX 方式加入已就绪榜，分数为零，并裁剪到 top-K。只有新成员最终被保留时才推进 generation；失败不影响 Blog 事实，后续全量刷新可以恢复。
+
+### 3.6 异常分类与状态收敛
+
+| 异常现场 | 当前能够确认的事实 | 处理方式 | 是否重试 | 是否允许补偿 |
+| --- | --- | --- | --- | --- |
+| 重复 PUT 或 DELETE | 目标关系已经满足 | 返回 unchanged，不写 Outbox | 可安全重放 | 不需要 |
+| Blog 不存在或关系写失败 | 关系事实未成功提交 | 事务回滚 | 修复输入或依赖后 | 不需要 |
+| writeEnabled 为 false | 点赞写入口处于维护门禁，关系没有变化 | 返回 503 | 开关恢复后可重试 | 不需要 |
+| 关系变化后 Outbox 插入失败 | 关系与待办不能一起成立 | 整个写事务回滚 | 是 | 不需要 |
+| workerEnabled 为 false 且已有 pending Outbox | 关系事实已成立，聚合待办仍在数据库 | 当前不会自动推进，需启用 worker 或人工处理 | 启用后再调度 | 不做业务补偿 |
+| worker Redis 锁忙 | 只知道别的实例可能正在处理 | 本轮跳过 | 下个调度周期 | 不需要 |
+| worker 锁服务异常 | 无法用 Redis 减少竞争 | 退回 MySQL 行锁继续 | 当前调用继续 | 不需要 |
+| delta 非正负一、聚合将为负或更新行数异常 | 本批数据不满足不变量 | 批事务回滚，事件保持 pending | 修复数据后可重试 | **不允许直接标 processed** |
+| worker 更新聚合后、marker 前失败 | 两项都没有提交 | 同一事务整体回滚 | 是 | 不需要 |
+| marker 数与选中事件数不一致 | 无法证明精确事件都完成 | 整批回滚 | 是 | 不需要 |
+| 永久坏事件反复位于待处理前部 | 无法自动安全跳过 | 当前无 DLQ 或隔离，可能持续阻塞 | 会重复遇到 | 需人工核查，不能伪造完成 |
+| 榜单未就绪、过期、元数据损坏或读中切版 | Redis 快照不可信 | 视为 MISS，在 DB_READ 内回退 MySQL | 可触发后续刷新 | 重建读模型，不是业务补偿 |
+| 热榜 ID 无法完整映射到 MySQL | 该快照已经陈旧或不完整 | 放弃整页，回退 MySQL | 后续刷新 | 不修改点赞关系 |
+| 旧 builder 晚到 | 已有更高 generation | 发布脚本拒绝并清理临时数据 | 无需重试旧代 | 不适用 |
+| Redis 榜单丢失 | 点赞关系仍在 MySQL | 回退并在开关允许时重建 | 是 | 不影响关系事实 |
+
+这条链几乎不使用“补偿”一词。写事务失败时事实整体回滚；worker 失败时待办仍在；热榜失败时重建派生读模型。直接删除坏事件或手改 ZSET 会掩盖关系、聚合与事件之间的不一致，因此必须先定位事实。
+
+### 3.7 状态、事实和不变量
+
+| 层次 | 保存位置 | 含义 |
 | --- | --- | --- |
-| 点赞关系 | 谁当前点赞了哪篇 Blog | MySQL 长期事实，写入必须准确 |
-| Blog 点赞数 | 对关系变化的 MySQL 聚合 | 允许短暂滞后，但每条增量要可追 |
-| Redis 热榜 | 基于聚合数生成的有限 top-K | 派生快照，失效可回退和重建 |
+| 点赞关系 | tb_blog_like | 用户当前是否点赞某篇 Blog 的长期事实 |
+| 历史不可归属计数 | tb_blog.legacy_liked_offset | V8 之前无法对应用户身份的点赞数 |
+| 聚合值 | tb_blog.liked | 用于排序的 MySQL 派生聚合 |
+| 聚合进度 | tb_blog_like_outbox.processed_time | 单条增量是否已被聚合事务处理 |
+| 热榜快照 | Redis ZSET 与 ready、generation、count、capacity、publishedAt | 有限 top-K 读模型与发布协议 |
 
-写请求只同步保证“关系和增量事件一起成立”；后台 worker 批量让计数收敛；读请求只接受完整、同一代且未过期的 Redis 快照，否则回退 MySQL，并在重建开关开启时异步触发重建。
+这些不是一条点赞状态机。用户关系只有“存在或不存在”；Outbox 的 pending/processed 是聚合进度；热榜 ready 与 generation 是快照协议。tb_blog.liked 也不能无条件等于关系表 COUNT。允许 Outbox 尚未处理时，目标恒等式是
 
-#### 核心实现与技术亮点
+~~~text
+tb_blog.liked + 未处理 Outbox 的 delta 之和
+  = tb_blog.legacy_liked_offset
+  + 当前 tb_blog_like 关系数
+~~~
 
-**目标状态接口。** 点赞和取消点赞分别表达“最终应该已点赞”和“最终应该未点赞”，而不是 toggle。写事务先确认 Blog 存在，并在当前事务中给父 Blog 行加共享锁，防止存在性检查后 Blog 被并发删除。点赞时插入关系，唯一键冲突表示本来就已点赞；取消时删除关系，影响零行表示本来就未点赞。只有关系恰好变化一行时才写正一或负一的 Outbox。
+当没有 pending Outbox 时，它才简化为 liked = legacy_liked_offset + 当前关系数。V8 先把旧 liked 写入 legacy_liked_offset。停写导入能够识别的旧 Redis 用户关系时，每新增一条关系就等量减少 offset，使总聚合不变；记录完成前还要求没有 pending Outbox，并保存可审计 cutover marker。
 
-**可重放的聚合 worker。** 后台任务先尝试跨实例 Redis 锁以减少争抢；没抢到锁时本轮退出，锁服务异常时仍可进入数据库，由 MySQL 行锁保证正确性。worker 在一个事务里锁定有限批未处理事件，校验增量只能为正一或负一，按 Blog ID 聚合，并按固定 ID 顺序更新计数，降低反向加锁造成的死锁。计数更新与精确事件的完成标记一起提交，任何异常整批回滚。
+系统必须长期守住：
 
-**可验证的热榜快照。** 榜单元数据包含 ready、generation、count、capacity 和 publishedAt。读之前检查是否已完整发布、数量是否合法、是否过期，读完 ZSET 后再次核对 generation 和 count，避免在切版期间拼出旧元数据与新榜单。合法的非空命中只提供排序 ID，仍在数据库读取 bulkhead 内批量补齐 Blog、作者和当前用户点赞状态；缓存未命中也在同一保护下查询 MySQL。
+1. 同一用户与同一 Blog 最多一条关系。
+2. 只有关系恰好变化时才写一条对应正一或负一事件。
+3. 聚合结果不能小于零。
+4. 聚合更新与精确原事件 processed marker 同事务。
+5. 正式热榜只能发布当前 generation 的完整、自洽快照。
+6. Redis 榜单丢失不能影响 MySQL 点赞关系。
 
-**先构建后发布。** builder 在临时 key 中写完 MySQL top-K，再由 Lua 检查 generation 和成员数量，最后原子 rename 为 live 榜并更新元数据。临时 key 隔离半成品，generation 拒绝较早启动却较晚完成的旧 builder 覆盖新版本；跨实例锁只减少重复构建，不能替代版本栅栏。
+### 3.8 面试官最可能追问的 5 个问题
 
-#### 为什么这样设计
+1. **为什么 API 表达目标状态，而不是 toggle？**
+   - toggle 在超时重试时会再次反转。PUT 与 DELETE 让重复执行收敛；唯一键冲突或删除零行表示目标已经满足。
 
-目标状态适合网络重试。toggle 连续执行两次会从未点赞变成已点赞再变回未点赞；PUT 或 DELETE 重复执行只会收敛到同一个目标。
+2. **唯一键已经防重复，为什么还需要 Outbox？**
+   - 唯一键保护用户关系；Outbox 负责让 MySQL 聚合能够在崩溃后继续更新。两者保护的事实不同。
 
-Outbox 解决的是典型双写窗口：如果先提交点赞关系，再单独更新计数或发送事件，应用可能在两步之间崩溃。关系和待办同事务保存后，聚合可以晚一点，但不会因为进程退出而彻底遗忘。
+3. **Redis worker 锁异常为什么还敢继续？**
+   - Redis 锁只减少多实例竞争。真正保证事件归属和原子提交的是 MySQL FOR UPDATE、条件更新和精确 marker。
 
-批内聚合减少同一 Blog 的 SQL 次数，固定加锁顺序降低死锁概率。Redis worker 锁是性能优化；真正保证一条事件不会被两笔事务同时提交的，是 MySQL FOR UPDATE，以及“更新计数 + 标记事件”同事务。
+4. **临时 key 和 generation 为什么都要有？**
+   - 临时 key 防半成品可见；generation 防旧任务晚到。单独一项不能解决另一个问题。
 
-榜单使用元数据而不只看 ZSET 是否为空，是为了区分“业务上确实没有 Blog”和“系统尚未构建或缓存已经损坏”。临时榜与 generation 处理的是两个不同问题：前者防半成品可见，后者防旧任务晚到。
+5. **永久坏 Outbox 会怎样？**
+   - 当前没有自动 DLQ 或隔离。批事务会反复回滚，坏事件可能阻塞前部待办；需要运维核查或后续设计隔离，不能声称已经自动收敛。
 
-#### 异常、一致性与当前边界
+### 3.9 源码、配置、迁移与验证边界
 
-关系插入或删除成功但 Outbox 写失败，整个点赞事务回滚。worker 如果在更新计数后、标记事件前失败，两者仍在同一事务中一起回滚，事件下次可以重放。异常增量、计数可能变负、更新行数或 marker 数量不一致都会让整批停止，而不是悄悄跳过。
+#### 默认配置和启用前提
 
-没有抢到 Redis worker 锁时，本轮直接退出；获取 Redis 锁本身发生异常时，才降级到 MySQL 行锁继续处理，此时数据库竞争会增加。热榜未构建、过期、元数据损坏、成员非法、前后版本不一致或 Redis 异常时，系统不会把“我不知道”伪装成空榜，而是在本地数据库 bulkhead 下回退。拿不到许可则快速失败，避免缓存故障放大为数据库雪崩。
-
-缓存未命中或榜单详情映射不完整时，只有重建开关开启才异步 single-flight 触发；当前请求不等待重建。Redis 榜单完全丢失也不会丢点赞关系，可以从 MySQL 聚合字段重建。关系提交后，点赞数与热榜允许短暂滞后，它不是强实时排行。
-
-当前实现边界：
-
-| 状态 | 内容 |
+| 配置 | 默认值或要求 |
 | --- | --- |
-| 已实现 | 目标状态接口、点赞关系唯一约束、关系与 Outbox 同事务、批量聚合与行锁、榜单完整性校验、MySQL 回退、bulkhead、临时榜和 generation 发布 |
-| 已实现但默认关闭 | 新点赞写入、点赞 Outbox worker、Redis 热榜读取、定时或异步重建、旧点赞身份回填 |
-| 启用前置条件 | 旧点赞数据需要完成受控迁移和切换检查 |
-| 未实现 / 不能声称 | 强实时点赞数、Redis 保存点赞事实、每次 MISS 必然重建、生产吞吐或缓存故障容量 |
+| 新点赞写入 / 聚合 worker | false / false |
+| 热榜 Redis 读取 / 刷新 | false / false |
+| top-K / page size | 1000 / 10 |
+| refresh initial / fixed delay | 10 秒 / 30 秒 |
+| max stale | 2 分钟 |
+| Outbox initial / fixed delay / batch | 5 秒 / 200 毫秒 / 500 |
+| processed retention | 1 天 |
+| cleanup fixed delay / batch / max batches | 1 秒 / 2000 / 5 |
+| legacy backfill / scan / batch | false / 500 / 500；启动时要求新写与 worker 都关闭 |
 
-### 3.3 面试官最可能追问的 5 个问题
+新写和 worker 的门禁还依赖 V8 cutover 完成标记。top-K 之外的页不会由 Redis 提供，直接按 MISS 处理；top-K 与时效配置是功能参数，不是吞吐证明。
 
-1. **为什么不用 toggle 点赞？**
-   - 回答要点：超时重试可能把结果反转；PUT / DELETE 表达目标状态；重复插入的唯一键冲突和重复删除的零行都表示目标已经满足，不再写 Outbox。
+#### 源码索引
 
-2. **为什么需要 Outbox，直接更新点赞数不行吗？**
-   - 回答要点：关系与聚合是两层数据；跨两次提交会出现关系成功、计数永久漏记；同事务保存关系和事件后，计数可以异步批量收敛。
-
-3. **多个 worker 会不会重复应用同一事件？**
-   - 回答要点：Redis 锁只减少竞争；MySQL FOR UPDATE 决定同一批由哪笔事务处理；计数与 marker 同事务，失败后整批仍待处理。
-
-4. **临时 key 和 generation 为什么都需要？**
-   - 回答要点：临时 key 防读到半榜；generation 防旧 builder 晚到覆盖新榜；跨实例锁只是减少重复工作，不能替代发布资格校验。
-
-5. **Redis 空了或故障会不会打垮数据库？**
-   - 回答要点：先识别合法空榜与不可信缓存；非空榜补详情和 MISS 回退都受本地 bulkhead 保护；拿不到许可快速失败；只有开关开启才异步重建。
-
-### 3.4 详细技术链路：从目标状态到原子发布（保留原复习层）
-
-#### 目标状态写事务
-
-当前接口把点赞和取消点赞表示为明确目标：
-
-- PUT /blog/{id}/like：最终应该已点赞；
-- DELETE /blog/{id}/like：最终应该未点赞；
-- 兼容入口也必须显式传 desired state，不恢复无参数 toggle。
-
-Service 从当前用户上下文取得 userId，检查点赞写开关和参数，然后在 Spring 事务中执行父 Blog 共享锁查询。共享锁允许其他事务读取或取得共享锁，但会阻止 Blog 在本事务提交前被删除或取得冲突的排他锁。锁必须处在外层事务里；如果 SQL 执行后立即自动提交，锁也会随之释放。数据库外键仍是最终完整性边界。
-
-事务随后按目标状态执行：
-
-| 目标 | 数据库动作 | 重复请求怎样收敛 |
-| --- | --- | --- |
-| 已点赞 | 插入 user 与 Blog 关系 | 唯一键冲突表示目标已经满足，返回 unchanged |
-| 未点赞 | 删除 user 与 Blog 关系 | 影响零行表示目标已经满足，返回 unchanged |
-
-正常影响行数只能是零或一，其他结果视为异常。只有关系恰好变化一行时，才写一条正一或负一的 Outbox；关系变化和 Outbox 在同一事务里一起提交，Outbox 写入失败会让关系变化回滚。
-
-这条写链守住三个不变量：
-
-1. 同一用户和 Blog 最多一条有效关系；
-2. 关系真正变化时必须同时留下对应增量，关系未变不能写增量；
-3. worker 更新聚合数和标记原事件已处理必须一起提交。
-
-#### Outbox worker 的完整批处理
-
-定时任务先检查 worker 开关，再尝试取得跨实例 Redis 锁：
-
-- tryLock 正常返回未抢到锁：本轮直接退出；
-- 获取 Redis 锁发生异常：才降级进入 MySQL 行锁流程；
-- Redis 锁只是减少多实例争抢，不是正确性根基。
-
-数据库批处理在 READ COMMITTED 事务中执行：
-
-1. 按事件 ID 升序、LIMIT 有界批次、FOR UPDATE 查询 processed_time 为空的事件；
-2. 校验每条 delta 只能是正一或负一，非法值让整批回滚；
-3. 用按 Blog ID 排序的聚合结构合并同一 Blog 的增量；
-4. 净增量为零时可以不更新 Blog，但原始事件仍要标记；
-5. 按 Blog ID 固定顺序更新聚合数，降低不同事务反向加锁的死锁概率；
-6. 条件 SQL 要求新点赞数不能小于零，且非零聚合更新必须恰好影响一行；
-7. 标记这批仍未处理的原始事件；
-8. marker 行数必须与选中事件数一致；
-9. 聚合更新和 marker 在同一事务中提交。
-
-如果进程在计数更新后、marker 前失败，数据库事务整体回滚，事件仍保持待处理；如果已经提交，marker 会阻止这条增量再次应用。
-
-#### 热榜读取的完整校验
-
-热榜读取先校验页码为正，并根据 page 和 pageSize 计算 offset 与 end。请求范围超过配置 top-K 时，Redis 不保存这一页，按明确 MISS 处理。
-
-每份快照的元数据都要检查：
-
-| 字段 | 校验目的 |
+| 阶段 | 入口 |
 | --- | --- |
-| ready | 必须为 1，区分完整发布与尚未初始化 |
-| generation | 必须是合法正数，用来识别同一代快照 |
-| count | 必须是合法非负数 |
-| capacity | 必须与当前 top-K 配置一致 |
-| publishedAt | 不能来自未来，也不能超过允许陈旧时间 |
+| 写入口与关系事务 | [BlogController](../../src/main/java/com/localdeals/controller/BlogController.java)、[BlogLikeCommandService](../../src/main/java/com/localdeals/service/BlogLikeCommandService.java) |
+| Outbox 聚合 | [BlogLikeOutboxWorker](../../src/main/java/com/localdeals/service/BlogLikeOutboxWorker.java)、[BlogLikeOutboxBatchService](../../src/main/java/com/localdeals/service/BlogLikeOutboxBatchService.java) |
+| 热榜读取与发布 | [BlogHotRankService](../../src/main/java/com/localdeals/service/BlogHotRankService.java)、[发布脚本](../../src/main/resources/lua/blog_hot_rank_publish.lua)、[新 Blog 脚本](../../src/main/resources/lua/blog_hot_rank_add_new.lua) |
+| Blog 补全与回退 | [BlogServiceImpl](../../src/main/java/com/localdeals/service/impl/BlogServiceImpl.java) |
+| V8 数据与切换 | [V8 migration](../../src/main/resources/db/migration/V8__durable_blog_likes.sql)、[BlogLikeLegacyImportService](../../src/main/java/com/localdeals/service/BlogLikeLegacyImportService.java)、[BlogLikeCutoverService](../../src/main/java/com/localdeals/service/BlogLikeCutoverService.java) |
+| 配置与门禁 | [BlogLikeProperties](../../src/main/java/com/localdeals/config/BlogLikeProperties.java)、[BlogHotRankProperties](../../src/main/java/com/localdeals/config/BlogHotRankProperties.java)、[BlogLikeCutoverGuard](../../src/main/java/com/localdeals/init/BlogLikeCutoverGuard.java)、[application.yaml](../../src/main/resources/application.yaml) |
+| 详细底稿 | [04. 点赞和热榜链路](04-blog-like-hot-rank-chain.md) |
 
-元数据通过后，还要确认 ZSET 实际数量与 count 一致且不超过 top-K，再按分数倒序读取当前页。任一成员无法解析成合法 Blog ID，整页按 MISS。读取后再次取得 generation 与 count；如果与读取前不同，说明正好发生切版，不能返回混合快照。
-
-合法 ready 且 count 为零的榜单可以直接返回空列表，不进入数据库 bulkhead。非空命中只得到排序 ID，仍需取得 DB_READ 许可，再从 MySQL 批量读取 Blog、作者和当前用户点赞关系，并恢复 Redis 顺序。
-
-如果榜单 ID 无法完整映射到 MySQL，当前热榜代码会把这份快照视为陈旧并转向回退路径。Redis MISS 也必须先取得 DB_READ 许可；拿不到许可快速失败，不让缓存故障产生无界数据库并发。
-
-#### MISS 回退与异步触发
-
-获得数据库许可后：
-
-1. 非空 Redis 命中且详情完整时，补充作者和当前用户点赞状态后返回；
-2. Redis 未命中或详情映射不完整时，当前请求直接按 liked 降序、id 降序查询 MySQL；
-3. 只有 refreshEnabled 已开启时，MISS 或映射不完整才在当前 JVM 内 single-flight 异步触发重建；
-4. 当前请求不等待重建完成；
-5. single-flight 只合并本实例的触发，真正构建仍要跨实例协调。
-
-#### 临时榜、generation 和原子发布
-
-builder 先尝试无等待的跨实例构建锁，锁忙时跳过本轮。取得锁后，在加载 MySQL 之前推进 generation，为这一代生成专属临时 ZSET：
-
-1. 从 MySQL 按 liked 降序、id 降序查询有限 top-K；
-2. 删除可能残留的同 generation 临时 key；
-3. 去重并保持候选原始顺序后批量写入；
-4. 校验写入数量；只有非空候选实际创建了临时 key，才给它设置有界 TTL；
-5. 发布 Lua 再确认自己仍持有当前 generation；
-6. 校验候选数量、配置 capacity 和临时 ZSET 实际数量；
-7. 非空榜原子 rename 为 live key，空榜则发布 ready 且 count 为零的元数据；
-8. 同时更新 ready、generation、count、capacity 和 publishedAt；
-9. 过时 builder 被拒绝并清理临时 key。
-
-临时 key 解决构建一半被读到的问题；generation 解决旧 builder 晚完成后覆盖新榜的问题；跨实例锁主要减少重复构建。三者不能互相替代。
-
-#### 故障、配置与数据层级
-
-| 场景 | 当前处理 |
-| --- | --- |
-| 重复点赞或重复取消 | 关系不变，不写 Outbox |
-| 关系改变但 Outbox 写失败 | 点赞事务整体回滚 |
-| worker 更新计数后、marker 前失败 | 批事务整体回滚 |
-| Redis worker 锁忙 | 本轮退出 |
-| Redis worker 锁服务异常 | 降级到 MySQL 行锁，竞争可能增加 |
-| 榜单未构建、过期、元数据损坏、成员非法或 Redis 异常 | 在 DB_READ 保护下回退 MySQL |
-| 旧 builder 完成时已有新 generation | 发布 Lua 拒绝旧版本 |
-| Redis 榜单丢失 | 从 MySQL 聚合字段重建，不影响点赞关系 |
-
-三层数据不要混淆：
-
-- 用户与 Blog 关系是长期事实；
-- Blog liked 字段是 MySQL 中的派生聚合，可以短暂滞后；
-- Redis top-K 是可重建快照，不是点赞事实。
-
-当前点赞写入、Outbox worker、热榜 Redis 读取、热榜刷新或异步重建、旧数据回填都默认关闭。启用前需要完成旧点赞身份的受控迁移和切换检查。top-K、页大小和最大陈旧时间都是配置，不是性能证明。
+BlogLikeReliabilityIT 覆盖目标状态、并发、Outbox 与 marker 回滚等限定行为；BlogHotRankRedisIT 覆盖旧 builder、top-K、空榜和损坏快照等 Redis 协议。BlogLikeCutoverGuard 只存在于非 test profile，因此测试 profile 绕过该启动门禁。测试源码不能证明生产调度长期运行、缓存故障容量、强实时排行或坏事件人工处置已经形成闭环。
 
 ---
 
 ## 4. 营销发券：多入口共用一笔权益事务
 
-### 4.1 概括版
+### 4.1 模块定位
 
-用户领取、管理员单发、签到奖励和批量发放虽然入口不同，最终都复用同一套单人发券事务。各入口只在服务端构造可信的来源、用户、商户和操作者，统一服务再生成任务日期和幂等身份；事务内锁定活动，复核版本、时间、券归属、标签资格和额度，并把额度占用、Grant 权益和通知 Outbox 一起提交。并发重复由多次查重、活动锁、条件更新和唯一约束共同收敛。批量任务只保存目标快照和进度，每个用户仍独立发券；通知失败只重试通知，绝不撤销已经成立的权益。
+营销链路把用户领取、管理员单发、签到奖励和批量发放统一成一套权益规则。最值得讲的设计是：每个入口只构造服务端可信命令；新建权益时，额度占用、Grant 和通知 Outbox 在一笔 MySQL 事务中成立。批量进度和在线通知失败都不能反向撤销权益。
 
-### 4.2 完整版
+### 4.2 30～60 秒面试概括版
 
-#### 业务场景与要解决的问题
+> 营销发券的难点是用户领取、后台单发、签到奖励和批量发放不能各自定义规则，否则会跨入口重复、越权或并发超额。我把四个入口归一到单人发券事务，用户、商户、操作者、业务日期和幂等语义都由服务端决定。事务锁定活动后复核版本、来源、状态、数据库时间、券归属、标签资格和额度，再用条件更新占额，并把 Grant 与通知 Outbox 一起提交；重复请求通过分阶段查重和唯一约束返回已有 Grant。批量任务只保存目标快照与进度，每个用户的权益独立提交。Item 或通知失败不撤销 Grant；当前两个 worker 默认关闭，PUBLISHED 也不表示用户已收到。
 
-一张活动券可以由用户主动领取，也可以由后台单发、签到奖励或批量任务发放。如果每个入口各写一套规则，很容易出现用户在不同入口重复拿券、管理员越过商户范围、并发抢最后一个额度、活动改版后仍按旧规则发放等问题。
+### 4.3 2～3 分钟完整口述版
 
-批量和通知又引入了两个时间窗口：任务可能执行到一半崩溃；权益已经成立后，用户通知可能失败或重复。因此必须区分“用户已经获得券”与“任务处理到哪里、通知有没有尝试”。
+> 一张普通活动券可以由用户主动领取，也可以由后台单发、签到奖励或批量任务发放。如果四个入口各写一套逻辑，就容易出现跨入口重复领券、管理员越权、并发超发或活动改版后仍按旧规则发放。批量任务和通知还会产生两个额外窗口：任务执行一半可能退出；权益已经成立，在线提示却可能失败或重复。
+>
+> 我的整体方案是把所有入口归一为服务端可信命令，再进入同一个单人 Grant 事务。用户入口从登录上下文取得 userId；后台入口从 principal 取得 merchantId 和 operatorId；批量从持久 Job 恢复；签到奖励使用服务端业务日。普通领取、后台单发和批量共享 ONCE 幂等身份，每日奖励按业务日生成身份。expectedRuleVersion 由请求携带，但必须与数据库当前版本一致。
+>
+> 为了兼顾常见重复和极端并发，门面在事务外先查一次；REQUIRES_NEW 事务进入后再查；锁定活动、等待其他事务结束后再查一次。活动锁稳定规则与竞争顺序，真正占额使用同时带状态、版本、时间窗、券归属和剩余额度条件的 UPDATE，数据库唯一约束阻止相同业务身份生成两份 Grant。额度、Grant 与 PENDING 通知 Outbox 在同一事务提交。
+>
+> 外层故意不持有长事务。唯一键竞争时，内部失败事务必须先完整回滚，外层才能读取胜出的 Grant 并返回幂等结果。批量场景也因此让每个用户的 Grant 独立提交；但一批 Item 的锁和结果 marker 仍共享 worker 的外层事务，不能说每个 Item marker 也独立提交。
+>
+> 批量 HTTP 只创建 SNAPSHOTTING Job。worker 把当时有效的标签成员固化为 Items，再进入 READY；执行时仍复核当前活动、规则、标签和额度。稳定业务拒绝标 SKIPPED，能够提交 marker 的技术异常标 FAILED；FAILED 需要显式 retry。若 Grant 已提交而 Item marker 回滚，下轮会读到已有 Grant 并收敛为 IDEMPOTENT。
+>
+> 通知 Outbox 失败时保持 PENDING 并退避。即使达到配置尝试上限，也没有 FAILED 或 DLQ，而是次数封顶后继续按最大退避重试。publish 成功、marker 失败会重复通知，因此客户端应按事件或 Grant 去重并刷新券包。Grant 才是权益事实，当前没有撤券式补偿流程，也不能把 PUBLISHED 说成送达或已读。
 
-#### 整体方案
+### 4.4 端到端主链路
 
-所有入口先归一成服务端可信的发券命令，再进入同一个独立的单人发券事务。数据也拆成三个角色：
+1. 用户领取、后台单发、批量 worker 或签到奖励入口构造来源明确的命令。
+2. 服务端补齐 userId、merchantId、operatorId、业务日期和幂等身份，拒绝不合法字段组合。
+3. 门面事务外快速查找已有 Grant；常见重复直接返回。
+4. REQUIRES_NEW 事务进入后再次查重，再按来源和商户范围锁定活动。
+5. 等待活动锁后第三次查重，覆盖竞争事务刚提交的权益。
+6. 锁内复核 ruleVersion、来源模式、活动状态、数据库时间窗、券归属、标签资格和额度。
+7. 条件更新原子占用一份额度，再插入 Grant 与 PENDING 通知 Outbox；三者同事务提交。
+8. 批量入口只创建幂等的 SNAPSHOTTING Job；worker 将当时有效标签成员固化成 Items，并把 Job 推进到 READY。
+9. 执行 worker 锁定有限批 PENDING Item，逐个调用同一单人 Grant 事务，再记录 GRANTED、IDEMPOTENT、SKIPPED 或 FAILED。
+10. 没有待处理 Item 后，Job 根据失败数量进入 COMPLETED 或 PARTIAL_FAILED。
+11. 通知 worker 锁定到期 PENDING Outbox，向 Redis Pub/Sub 发布；失败记录次数和下次时间，成功后标 PUBLISHED。
+12. 客户端按事件身份去重并重新查询自己的券包；MySQL Grant 是最终权益依据。
 
-| 对象 | 角色 |
+### 4.5 核心机制与设计取舍
+
+#### 机制一：服务端可信命令与业务幂等身份
+
+| 问题 | 回答 |
 | --- | --- |
-| Grant | 用户已经取得该活动权益的 MySQL 长期事实 |
-| Job / Item | 批量任务的整体状态与单用户处理进度 |
-| 通知 Outbox | 权益提交后仍需尝试提醒用户的持久待办 |
+| 解决什么具体问题 | 让四个入口共享规则，又保留“永久一次”和“每日一次”的业务含义 |
+| 防止什么竞态或故障 | 客户端伪造 userId、merchantId、operatorId、任务日期或任意幂等 key |
+| 为什么更直接的方案不够 | 接受客户端自定义身份会把权益边界交给不可信端；四套 Service 会逐渐产生规则漂移 |
+| 本身不能解决什么 | 命令规范化不替代消费者登录、后台权限与商户范围校验 |
 
-普通领取、管理员单发和批量共享“同活动、同用户一次”的永久幂等身份；每日签到奖励额外包含业务日期。客户端不能自行提供或改变来源、操作者、任务日期和幂等语义。
+USER_CLAIM、ADMIN_GRANT、BATCH_GRANT 使用 ONCE，因此同活动同用户只形成一份永久权益；TASK_REWARD 使用服务端业务日组成 idempotencyKey。每日奖励还要先确认同用户同业务日的 MySQL 签到事实。
 
-#### 核心实现与技术亮点
+各来源的快速查重条件不同：任务奖励按活动、用户、幂等 key；后台和批量按活动、商户、用户；用户领取按活动、用户。数据库最终唯一键仍统一为 campaignId、userId、idempotencyKey。
 
-**可信命令与统一校验。** 用户入口从当前登录身份取 userId；后台入口先校验功能权限并解析商户数据范围，再填充商户与操作者，事务内通过活动与商户的组合条件锁定记录并确认资源归属；批量 worker 从持久 Job 恢复这些字段；每日奖励由服务端生成当前业务日。统一服务校验字段组合，例如用户领取不能携带后台操作者，每日奖励不能伪装商户发放。
+#### 机制二：活动行锁、条件占额与唯一约束
 
-**覆盖不同窗口的幂等检查。** 事务外先快速查已有 Grant，避免常见重复请求进入锁竞争；进入独立事务后再查一次，覆盖两者之间的并发提交；锁定活动并等待其他事务结束后再查一次，覆盖等待锁期间新产生的权益。三次查询是减少竞争和尽早收敛，最终仍由数据库唯一约束仲裁。
-
-**一笔完整的权益事务。** 活动行锁内复核请求规则版本、允许来源、数据库当前时间、活动状态、券与商户归属以及人工标签资格。Java 层看到“还有额度”不是最终判断，真正写入时还会用带状态、版本、时间窗和剩余额度条件的更新原子占额。随后插入 Grant 和通知 Outbox；额度、权益、通知待办任何一步失败都一起回滚。
-
-**独立事务边界。** 外层发券门面故意不持有长事务，而是调用独立事务服务。发生唯一键竞争时，失败事务先完整回滚，外层才能重新读取并发胜出的 Grant，返回同一个幂等结果。批量任务复用这项能力时，每个用户的 Grant 都通过 REQUIRES_NEW 独立提交；但有限批 Item 的锁定与结果 marker 仍共享 worker 的外层批事务，不能描述成“每个 Item 都独立提交”。
-
-**可恢复的批量任务。** 创建批量请求时只保存 SNAPSHOTTING 状态的 Job，并记录商户、活动、操作者、请求身份和当时规则版本，不会在 HTTP 请求里同步生成全部 Items。后台 worker 先把当时有效的标签成员固化为 Items，再把 Job 推进到 READY；执行时每个 Item 仍调用前面的单人发券事务，并再次复核当前活动、版本、标签和额度。
-
-**与权益解耦的通知。** 通知 worker 扫描到期的 PENDING Outbox，向 Redis Pub/Sub 发布用户事件；失败保持待办并退避重试，成功后标为 PUBLISHED。Grant 已经是事实，通知故障不能撤销它。
-
-#### 为什么这样设计
-
-统一发券事务防止四种入口的规则逐渐漂移。服务端生成幂等身份，是为了让“永久一次”和“每日一次”的业务含义不可由客户端篡改。
-
-活动锁、条件更新和唯一约束看似重复，实际各管一个风险：行锁稳定同一活动的规则与额度竞争顺序；条件更新在写入瞬间再次核对版本、状态、时间和剩余额度；唯一约束阻止同一业务身份落成两份权益。锁后二次查询则让等待期间已经成功的请求尽早返回同一个 Grant。
-
-Grant、Item 和通知 Outbox 分开后，恢复顺序变得清楚：权益优先于任务 marker，任务 marker 又不等于通知送达。如果 Grant 已提交但 Item 更新前崩溃，下轮再次调用同一事务会命中已有 Grant，Item 收敛为 IDEMPOTENT，不会再占额度。
-
-批量任务让每个用户的 Grant 独立提交，所以一个用户的发券失败不会撤销其他用户已经提交的权益；可是一批 Item marker 仍在同一个外层事务里提交，批事务失败时可能留下“Grant 已成立、Item 仍待处理”的恢复窗口。下一轮依靠 Grant 幂等事实收敛，而不是假设每个 Item marker 也独立落库。
-
-#### 异常、一致性与当前边界
-
-两个请求并发给同一用户发同一活动券时，一个创建 Grant，另一个通常在锁后命中已有权益；若仍撞到唯一约束，失败事务完整回滚后读取胜者。不同用户竞争最后额度时，活动锁与条件更新确保只有满足写入条件的请求成功。
-
-规则版本、活动状态、时间窗、券归属或标签资格不再满足时，事务稳定拒绝，不占额度。已经条件占额后若 Grant 或通知 Outbox 插入失败，同一事务整体回滚，额度不会单独漂移。
-
-Item 的结果区分 GRANTED、IDEMPOTENT、SKIPPED 和 FAILED。稳定业务拒绝进入 SKIPPED，暂时技术问题进入 FAILED，避免对不可能成功的请求无限重试，也避免把技术故障永久跳过。Grant 已提交而 Item 仍是 PENDING 时，下轮按既有权益收敛。
-
-Redis publish 与 MySQL 的 PUBLISHED marker 不是同一事务。发布成功后 marker 失败会产生重复通知，因此客户端应按事件或 Grant 身份去重并刷新券包。PUBLISHED 只证明发布调用和数据库标记完成，不证明用户在线、WebSocket 送达或已读；当前通知没有真正 FAILED 终态或 DLQ，达到尝试上限后仍按最大退避继续处理。
-
-当前实现边界：
-
-| 状态 | 内容 |
+| 问题 | 回答 |
 | --- | --- |
-| 已实现 | 四类入口统一 Grant 事务、可信身份字段、版本与资格校验、活动锁、条件占额、Grant 与通知 Outbox 同事务、唯一约束收敛、Job / Item 状态机、通知退避 |
-| 已实现但默认关闭 | 批量 Job worker、通知 Outbox worker |
-| 当前限制 | 批量发放面向符合条件的人工标签活动；技术失败项需要显式重试 |
-| 未实现 / 不能声称 | 任意人群规则引擎、通知必达或已读、通知 DLQ、生产批量规模、发券吞吐或 SLA |
+| 解决什么具体问题 | 稳定活动规则并正确争抢最后额度 |
+| 防止什么竞态或故障 | 两个用户同时看到剩一份；等待期间规则变化；同一用户跨入口重复 |
+| 为什么更直接的方案不够 | Java 中先查状态和额度存在检查到写入窗口；只用锁不能表达最终幂等身份 |
+| 本身不能解决什么 | 这些数据库约束不负责批量进度或通知送达 |
 
-### 4.3 面试官最可能追问的 5 个问题
+活动锁内使用数据库当前时间，按固定顺序检查活动、标签和成员。Java 额度判断只用于提前拒绝；最终 UPDATE 同时复核 ACTIVE、ruleVersion、起止时间、voucherId、商户范围和 grantedCount 小于 quotaTotal。Grant 或 Outbox 插入失败会让额度更新一起回滚。
 
-1. **为什么要做三次幂等查询？**
-   - 回答要点：事务外查询优化常见重复；事务内加锁前覆盖进入事务的窗口；拿锁后覆盖等待锁期间的提交；最终仍由唯一约束兜底。
+#### 机制三：三次查重与独立 Grant 事务
 
-2. **行锁、条件更新和唯一约束是不是重复设计？**
-   - 回答要点：行锁稳定竞争顺序，条件更新在写入瞬间复核业务条件，唯一约束防止同一幂等身份产生两份权益；三者分别解决顺序、条件和身份重复。
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 让常见重复尽早返回，并让唯一键竞争的输家安全读取胜者 |
+| 防止什么竞态或故障 | 两次检查之间产生并发 Grant；在 rollback-only 事务里吞掉 DuplicateKey 后误报成功 |
+| 为什么更直接的方案不够 | 只查一次无法覆盖后续窗口；把门面也包在同一事务中，内部失败后外层查询仍可能最终回滚 |
+| 本身不能解决什么 | 独立 Grant 提交后，外层 Item marker 仍可能失败并暂时落后 |
 
-3. **为什么外层不直接加事务？**
-   - 回答要点：唯一键竞争会让内部事务进入回滚状态；先让失败事务结束，外层才能安全读取胜者；独立事务还让批量中每个用户的 Grant 单独提交，Item marker 仍属于外层批事务。
+三次检查分别位于事务外、独立事务内锁前、活动锁后。它们用于减少无谓竞争和尽早收敛；数据库唯一约束仍是极端并发的最后边界。DuplicateKey 发生后，内部事务先回滚额度与写入，门面再在事务外读取胜出的 Grant。
 
-4. **Grant 成功但 Item 仍是 PENDING 怎么恢复？**
-   - 回答要点：Grant 是权益事实，Item 只是进度；下一轮重跑会命中已有 Grant 并返回幂等结果，再把 Item 标为 IDEMPOTENT，不会重复占额。
+#### 机制四：目标快照、执行时复核与 Item 状态
 
-5. **PUBLISHED 是否代表用户已经收到券通知？**
-   - 回答要点：只代表 Redis publish 和数据库 marker 完成；用户可能离线，消息也可能重复；客户端重新查询券包，MySQL Grant 才是权威事实。
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 既固定“本批选中了谁”，又尊重长任务执行时的当前规则 |
+| 防止什么竞态或故障 | 执行中标签成员、活动版本、状态或额度变化；任务崩溃后不知道处理到哪里 |
+| 为什么更直接的方案不够 | 执行时动态扫描无法稳定定义批次；只相信旧快照又可能按过期规则发券 |
+| 本身不能解决什么 | 快照成员不保证最终获券；Item marker 与独立 Grant 之间仍有提交窗口 |
 
-### 4.4 详细技术链路：从统一命令到批量与通知（保留原复习层）
+创建批量任务只接受当前 ACTIVE、ADMIN 或 BOTH、MANUAL_TAG 活动，并按 merchantId、requestId 幂等。快照只固化当时有效且未过期的成员；执行阶段再次进入完整 Grant 事务。稳定规则拒绝是 SKIPPED，技术失败只有在外层批事务能提交 marker 时才成为 FAILED；若批事务自身失败，Item 可能仍是 PENDING。
 
-#### 四个入口和五类业务对象
+#### 机制五：Grant 与通知 Outbox 同事务
 
-先分清数据含义：
+| 问题 | 回答 |
+| --- | --- |
+| 解决什么具体问题 | 权益成立时一定留下后续通知待办 |
+| 防止什么竞态或故障 | Grant 提交后应用在直接 publish 之前退出，导致永久没有任何通知记录 |
+| 为什么更直接的方案不够 | after-commit publish 没有持久待办；同步要求 WebSocket 成功会把权益事务绑在在线连接上 |
+| 本身不能解决什么 | Redis Pub/Sub 不持久，WebSocket 不保证在线、展示或已读；发布与 PUBLISHED marker 也不是共同事务 |
 
-- **券模板**：描述券的面值、门槛、类型和所属店铺；
-- **活动**：描述何时、通过哪种来源、向哪些人、最多发多少份权益；
-- **Grant**：某个活动已经给某个用户一份券权益的长期事实；
-- **Job / Item**：批量任务整体状态与单用户处理进度；
-- **通知 Outbox**：Grant 提交后仍需尝试提醒用户的持久待办，不是权益本身。
+通知失败只影响提示，不允许撤销 Grant。publish 成功而 marker 事务失败会重复发布，客户端需要用 eventId 或 grantId 去重，并回查持久券包。这里的“Grant 与通知 Outbox 同事务”只适用于 V11 后经当前事务新建的 Grant；V9、V10 已有的历史 Grant 没有迁移回填，当前幂等返回也会在创建通知记录前直接结束。
 
-四种入口最终共享一套事务，但幂等身份不同：
+### 4.6 异常分类与状态收敛
 
-| 来源 | 入口含义 | 幂等身份 |
+| 异常现场 | 当前能够确认的事实 | 处理方式 | 是否重试 | 是否允许补偿 |
+| --- | --- | --- | --- | --- |
+| 请求字段或来源组合非法 | 不能形成可信发券命令 | 返回 400 | 修正输入后 | 否 |
+| 后台未认证、无权限或跨商户 | 当前操作者没有合法范围 | 返回 401 或 403 | 重新认证或修复授权后 | 否 |
+| 当前 scope 下活动或 Job 不存在 | 不能在当前商户范围证明目标存在 | 返回 404 | 修正目标后 | 否 |
+| 版本、模式、状态、时间窗、标签或额度不满足 | 稳定业务条件拒绝，尚未提交权益 | 返回 409；批量 Item 可标 SKIPPED | 同一前提下通常无意义 | 不需要 |
+| 同幂等身份重复或并发胜者已提交 | 已有合法 Grant | 返回已有权益；批量可标 IDEMPOTENT | 可安全重放 | 否 |
+| 命中历史或既有 Grant，但没有通知 Outbox | 权益已存在，当前调用属于幂等返回 | 返回已有 Grant；当前不会自动补建通知待办 | 不会由通知 worker 自愈 | 不得重复占额或撤销 Grant |
+| DuplicateKey 后读取不到胜者 | 当前无法确认哪份权益成立 | 异常继续传播，不猜成功 | 确认数据库后 | 否 |
+| Grant 流程发生 DataAccessException | 当前不能确认数据库操作结果 | 门面映射为 503；其他未捕获 RuntimeException 仍可能表现为 500 | 核对事实后再重试 | 否 |
+| 条件占额后 Grant 或 Outbox 插入失败 | 内层事务没有成功提交 | 额度、Grant 和待办一起回滚 | 是 | 不需要 |
+| Grant 已提交，Item marker 未提交 | 权益已成立，进度仍可能是 PENDING | 下轮命中 Grant，Item 收敛为 IDEMPOTENT | 是 | **不得撤销 Grant** |
+| 单 Item 可记录的技术异常 | 本次没有确认该目标完成 | 外层事务提交 FAILED | 需要显式 retry-failures | 不影响其他 Grant |
+| 外层批事务数据库故障 | marker 可能整体回滚；内层 Grant 可能已分别提交 | 后续重跑并按 Grant 收敛 | 是 | **不得撤销已提交 Grant** |
+| Redis publish 失败 | Grant 与通知待办仍存在 | 保持 PENDING，记录次数并退避 | 自动 | 否 |
+| publish 成功、PUBLISHED marker 失败 | 提示可能已经发出，但完成标记未提交 | 重试可能重复发布，客户端去重 | 是 | 无法撤回提示 |
+| 通知达到 max attempts | 多次失败，但没有永久失败事实 | attempts 封顶，仍为 PENDING 并按最大退避继续 | 是 | 否 |
+| Job worker 关闭 | 已创建的 Job 可能停在 SNAPSHOTTING 或 READY | 不自动推进，需启用 worker 或人工处置 | 启用后再调度 | 不影响已提交 Grant |
+| notification worker 关闭 | 通知 Outbox 可能长期保持 PENDING | 不自动发布，需启用 worker | 启用后再调度 | **不得撤销 Grant** |
+
+某些现场不能立即补偿，是因为 Grant 已经通过规则、额度与唯一约束提交，属于合法权益。Item 进度落后或通知失败都不足以证明 Grant 错误；撤券会破坏已经成立的最终事实。当前源码也没有权益撤销、回收或退款式补偿状态机。
+
+### 4.7 状态、事实和不变量
+
+最终权益事实是 tb_voucher_grant。活动 grantedCount 与新 Grant 同事务更新；签到表按 userId 和业务日保存 TASK_REWARD 的前置事实。Job、Item 和通知 Outbox 都是后续过程或派生状态。
+
+四套状态不能画成一条连续状态机：
+
+#### Campaign 状态
+
+~~~text
+DRAFT ──→ ACTIVE ──→ PAUSED ──→ ACTIVE
+  └──────────────→ CLOSED ←──────┘
+                     ↑
+          ACTIVE / PAUSED ───────┘
+~~~
+
+DRAFT 可以进入 ACTIVE 或 CLOSED；ACTIVE 可以进入 PAUSED 或 CLOSED；PAUSED 可以回到 ACTIVE 或进入 CLOSED。ACTIVE → ACTIVE、PAUSED → PAUSED、CLOSED → CLOSED 也会被当前接口接受，并执行一次 ruleVersion 增量。只有 DRAFT 或 PAUSED 可编辑。
+
+#### Job 状态
+
+~~~text
+SNAPSHOTTING → READY → RUNNING → COMPLETED
+                 │        └────→ PARTIAL_FAILED ──retry failures──→ READY
+                 └─→ PAUSED ←───┘
+                        └────────resume────────→ READY
+~~~
+
+READY 或 RUNNING 可以暂停为 PAUSED；PAUSED 恢复为 READY。retryFailures 可以在其他 Job 状态下重置其中的 FAILED Item；只有 Job 当前为 PARTIAL_FAILED 时，Job 本身才会随该操作回到 READY。
+
+#### Item 与通知状态
+
+- Item：PENDING → GRANTED、IDEMPOTENT、SKIPPED 或 FAILED。只有 FAILED 会被显式重置为 PENDING；SKIPPED 不会自动重试。
+- Notification Outbox：PENDING → PUBLISHED。发布失败仍是 PENDING；没有 FAILED 或 DLQ。
+
+PUBLISHED 只证明 Redis publish 调用成功且数据库 marker 随后提交。它不表示用户在线、WebSocket send 成功、浏览器展示或用户已读。
+
+系统必须长期守住：
+
+1. 同一 campaignId、userId、idempotencyKey 最多一条 Grant。
+2. V11 后经当前事务新建的 Grant、额度增量和 PENDING 通知 Outbox 同事务成立；历史或既有 Grant 的幂等返回不会自动补建通知 Outbox。
+3. 幂等返回不能再次占额或写第二条通知。
+4. 批量 Job 固化一份目标集合，执行仍按当前规则复核。
+5. 每个用户的 Grant 可独立提交；Item marker 落后时通过已有 Grant 收敛。
+6. 任何通知故障都不能撤销合法 Grant。
+
+### 4.8 面试官最可能追问的 5 个问题
+
+1. **为什么发券要查重三次？**
+   - 分别覆盖常见重复、进入事务前的并发提交、等待活动锁期间的提交。三次查询用于缩小竞争窗口，唯一约束才是最终边界。
+
+2. **为什么 VoucherGrantService 外层故意不加事务？**
+   - 内层 DuplicateKey 必须先让 REQUIRES_NEW 完整回滚，外层才能安全读取胜者并返回幂等成功。
+
+3. **行锁、条件更新和唯一约束是否重复？**
+   - 行锁稳定活动规则与竞争顺序；条件 UPDATE 在写入瞬间复核业务条件；唯一约束防止相同业务身份产生两份权益。
+
+4. **为什么批量既要目标快照，又要执行时复核？**
+   - 快照回答“本批是谁”，复核回答“现在还能不能发”。只保留一项都会丢失另一个时间点的业务含义。
+
+5. **Grant 已提交但 Item 或通知失败，为什么不撤券？**
+   - Grant 是最终权益事实；Item 是进度，通知是派生待办。后两者失败不证明权益错误，应该重放并按 Grant 收敛。
+
+### 4.9 源码、配置、迁移与验证边界
+
+#### 入口与幂等语义
+
+| 来源 | 服务端身份来源 | 幂等身份 |
 | --- | --- | --- |
-| USER_CLAIM | 登录用户主动领取 | 同活动、同用户永久一次 |
-| ADMIN_GRANT | 后台人员给指定用户发券 | 与主动领取共享永久权益 |
-| BATCH_GRANT | Job worker 对每个目标用户调用 | 同样共享永久权益 |
-| TASK_REWARD | 用户完成当日签到后领奖 | 同活动、同用户、同业务日一次 |
+| USER_CLAIM | 当前消费者 userId | campaignId、userId、ONCE |
+| ADMIN_GRANT | 后台 principal 的 merchantId、operatorId | campaignId、userId、ONCE |
+| BATCH_GRANT | 持久 Job 中的商户、操作者和捕获版本 | campaignId、userId、ONCE |
+| TASK_REWARD | 当前消费者与服务端业务日 | campaignId、userId、业务日 key |
 
-因此，同一活动下用户先主动领取，管理员或批量任务再次命中时，只返回已有 Grant，不再占一份额度。每日任务可以按不同业务日产生新的权益。
+业务日期默认按 Asia/Shanghai 解释。客户端需要提交正数 expectedRuleVersion，但不能自定义任务日期或幂等 key。
 
-#### 服务端可信命令
+#### 默认配置
 
-各入口只设置自己有权确定的字段：
-
-- 用户领取入口从当前登录身份填充 userId 和来源；
-- 管理员入口先检查功能权限并解析商户数据范围，再填充 merchantId 与 operatorId；
-- 批量 worker 从持久 Job 恢复商户、操作者、规则版本和来源；
-- 每日任务入口使用当前登录用户和服务端业务日期。
-
-统一门面会重新生成任务日期与幂等键，客户端不能自定义“永久一次”或“每日一次”的语义。命令还要校验活动、用户、规则版本和来源：
-
-- 管理员和批量来源必须有商户与操作者；
-- 用户主动领取禁止携带后台操作者；
-- 每日奖励禁止携带商户与操作者，并要求任务日期和幂等键；
-- expected ruleVersion 必须是合法正数。
-
-已有 Grant 的快速查询按来源选择：
-
-- TASK_REWARD：活动、用户、幂等键；
-- ADMIN_GRANT / BATCH_GRANT：活动、商户、用户；
-- USER_CLAIM：活动、用户。
-
-#### 独立事务和三次幂等检查
-
-外层 VoucherGrantService 故意不持有事务。它先快速查重，再调用使用 REQUIRES_NEW 的事务服务：
-
-1. 事务外查询让常见重复请求直接返回；
-2. 进入事务后、加活动锁前再查一次，覆盖进入事务前的并发提交；
-3. 取得活动锁后再查一次，覆盖等待锁期间前一事务的提交；
-4. 最终仍由数据库唯一约束仲裁极端竞争。
-
-独立事务边界很重要。若 insert 触发 DuplicateKey，内部事务和之前的额度更新必须先完整回滚；异常退出事务后，外层才能重新读取竞争胜出的 Grant，并把结果作为幂等成功返回。如果在已经 rollback-only 的事务里吞掉异常继续查询，看似返回成功，最终仍可能整体回滚。
-
-批量处理中，每个用户的 Grant 因此通过 REQUIRES_NEW 独立提交；有限批 Item 的行锁和 outcome marker 仍共享 `processNextBatch` 的外层事务。一个目标的稳定业务拒绝会被捕获并记录为 SKIPPED，但这不等于每个 Item 自己提交一笔事务。
-
-#### 活动锁内的完整资格和额度复核
-
-每日奖励在事务开头先按 userId 与业务日期检查 MySQL 签到事实。没有签到时直接拒绝，不占额度、不写 Grant、也不写通知待办。签到表还有同用户同日唯一约束，重复签到与重复领奖分别在两个层次收敛。
-
-后台或批量来源使用 campaignId 与 merchantId 的组合条件锁定活动；用户领取和签到按活动 ID 锁定。活动查询同时取得发券所需的券和店铺信息。资源归属是在这里由带商户条件的锁定查询确认，不是只依赖 Controller。
-
-取得活动锁后依次复核：
-
-1. 请求 expectedRuleVersion 与当前活动 ruleVersion 一致；
-2. 来源被当前 grantMode 允许；
-3. 活动处于 ACTIVE；
-4. 使用数据库当前时间判断已经开始且尚未结束；
-5. 绑定券仍是有效普通券，并属于正确商户；
-6. MANUAL_TAG 活动按活动、标签、成员的固定顺序加锁，检查标签和成员状态、商户范围与有效期；
-7. Java 层先检查当前已发数量尚未达到总额度。
-
-Java 中的额度判断只用于尽早拒绝，真正仲裁是带活动状态、版本、时间窗、券归属和剩余额度条件的 UPDATE。执行顺序是：
-
-~~~text
-[同一个 MySQL 事务]
-条件占用一份额度
-        ↓
-插入 Grant 权益
-        ↓
-插入 PENDING 通知 Outbox
-        ↓
-一起提交或一起回滚
-~~~
-
-Grant 或通知 Outbox 任一步失败，前面的额度更新一起回滚，不会留下“占了额度却没有权益”或“有权益却完全没有通知待办”的半成品。
-
-#### 并发争抢最后额度
-
-假设两个请求同时看到只剩一份额度：
-
-1. 两者在事务外都可能没有查到已有 Grant；
-2. 同一活动行锁使它们依次进入关键区；
-3. 先持锁请求复核规则，条件占用最后额度并提交 Grant；
-4. 同一用户的后到请求拿锁后会命中已有 Grant；
-5. 不同用户的后到请求会在锁内额度检查或条件更新时被拒绝；
-6. 若仍发生同一幂等身份的唯一键竞争，失败事务回滚后读取胜者。
-
-各机制职责不同：
-
-| 机制 | 解决的问题 |
+| 配置 | 默认值 |
 | --- | --- |
-| 活动行锁 | 稳定同一活动的规则与额度竞争顺序 |
-| 锁后再查 Grant | 覆盖等待锁期间已经提交的权益 |
-| 条件更新 | 在写入瞬间复核版本、状态、时间、券和额度 |
-| 唯一约束 | 阻止同一业务身份落成两份权益 |
-| 事务外重读 | 把并发输家收敛成同一个已有 Grant |
+| Job worker / notification worker | false / false |
+| Job batch / notification batch | 50 / 50 |
+| worker initial / fixed delay | 5 秒 / 1 秒 |
+| notification max attempts | 10 |
+| notification max backoff | 5 分钟 |
 
-#### 批量 Job / Item 状态机
+max attempts 只封顶 attempts 数值，不创建永久失败状态，也不停止后续重试。
 
-创建批量请求时，HTTP 事务只保存状态为 SNAPSHOTTING 的 Job，记录 merchantId、campaignId、operatorId、requestId、捕获的规则版本和目标标签；不会同步生成全部 Items。Job 创建本身按 merchantId 与 requestId 幂等。
+#### 源码索引
 
-当前批量只支持 ACTIVE、ADMIN 或 BOTH、MANUAL_TAG 活动。默认关闭的 worker 后续在独立快照事务中，把当时有效且未过期的标签成员固化成 Items；每个 Job 与 userId 最多一个 Item。快照完成后 Job 进入 READY。
-
-执行 worker 每轮只锁定有限批 PENDING Item，并逐个调用同一套独立单人发券事务。快照回答“当时选中了谁”，执行时的事务复核回答“现在还能不能发”。标签可能已经失效，活动也可能改版本、暂停、过期或耗尽额度。
-
-Item 结果分为：
-
-| 状态 | 含义 |
+| 阶段 | 入口 |
 | --- | --- |
-| GRANTED | 本轮新建权益 |
-| IDEMPOTENT | 权益已经由之前调用创建 |
-| SKIPPED | 规则、资格、状态或额度等稳定业务条件不满足 |
-| FAILED | 数据库或程序等技术问题，未来可能重试成功 |
+| 命令与门面 | [VoucherGrantCommand](../../src/main/java/com/localdeals/dto/VoucherGrantCommand.java)、[VoucherGrantService](../../src/main/java/com/localdeals/service/VoucherGrantService.java) |
+| 单人权益事务 | [VoucherGrantTransactionService](../../src/main/java/com/localdeals/service/VoucherGrantTransactionService.java)、[VoucherCampaignMapper](../../src/main/java/com/localdeals/mapper/VoucherCampaignMapper.java)、[VoucherGrantMapper](../../src/main/java/com/localdeals/mapper/VoucherGrantMapper.java) |
+| 签到与业务日 | [UserServiceImpl](../../src/main/java/com/localdeals/service/impl/UserServiceImpl.java)、[BusinessDateProvider](../../src/main/java/com/localdeals/service/BusinessDateProvider.java) |
+| 批量任务 | [VoucherBatchJobService](../../src/main/java/com/localdeals/service/VoucherBatchJobService.java)、[VoucherBatchJobWorker](../../src/main/java/com/localdeals/service/VoucherBatchJobWorker.java)、[VoucherBatchItemMapper](../../src/main/java/com/localdeals/mapper/VoucherBatchItemMapper.java) |
+| 通知待办 | [VoucherGrantNotificationOutboxService](../../src/main/java/com/localdeals/service/VoucherGrantNotificationOutboxService.java)、[VoucherGrantNotificationOutboxWorker](../../src/main/java/com/localdeals/service/VoucherGrantNotificationOutboxWorker.java) |
+| 配置 | [VoucherBatchProperties](../../src/main/java/com/localdeals/config/VoucherBatchProperties.java)、[application.yaml](../../src/main/resources/application.yaml) |
+| 数据定义 | [V9](../../src/main/resources/db/migration/V9__targeted_voucher_campaign.sql)、[V10](../../src/main/resources/db/migration/V10__daily_sign_task_rewards.sql)、[V11](../../src/main/resources/db/migration/V11__batch_grant_notification_outbox.sql) |
+| 局部验证 | [M6aBusinessFlowIT](../../src/test/java/com/localdeals/marketing/M6aBusinessFlowIT.java)、[MarketingGrantConcurrencyIT](../../src/test/java/com/localdeals/marketing/MarketingGrantConcurrencyIT.java)、[M6bDailyTaskBusinessIT](../../src/test/java/com/localdeals/marketing/M6bDailyTaskBusinessIT.java)、[M6cBatchBusinessIT](../../src/test/java/com/localdeals/marketing/M6cBatchBusinessIT.java)、[M6cFlywayIT](../../src/test/java/com/localdeals/marketing/M6cFlywayIT.java)、[M6cRedisRecoveryIT](../../src/test/java/com/localdeals/marketing/M6cRedisRecoveryIT.java) |
+| 详细底稿 | [05. 营销发券链路](05-marketing-grant-chain.md) |
 
-SKIPPED 与 FAILED 必须区分：稳定业务拒绝不应无限重试，技术故障也不应永久跳过。FAILED 当前需要显式 retry-failures 才会重置，不是无限自动重试。
-
-Job 的主状态流转是 `SNAPSHOTTING → READY → RUNNING → COMPLETED / PARTIAL_FAILED`。运行中的任务可以暂停为 PAUSED，恢复后回到 READY；只有 FAILED Item 会由显式 retry-failures 重置为 PENDING。最终没有待处理项且没有失败项时完成，有失败项时进入 PARTIAL_FAILED。
-
-批量链路故意允许一个可恢复窗口：
-
-~~~text
-某个用户的独立 Grant 已提交
-        ↓
-外层 Item 状态更新前进程崩溃
-        ↓
-Item 仍是 PENDING，但权益已经存在
-        ↓
-下一轮再次调用统一发券事务
-        ↓
-命中已有 Grant，Item 收敛为 IDEMPOTENT
-~~~
-
-这说明 Grant 是权益事实，Item 只是进度标记。
-
-#### 通知 Outbox 的重试边界
-
-每个新 Grant 都在同一事务中插入一条 PENDING 通知。默认关闭的通知 worker 按 nextAttemptTime 和 ID 锁定有限批到期待办，再向 Redis Pub/Sub 发布用户事件：
-
-- Redis 发布失败时保持 PENDING，增加尝试次数并安排下次时间；
-- 退避时间逐步增长，但有最大上限；
-- 尝试次数达到配置上限后不会进入 FAILED，也不会停止，计数封顶后仍按最大退避继续处理；
-- 发布成功后标为 PUBLISHED。
-
-Redis publish 与 MySQL marker 不是一个事务。发布成功后、marker 提交前失败时，下轮会重复发布，因此客户端应按 eventId 或 grantId 去重，并重新查询券包。
-
-PUBLISHED 只表示 publish 调用成功且数据库 marker 随后提交，不表示用户在线、WebSocket 已送达或用户已经阅读。当前没有真正的通知 FAILED 终态或 DLQ；通知失败也绝不撤销 Grant。
-
-#### 关键故障与恢复
-
-| 场景 | 当前结果 |
-| --- | --- |
-| 两个请求并发给同一用户发同一活动券 | 一个创建 Grant；后请求锁后命中，或唯一键失败后读取胜者 |
-| 已条件占额后 Grant 或 Outbox 插入失败 | 同一事务整体回滚，额度不漂移 |
-| 活动规则在请求期间变化 | 版本复核或条件更新拒绝 |
-| 标签在 Job 快照后失效 | Item 执行时复核为 SKIPPED |
-| 单个 Item 技术失败 | 记为 FAILED，其他 Item 继续，之后显式重试 |
-| Grant 已提交但 Item marker 失败 | 重跑命中 Grant，Item 变为 IDEMPOTENT |
-| Redis 通知故障 | Grant 不回滚，PENDING Outbox 退避重试 |
-| publish 成功但 marker 失败 | 可能重复提示，客户端去重并查询 MySQL |
-
-批量 Job worker 与通知 worker 当前都默认关闭。相关状态机是已实现能力，不等于某个部署已启用，更不能据此声称批量规模、发券吞吐或通知 SLA。
+M6aBusinessFlowIT、MarketingGrantConcurrencyIT、M6bDailyTaskBusinessIT、M6cBatchBusinessIT 与 M6cRedisRecoveryIT 分别覆盖限定的业务、并发、签到、批量和 Redis 恢复场景。M6cFlywayIT 还明确断言从 V10 升级至 V11 时历史 Grant 不会生成通知 Outbox。它们不证明当前部署已开启 worker、任意规模人群处理、通知送达或生产吞吐。仓库没有 Testcontainers 依赖；恢复测试只会在严格所有权检查通过时操作指定 Redis，测试文件存在不表示本轮已执行。
 
 ---
 
-## 5. 把三条链放在一起回答
+## 5. 旧章节迁移、冲突修正与继续追查
 
-### 5.1 三种一致性方案为什么不同
+### 5.1 旧 09 到新结构的迁移映射
 
-| 对比 | 秒杀事务消息 | 点赞 Outbox | 发券事务与 Outbox |
+| 旧内容 | 新位置 | 处理 |
+| --- | --- | --- |
+| 使用方式、三条链共同方法 | §0～§1 | 合并成一次事实优先级、术语和对比，不在文末重复 |
+| 三组概括版与完整版 | 各模块 §2～§3 | 重写成自然第一人口述，开场不再罗列返回码与类名 |
+| 三组详细技术链路 | 各模块 §4～§7 | 主流程、机制、异常和状态拆开，不再按 Controller 到 Mapper 流水账 |
+| Lua 返回、配置与开关 | 各模块 §9 | 集中成表格，避免在主链重复 |
+| 三组高频追问 | 各模块 §8 | 保留真实追问，并补充当前局限 |
+| 源码反查 | 各模块 §9 | 分发到对应业务，直接链接源码、迁移与底稿 |
+
+### 5.2 本次明确收紧的事实边界
+
+| 容易误解的旧表述 | 当前源码支持的说法 |
+| --- | --- |
+| PROCESSING 表示数据库还没有订单 | Redis 尚未确认终态；MySQL 可能未落单，也可能已提交但 markSuccess 失败 |
+| 秒杀补偿默认关闭 | 定时对账中的自动补偿默认关闭；Consumer 的两类明确永久失败可即时精确补偿 |
+| 事务消息保证跨组件一致 | 它只缩小预占与消息提交窗口；消费幂等、数据库约束与恢复仍不可少 |
+| quarantine 是第四个订单状态 | 它是独立安全隔离边界，不改 PROCESSING、不回库存 |
+| 点赞 worker 失败后总能自动重试收敛 | 暂态错误可重放；永久坏事件当前无 DLQ 或自动隔离，可能阻塞 |
+| liked 等于当前关系数 | 没有 pending Outbox 时才有 liked = legacy_liked_offset + 当前关系数；一般情况下还要把 pending delta 加到 liked 一侧 |
+| 每个批量 Item 都独立提交 | 每个 Grant 使用独立事务；有限批 Item marker 共享外层批事务 |
+| PUBLISHED 表示用户收到通知 | 只表示 publish 返回成功且 marker 提交，不表示 WebSocket 送达或已读 |
+
+### 5.3 三条链的最终复习对照
+
+| 问题 | 秒杀 | 点赞与热榜 | 营销发券 |
 | --- | --- | --- | --- |
-| 最先成立的关键事实 | Redis 资格预约 | MySQL 点赞关系 | MySQL Grant |
-| 怎样留下后续工作 | Broker 中的 half message | 与关系同事务的增量行 | 与 Grant 同事务的通知行；批量另有 Item |
-| 重复怎样收敛 | exact reservation、状态和数据库约束 | 目标状态、关系唯一键、事件行锁 | 幂等身份、活动锁、条件更新、唯一约束 |
-| 异常时查什么 | 预约所有权、状态和 MySQL 订单 | 关系、未处理事件和聚合数 | Grant、Item 和通知 Outbox |
+| 最终事实 | MySQL 正式订单与数据库库存 | MySQL 用户—Blog 关系 | MySQL Grant |
+| 关键暂态 | Redis PROCESSING 与 reservation | pending Outbox、热榜 generation | Job、Item、PENDING 通知 |
+| 最终防重 | 订单主键、用户—券唯一键 | 关系复合主键 | Grant 幂等唯一键 |
+| 主要异步执行者 | RocketMQ Consumer；可选 Reconciler | Outbox worker 与热榜 builder | Batch worker 与通知 worker |
+| 允许补偿的条件 | exact 所有权且确认订单未成立 | 通常回滚、重放或重建，不做业务补偿 | 不因进度或通知失败撤销 Grant |
+| 证据冲突 | 暂停并 quarantine | 批事务回滚，坏事件需核查 | 不猜成功；按 Grant 与唯一键重读 |
+| 默认关闭能力 | 对账、对账补偿、回填 | 新写、worker、热榜读/刷新、回填 | 批量与通知 worker |
 
-事务消息和 Transactional Outbox 都不提供跨所有组件的 exactly-once。共同目标是允许重复交付，但让每次重复回到同一个业务结果。
+### 5.4 文档与验证边界
 
-### 5.2 回答一条链时的节奏
-
-可以始终使用五段式：
-
-1. 先说业务风险和最终事实。
-2. 用三层以内的整体方案建立地图。
-3. 只讲三个真正影响正确性的实现点。
-4. 解释每个设计具体防住哪个竞态。
-5. 推演一个最危险异常，并主动说出默认关闭和未实现边界。
-
-如果面试官还没有追问，不需要主动背 Redis key、表名、类名、每个返回码或所有状态分支。这些内容应该作为证明细节，而不是回答的开场。
-
----
-
-## 6. 按需反查源码和实现细节
-
-### 6.1 秒杀
-
-| 关注点 | 代表入口 |
+| 用途 | 权威入口 |
 | --- | --- |
-| HTTP 入口和可信 IP | VoucherOrderController、TrustedClientIpResolver |
-| 三维流量保护 | SeckillTrafficGuard、seckill_traffic_guard.lua |
-| 事务消息与 Redis 准入 | SeckillOrderProducer、seckill_check.lua |
-| 消费、落库与冲突分类 | SeckillOrderConsumer、VoucherOrderServiceImpl |
-| 状态迁移与补偿 | SeckillOrderStateService、seckill_validate_reservation.lua、seckill_mark_success.lua、seckill_compensate.lua |
-| 过期检查 | SeckillOrderReconciler |
+| 项目介绍、补充模块、后台安全核心链 | [08. 补充模块面试讲述手册](08-interview-playbook.md) |
+| 秒杀源码级底稿 | [03. 秒杀订单链路](03-seckill-order-chain.md) |
+| 点赞与热榜源码级底稿 | [04. 点赞和热榜链路](04-blog-like-hot-rank-chain.md) |
+| 营销源码级底稿 | [05. 营销发券链路](05-marketing-grant-chain.md) |
+| 主张、证据等级与不能扩大之处 | [06. 证据与边界](06-evidence-and-ownership.md) |
+| 当前配置与测试 | [application.yaml](../../src/main/resources/application.yaml)、[src/test](../../src/test/) |
 
-Redis 准入返回值：0 表示预占成功；1 表示快速库存不足；2 表示重复下单；3 表示活动未开始；4 表示活动结束、暂停或未启用；5 表示活动元数据缺失或非法。1～5 都在首次副作用前返回；异常或未知结果不能套用这些业务拒绝语义。
-
-### 6.2 点赞与热榜
-
-| 关注点 | 代表入口 |
-| --- | --- |
-| 目标状态写入 | BlogController、BlogLikeCommandService |
-| 增量消费 | BlogLikeOutboxWorker、BlogLikeOutboxBatchService |
-| 榜单读取与重建 | BlogServiceImpl、BlogHotRankService、BlogHotRankWarmupService |
-| 原子发布 | blog_hot_rank_publish.lua |
-| 关系、Outbox 与迁移边界 | V8__durable_blog_likes.sql |
-
-### 6.3 营销发券
-
-| 关注点 | 代表入口 |
-| --- | --- |
-| 管理员单发 | MarketingAdminController |
-| 统一门面与并发收敛 | VoucherGrantService |
-| 单人发券事务 | VoucherGrantTransactionService |
-| 活动条件更新与查询 | VoucherCampaignMapper、VoucherGrantMapper |
-| 批量任务 | VoucherBatchJobService、VoucherBatchJobWorker |
-| 通知重试 | VoucherGrantNotificationOutboxService、VoucherGrantNotificationOutboxWorker |
-| 数据库约束 | V9__targeted_voucher_campaign.sql、V10__daily_sign_task_rewards.sql、V11__batch_grant_notification_outbox.sql |
-
-更细的 SQL、Lua、迁移和验证证据分别在 [03. 秒杀订单链路](03-seckill-order-chain.md)、[04. 点赞和热榜链路](04-blog-like-hot-rank-chain.md)、[05. 营销发券链路](05-marketing-grant-chain.md) 和 [06. 证据与边界](06-evidence-and-ownership.md)。
-
-本次只重写学习文档，没有启动 Redis、MySQL、RocketMQ、Elasticsearch，没有执行迁移、故障实验或压测。文中“已实现”来自当前 checkout 的源码与迁移，“默认开启或关闭”来自当前配置；这些都不能自动扩大成生产吞吐、延迟、可用性或消息必达结论。
+当前实现能够说明各链的控制流、数据库约束、协议状态和局部恢复分支。它不能证明全局强事务、消息 exactly-once、WebSocket 必达、Redis 全量丢失无损恢复、生产吞吐、P99、SLA 或故障恢复时间。面试中遇到没有源码或测试证据的运行结论，应明确说“当前未验证”，而不是用架构术语替代证据。

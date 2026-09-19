@@ -17,6 +17,10 @@
 4. [Pre-M8 最终结果](evidence/pre-m8/pre-m8-baseline-results.md)：当前版本的最终可复用证据。
 5. [M7 演示手册](guides/project-demo.md)：15 分钟演示顺序和只读核验方式。
 
+## 学习文档
+
+- [源码链路、证据与面试材料](learning/README.md)：按后台/RBAC、秒杀、点赞热榜、营销发券和横切保障建立可追溯学习路径。
+
 ## 文档状态
 
 | 标记 | 含义 |
