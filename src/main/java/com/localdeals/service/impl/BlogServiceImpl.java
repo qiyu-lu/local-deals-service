@@ -6,10 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.localdeals.dto.BlogDoc;
 import com.localdeals.dto.BlogLikeCommandResult;
 import com.localdeals.dto.Result;
-import com.localdeals.dto.ScrollResult;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.entity.Blog;
-import com.localdeals.entity.Follow;
 import com.localdeals.entity.User;
 import com.localdeals.exception.ApiStatusException;
 import com.localdeals.mapper.BlogMapper;
@@ -20,7 +18,6 @@ import com.localdeals.service.BlogHotRankReadResult;
 import com.localdeals.service.BlogHotRankService;
 import com.localdeals.service.BlogHotRankWarmupService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.localdeals.service.IFollowService;
 import com.localdeals.service.IUserService;
 import com.localdeals.service.UploadFileService;
 import com.localdeals.service.LocalReadBulkhead;
@@ -36,8 +33,6 @@ import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,8 +48,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.localdeals.utils.RedisConstants.FEED_KEY;
-
 /**
  * <p>
  *  服务实现类
@@ -67,15 +60,8 @@ import static com.localdeals.utils.RedisConstants.FEED_KEY;
 @Slf4j
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IBlogService {
 
-    private static final int FOLLOW_FEED_PAGE_SIZE = 2;
-
     @Resource
     private IUserService userService;
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
-
-    @Resource
-    private IFollowService  followService;
 
     @Resource
     private UploadFileService uploadFileService;
@@ -302,80 +288,18 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return Result.fail("新增笔记失败!");
         }
         uploadFileService.markPublished(imagePaths, user.getId(), blog.getId());
-        List<Long> followerIds = followService.query()
-                .eq("follow_user_id", user.getId())
-                .list()
-                .stream()
-                .map(Follow::getUserId)
-                .collect(Collectors.toList());
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new IllegalStateException("Blog creation requires an active transaction synchronization");
         }
         final Long committedBlogId = blog.getId();
-        final long publishedAt = System.currentTimeMillis();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 blogHotRankService.addNewBlogAfterCommit(committedBlogId);
-                for (Long followerId : followerIds) {
-                    try {
-                        stringRedisTemplate.opsForZSet().add(
-                                FEED_KEY + followerId,
-                                committedBlogId.toString(),
-                                publishedAt);
-                    } catch (RuntimeException e) {
-                        log.error("Unable to publish committed blog to follower feed. blogId={}, followerId={}",
-                                committedBlogId, followerId, e);
-                    }
-                }
             }
         });
         // 返回id
         return Result.ok(blog.getId());
-    }
-
-    //查询收件箱的所有笔记实现滚动分页
-    @Override
-    public Result queryBlogOfFollow(Long max, Integer offset) {
-        //1.获取当前用户
-        Long userId = UserHolder.getUser().getId();
-        //2. 查询收件箱
-        String key = FEED_KEY + userId;
-        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
-                .reverseRangeByScoreWithScores(key, 0, max, offset, FOLLOW_FEED_PAGE_SIZE);
-        if(typedTuples == null || typedTuples.isEmpty()){
-            return Result.ok(Collections.emptyList());
-        }
-        //3.解析数据 blogId，score(时间戳)、offset
-        List<Long> ids = new ArrayList<>(typedTuples.size());
-        long minTime = 0;
-        int os = 1;
-        for(ZSetOperations.TypedTuple<String> typedTuple : typedTuples){
-            ids.add(Long.valueOf(typedTuple.getValue()));
-
-            long time = typedTuple.getScore().longValue();
-            if(time == minTime) os++;
-            else {
-                minTime = time;
-                os = 1;
-            }
-        }
-        //4.根据id查询blog
-        String idStr = StrUtil.join("," , ids);
-        List<Blog> blogs = query().in("id", ids)
-                .last("ORDER BY FIELD(id, " + idStr + ")").list();
-
-        for(Blog blog : blogs){
-            queryBlogUser(blog);
-            isBlogLiked(blog);
-        }
-
-        //5.封装并返回
-        ScrollResult r = new ScrollResult();
-        r.setList(blogs);
-        r.setOffset(os);
-        r.setMinTime(minTime);
-        return Result.ok(r);
     }
 
     private void queryBlogUser(Blog blog) {

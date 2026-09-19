@@ -47,15 +47,14 @@ class SearchTrafficContractTest {
     }
 
     @Test
-    void legacyNameSearchDoesNotReachMysqlWhenSearchPermitIsExhausted() throws Exception {
+    void shopSearchDoesNotReachElasticsearchWhenSearchPermitIsExhausted() throws Exception {
         TrafficControlProperties properties = new TrafficControlProperties();
         properties.getRead().setSearchMaxConcurrent(1);
         properties.getRead().setSearchMaxWait(Duration.ZERO);
         LocalReadBulkhead bulkhead = bulkhead(properties);
-        ShopMapper mapper = mock(ShopMapper.class);
+        ElasticsearchRestTemplate elasticsearch = mock(ElasticsearchRestTemplate.class);
         ShopServiceImpl service = new ShopServiceImpl(mock(StringRedisTemplate.class),
-                mock(CacheClient.class), mock(ElasticsearchRestTemplate.class), bulkhead);
-        ReflectionTestUtils.setField(service, "baseMapper", mapper);
+                mock(CacheClient.class), elasticsearch, bulkhead);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         Thread holder = new Thread(() -> bulkhead.executeSearch(() -> {
@@ -70,11 +69,11 @@ class SearchTrafficContractTest {
         holder.start();
         assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
         try {
-            assertThatThrownBy(() -> service.queryShopByName("tea", 1))
+            assertThatThrownBy(() -> service.searchShops("tea", null, null, null, null, 1))
                     .isInstanceOfSatisfying(ApiStatusException.class,
                             error -> assertThat(error.getCode()).isEqualTo(
                                     ApiErrorCodes.SEARCH_OVERLOADED));
-            verifyNoInteractions(mapper);
+            verifyNoInteractions(elasticsearch);
         } finally {
             release.countDown();
             holder.join(5_000L);

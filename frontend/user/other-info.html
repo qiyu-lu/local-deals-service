@@ -41,9 +41,6 @@
       <div class="name">{{user.nickName}}</div>
       <span>杭州</span>
     </div>
-    <div class="logout-btn" @click="follow" style="text-align: center">
-      {{followed ? "取消关注" : "关注"}}
-    </div>
   </div>
   <div class="introduce">
     <span v-if="info.introduce"></span>
@@ -58,20 +55,6 @@
             <div class="blog-title" v-html="b.title"></div>
             <div class="blog-liked"><img src="/imgs/thumbup.png" alt=""> {{b.liked}}</div>
             <div class="blog-comments"><i class="el-icon-chat-dot-round"></i> {{b.comments}}</div>
-          </div>
-        </div>
-      </el-tab-pane>
-      <el-tab-pane label="共同关注" name="2">
-        <div>你们都关注了：</div>
-        <div class="follow-info" v-for="u in commonFollows" :key="u.id">
-          <div class="follow-info-icon" @click="toOtherInfo(u.id)">
-            <img :src="u.icon || '/imgs/icons/default-icon.png'" alt="">
-          </div>
-          <div class="follow-info-name">
-            <div class="name">{{u.nickName}}</div>
-          </div>
-          <div class="follow-info-btn" @click="toOtherInfo(u.id)">
-              去主页看看
           </div>
         </div>
       </el-tab-pane>
@@ -95,8 +78,6 @@
       activeName: "1",
       info: {},
       blogs: [],
-      followed: false, // 是否关注了
-      commonFollows: [], // 共同关注
     },
     created() {
       this.queryUser();
@@ -130,8 +111,6 @@
             this.queryUserInfo();
             // 查询用户笔记
             this.queryBlogs();
-            // 是否被关注
-            this.isFollowed();
           })
           .catch(console.log)
       },
@@ -153,30 +132,7 @@
             this.$message.error(err);
           })
       },
-      isFollowed(){
-        axios.get("/follow/or/not/" + this.user.id)
-          .then(({data}) => this.followed = data)
-          .catch(this.$message.error)
-      },
-      queryCommonFollow() {
-        axios.get("/follow/common/" + this.user.id)
-          .then(({data}) => this.commonFollows = data)
-          .catch(err => {
-            this.$message.error(err);
-          })
-      },
-      follow() {
-        axios.put("/follow/" + this.user.id + "/" + !this.followed)
-          .then(() => {
-            this.$message.success(this.followed ? "已取消关注" : "已关注")
-            this.followed = !this.followed
-          })
-          .catch(this.$message.error)
-      },
       handleClick(t) {
-        if (t.name === '2') {
-          this.queryCommonFollow();
-        }
       },
       toOtherInfo(id){
         location.href = "/other-info.html?id=" + id

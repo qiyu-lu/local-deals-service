@@ -220,17 +220,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
-    public Result queryShopByName(String name, Integer current) {
-        requirePositivePage(current);
-        return localReadBulkhead.executeSearch(() -> {
-            Page<Shop> page = query()
-                    .like(StrUtil.isNotBlank(name), "name", name)
-                    .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-            return Result.ok(page.getRecords());
-        });
-    }
-
-    @Override
     public Result searchShops(String keyword, Double x, Double y, Integer radius, Long typeId, Integer current) {
         requirePositivePage(current);
         return localReadBulkhead.executeSearch(

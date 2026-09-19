@@ -25,7 +25,6 @@ public class WebConfig implements WebMvcConfigurer {
     public static final List<String> PUBLIC_GET_PATHS = Collections.unmodifiableList(Arrays.asList(
             "/shop/{id:\\d+}",
             "/shop/of/type",
-            "/shop/of/name",
             "/shop/search",
             "/shop-type/list",
             "/blog/hot",

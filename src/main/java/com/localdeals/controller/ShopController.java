@@ -50,20 +50,6 @@ public class ShopController {
     }
 
     /**
-     * 根据商铺名称关键字分页查询商铺信息
-     * @param name 商铺名称关键字
-     * @param current 页码
-     * @return 商铺列表
-     */
-    @GetMapping("/of/name")
-    public Result queryShopByName(
-            @RequestParam(value = "name", required = false) String name,
-            @RequestParam(value = "current", defaultValue = "1") Integer current
-    ) {
-        return shopService.queryShopByName(name, current);
-    }
-
-    /**
      * 基于 Elasticsearch 的商铺搜索（IK 分词 + 地理位置过滤/排序）
      * @param keyword 关键词
      * @param x 经度
