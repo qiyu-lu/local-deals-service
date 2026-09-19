@@ -22,4 +22,10 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
     SeckillOrderPersistenceResult classifyPersistence(Long orderId, Long userId, Long voucherId);
 
     void createVoucherOrder(VoucherOrder voucherOrder);
+
+    /**
+     * Persists an admitted seckill reservation as a PENDING_PAY {@code trade_order} and takes
+     * one unit of DB stock in the same transaction. Replaying the same message is a no-op.
+     */
+    void createPendingOrder(com.localdeals.trade.mq.SeckillOrderMessage message);
 }

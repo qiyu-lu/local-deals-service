@@ -279,6 +279,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     @Override
+    public void createPendingOrder(SeckillOrderMessage message) {
+        throw new UnsupportedOperationException("M2: not implemented yet");
+    }
+
+    @Override
     @Transactional
     public void createVoucherOrder(VoucherOrder voucherOrder) {
         try {
