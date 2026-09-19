@@ -2,6 +2,7 @@ package com.localdeals.trade.mq;
 
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.trade.service.IVoucherOrderService;
+import com.localdeals.trade.service.SeckillAdmissionService;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,8 +34,9 @@ import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_K
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(properties =
-        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true")
+@SpringBootTest(properties = {
+        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true",
+        "local-deals.traffic.seckill.ip-limit=100000"})
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SeckillWithRocketMQIT {
@@ -44,6 +46,9 @@ class SeckillWithRocketMQIT {
 
     @Resource
     private SnowflakeOrderIdGenerator orderIdGenerator;
+
+    @Resource
+    private SeckillAdmissionService seckillAdmissionService;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -99,7 +104,7 @@ class SeckillWithRocketMQIT {
     }
 
     @Test
-    void sendSeckillTransaction_concurrentUsers_noOversell() throws InterruptedException {
+    void admitThenPublish_concurrentUsers_noOversell() throws InterruptedException {
         ExecutorService pool = Executors.newFixedThreadPool(50);
         CountDownLatch latch = new CountDownLatch(TOTAL_USERS);
         Set<Integer> results = java.util.Collections.synchronizedSet(new HashSet<>());
@@ -111,9 +116,12 @@ class SeckillWithRocketMQIT {
                 try {
                     long orderId = orderIdGenerator.nextId(userId);
                     issuedOrderIds.add(orderId);
-                    int r = seckillOrderProducer.sendSeckillTransaction(TEST_VOUCHER_ID, userId, orderId);
+                    int r = seckillAdmissionService.admit(TEST_VOUCHER_ID, userId, orderId, "10.0.0.1").code();
                     results.add(r);
-                    if (r == 0) acceptedOrderIds.add(orderId);
+                    if (r == 0) {
+                        acceptedOrderIds.add(orderId);
+                        seckillOrderProducer.publish(new SeckillOrderMessage(TEST_VOUCHER_ID, userId, orderId));
+                    }
                 } finally {
                     latch.countDown();
                 }

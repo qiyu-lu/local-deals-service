@@ -38,11 +38,29 @@ class SeckillLuaScriptContractTest {
         assertThat(script).doesNotContain("redis.call('EXPIRE', orderStatusKey");
 
         int metadataRead = script.indexOf("redis.call('HMGET', metaKey");
+        int orderIdGuard = script.indexOf("redis.call('EXISTS', orderStatusKey)");
         int stockDecrement = script.indexOf("redis.call('DECR', stockKey)");
         assertThat(metadataRead).isGreaterThanOrEqualTo(0);
-        assertThat(stockDecrement).isGreaterThan(metadataRead);
+        assertThat(orderIdGuard).isGreaterThan(metadataRead);
+        assertThat(stockDecrement).isGreaterThan(orderIdGuard);
+    }
 
-        assertThat(script).contains("return 0", "return 1", "return 2", "return 3", "return 4", "return 5");
+    @Test
+    void admissionScript_ratesUsersAndIpsInTheSameRoundTripBeforeAnyStockDecision() throws IOException {
+        String script = readScript("lua/seckill_check.lua");
+
+        int userCounter = script.indexOf("redis.call('INCR', userRateKey)");
+        int ipCounter = script.indexOf("redis.call('INCR', ipRateKey)");
+        int stockRead = script.indexOf("redis.call('GET', stockKey)");
+        assertThat(userCounter).isGreaterThanOrEqualTo(0);
+        assertThat(ipCounter).isGreaterThanOrEqualTo(0);
+        assertThat(stockRead).isGreaterThan(userCounter).isGreaterThan(ipCounter);
+        assertThat(script).contains("return {6,", "return {7,", "return {8,");
+    }
+
+    @Test
+    void theSeparateTrafficGuardRoundTripIsGone() {
+        assertThat(new ClassPathResource("lua/seckill_traffic_guard.lua").exists()).isFalse();
     }
 
     @Test

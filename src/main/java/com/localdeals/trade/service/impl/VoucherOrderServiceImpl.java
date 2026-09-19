@@ -54,6 +54,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private SeckillOrderProducer seckillOrderProducer;
 
     @Resource
+    private com.localdeals.trade.service.SeckillAdmissionService seckillAdmissionService;
+
+    @Resource
     private SeckillOrderStateService seckillOrderStateService;
 
     @Resource

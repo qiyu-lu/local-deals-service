@@ -92,6 +92,11 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
         }
     }
 
+    /** Stub for the red commit. */
+    public void publish(SeckillOrderMessage message) {
+        throw new UnsupportedOperationException("not implemented");
+    }
+
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
         if (!(arg instanceof LocalTransactionContext)) {
