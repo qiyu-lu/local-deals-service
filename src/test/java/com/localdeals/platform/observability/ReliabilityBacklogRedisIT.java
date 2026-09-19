@@ -21,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
@@ -44,17 +43,14 @@ class ReliabilityBacklogRedisIT {
     @AfterEach
     void cleanOwnedKeys() {
         redisTemplate.delete(SECKILL_PROCESSING_INDEX_KEY);
-        redisTemplate.delete(SECKILL_PROCESSING_QUARANTINE_KEY);
     }
 
     @Test
-    void readOnlyLuaReportsDueAndQuarantineWithoutChangingRedisData() {
+    void readOnlyLuaReportsDueWithoutChangingRedisData() {
         long now = Instant.now().getEpochSecond();
         redisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, "m5a-due", now - 7D);
         redisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, "m5a-future", now + 600D);
-        redisTemplate.opsForZSet().add(SECKILL_PROCESSING_QUARANTINE_KEY, "m5a-quarantine", now);
         byte[] processingBefore = dump(SECKILL_PROCESSING_INDEX_KEY);
-        byte[] quarantineBefore = dump(SECKILL_PROCESSING_QUARANTINE_KEY);
 
         collector.collectSeckill();
 
@@ -62,10 +58,7 @@ class ReliabilityBacklogRedisIT {
                 .isEqualTo(1D);
         assertThat(registry.get("local_deals.seckill.processing.oldest_overdue").gauge().value())
                 .isBetween(7D, 10D);
-        assertThat(registry.get("local_deals.seckill.processing.quarantine").gauge().value())
-                .isEqualTo(1D);
         assertThat(dump(SECKILL_PROCESSING_INDEX_KEY)).isEqualTo(processingBefore);
-        assertThat(dump(SECKILL_PROCESSING_QUARANTINE_KEY)).isEqualTo(quarantineBefore);
     }
 
     @Test

@@ -8,7 +8,6 @@ KEYS[1] stock String
 KEYS[2] exact reservation Hash
 KEYS[3] order status Hash
 KEYS[4] global PROCESSING due-time ZSET
-KEYS[5] reconciliation quarantine ZSET
 
 ARGV[1] userId
 ARGV[2] voucherId
@@ -24,19 +23,12 @@ local stockKey = KEYS[1]
 local reservationKey = KEYS[2]
 local orderStatusKey = KEYS[3]
 local processingIndexKey = KEYS[4]
-local quarantineKey = KEYS[5]
 
 local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
 local reason = ARGV[4]
 local statusTtlSeconds = tonumber(ARGV[5])
-
--- Quarantine is an operator safety boundary. No automatic caller may release stock while
--- exact ownership evidence is isolated, even if the remaining PROCESSING fields still match.
-if redis.call('ZSCORE', quarantineKey, orderId) then
-    return 0
-end
 
 local statusData = redis.call('HMGET', orderStatusKey, 'status', 'orderId', 'userId', 'voucherId')
 -- A replay after a completed exact compensation has no reservation by design. Still heal a

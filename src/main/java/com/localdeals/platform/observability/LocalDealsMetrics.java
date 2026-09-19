@@ -60,10 +60,8 @@ public class LocalDealsMetrics {
         RESERVATION_MISMATCH,
         STATE_MISSING,
         COMPENSATED,
-        QUARANTINED,
         TRANSIENT_ERROR,
-        COMPENSATION_ERROR,
-        QUARANTINE_ERROR
+        COMPENSATION_ERROR
     }
 
     private final Map<String, Counter> likeCommands = new HashMap<>();
@@ -104,7 +102,6 @@ public class LocalDealsMetrics {
     private final AtomicReference<Double> hotRankAge = nanGauge();
     private final AtomicReference<Double> seckillDue = nanGauge();
     private final AtomicReference<Double> seckillOldestOverdue = nanGauge();
-    private final AtomicReference<Double> seckillQuarantine = nanGauge();
     private final AtomicReference<Double> voucherGrantOutboxPending = nanGauge();
     private final AtomicReference<Double> voucherGrantOutboxOldestAge = nanGauge();
 
@@ -239,8 +236,6 @@ public class LocalDealsMetrics {
                 "Seckill reservations currently due for reconciliation", seckillDue);
         gauge(registry, "local_deals.seckill.processing.oldest_overdue", "seconds",
                 "Age beyond due time of the oldest due seckill reservation", seckillOldestOverdue);
-        gauge(registry, "local_deals.seckill.processing.quarantine", "orders",
-                "Seckill reservations in reconciliation quarantine", seckillQuarantine);
         gauge(registry, "local_deals.marketing.voucher_grant.outbox.pending", "events",
                 "Pending voucher-grant notification outbox events", voucherGrantOutboxPending);
         gauge(registry, "local_deals.marketing.voucher_grant.outbox.oldest_age", "seconds",
@@ -409,17 +404,15 @@ public class LocalDealsMetrics {
         safeIncrement(hotRankCollectors.get(CollectorResult.FAILURE));
     }
 
-    public void updateSeckillBacklog(long due, double oldestOverdueSeconds, long quarantine) {
+    public void updateSeckillBacklog(long due, double oldestOverdueSeconds) {
         seckillDue.set((double) due);
         seckillOldestOverdue.set(oldestOverdueSeconds);
-        seckillQuarantine.set((double) quarantine);
         safeIncrement(seckillCollectors.get(CollectorResult.SUCCESS));
     }
 
     public void failSeckillCollector() {
         seckillDue.set(Double.NaN);
         seckillOldestOverdue.set(Double.NaN);
-        seckillQuarantine.set(Double.NaN);
         safeIncrement(seckillCollectors.get(CollectorResult.FAILURE));
     }
 

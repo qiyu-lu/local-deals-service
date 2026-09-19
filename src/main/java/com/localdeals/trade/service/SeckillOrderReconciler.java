@@ -139,8 +139,7 @@ public class SeckillOrderReconciler {
         }
         if (snapshot == null) {
             // Without a trustworthy user id there is no way to acquire the same lock as an
-            // in-flight consumer. Keep the due evidence for manual repair instead of creating a
-            // consumer-visible quarantine outside the shared-lock boundary.
+            // in-flight consumer. Keep the due evidence for manual repair.
             increment(Outcome.INVALID_STATE);
             log.error("Stale seckill state is missing or invalid; leaving it pending because " +
                     "the shared user lock cannot be resolved. orderId={}", candidateOrderId);
@@ -202,13 +201,12 @@ public class SeckillOrderReconciler {
             case NOT_DUE:
             case TERMINAL:
             case INDEX_MISSING:
-            case QUARANTINED:
                 increment(Outcome.CLAIM_SKIPPED);
                 return;
             case OWNERSHIP_MISMATCH:
             case STATE_INVALID:
             case RESERVATION_MISMATCH:
-                quarantine(message.getOrderId(), "CLAIM_" + claim.getDecision().name());
+                needsOperator(message.getOrderId(), "CLAIM_" + claim.getDecision().name());
                 return;
             default:
                 increment(Outcome.INVALID_STATE);
@@ -221,7 +219,7 @@ public class SeckillOrderReconciler {
                                           SeckillOrderStateService.ReconciliationClaim claim,
                                           SeckillProperties.Reconciliation config) {
         if (claim.getCreatedAt() == null) {
-            quarantine(message.getOrderId(), "CLAIM_CREATED_AT_MISSING");
+            needsOperator(message.getOrderId(), "CLAIM_CREATED_AT_MISSING");
             return;
         }
 
@@ -244,10 +242,10 @@ public class SeckillOrderReconciler {
                 handleAbsent(message, claim, config);
                 return;
             case USER_VOUCHER_CONFLICT:
-                handleUserVoucherConflict(message, persistence, config);
+                handleDbConflict(message, persistence, config, REASON_DB_ORDER_CONFLICT);
                 return;
             case ORDER_ID_CONFLICT:
-                handleOrderIdConflict(message, persistence);
+                handleDbConflict(message, persistence, config, REASON_DB_ORDER_ID_CONFLICT);
                 return;
             default:
                 increment(Outcome.INVALID_STATE);
@@ -309,19 +307,26 @@ public class SeckillOrderReconciler {
         }
     }
 
-    private void handleUserVoucherConflict(SeckillOrderMessage message,
-                                           SeckillOrderPersistenceResult persistence,
-                                           SeckillProperties.Reconciliation config) {
+    /**
+     * The DB holds another order for this user/voucher, or this order id belongs to another
+     * order. Either way this reservation was never persisted and its unit goes back. An order-id
+     * conflict no longer needs isolation: the admission script never lets two reservations share
+     * an order id's status, so the Redis evidence is still exact.
+     */
+    private void handleDbConflict(SeckillOrderMessage message,
+                                  SeckillOrderPersistenceResult persistence,
+                                  SeckillProperties.Reconciliation config,
+                                  String reason) {
         // Suspend first. If this fail-closed guard is unavailable, no stock may be restored.
-        stateService.suspendVoucher(message.getVoucherId(), REASON_DB_ORDER_CONFLICT);
+        stateService.suspendVoucher(message.getVoucherId(), reason);
         if (!config.isCompensationEnabled()) {
             increment(Outcome.PAIR_CONFLICT_BLOCKED);
-            log.warn("User/voucher DB conflict found, but exact compensation is disabled. " +
-                            "orderId={} persistedOrderId={}",
-                    message.getOrderId(), persistence.getPersistedOrderId());
+            log.warn("DB conflict found, but exact compensation is disabled. " +
+                            "orderId={} reason={} persistedOrderId={}",
+                    message.getOrderId(), reason, persistence.getPersistedOrderId());
             return;
         }
-        if (!stateService.compensate(message, REASON_DB_ORDER_CONFLICT)) {
+        if (!stateService.compensate(message, reason)) {
             increment(Outcome.STATE_ERROR);
             log.error("Conflicting exact reservation could not be compensated. orderId={} persistedOrderId={}",
                     message.getOrderId(), persistence.getPersistedOrderId());
@@ -331,36 +336,15 @@ public class SeckillOrderReconciler {
         notifyBestEffort(message, false);
     }
 
-    private void handleOrderIdConflict(SeckillOrderMessage message,
-                                       SeckillOrderPersistenceResult persistence) {
-        // An order-id collision invalidates the reservation proof. It is never safe to restore
-        // stock automatically, even when timeout compensation is enabled.
-        stateService.suspendVoucher(message.getVoucherId(), REASON_DB_ORDER_ID_CONFLICT);
-        if (stateService.quarantineProcessingOrder(
-                message.getOrderId(), REASON_DB_ORDER_ID_CONFLICT)) {
-            increment(Outcome.ORDER_ID_QUARANTINED);
-        } else {
-            increment(Outcome.STATE_ERROR);
-        }
-        log.error("Seckill order id belongs to a different DB order and was quarantined. " +
-                        "orderId={} persistedUserId={} persistedVoucherId={}",
-                message.getOrderId(), persistence.getPersistedUserId(),
-                persistence.getPersistedVoucherId());
-    }
-
-    private void quarantine(Long orderId, String reason) {
-        try {
-            if (stateService.quarantineProcessingOrder(orderId, reason)) {
-                increment(Outcome.INVALID_STATE_QUARANTINED);
-            } else {
-                increment(Outcome.INVALID_STATE);
-                log.error("Unsafe seckill state could not be quarantined. orderId={} reason={}",
-                        orderId, reason);
-            }
-        } catch (RuntimeException e) {
-            increment(Outcome.STATE_ERROR);
-            log.error("Unable to quarantine unsafe seckill state. orderId={} reason={}", orderId, reason, e);
-        }
+    /**
+     * A state no automatic path may touch (ownership or reservation mismatch, corrupt fields).
+     * It stays in the index, deferred by retryDelay, so it keeps showing up in the due backlog
+     * and in this error log until an operator repairs it.
+     */
+    private void needsOperator(Long orderId, String reason) {
+        increment(Outcome.NEEDS_OPERATOR);
+        log.error("Seckill reservation needs an operator; deferred. orderId={} reason={}", orderId, reason);
+        deferScheduling(orderId, reason);
     }
 
     private void deferScheduling(Long orderId, String reason) {
@@ -394,8 +378,7 @@ public class SeckillOrderReconciler {
         TIMEOUT_COMPENSATED("timeout_compensated"),
         PAIR_CONFLICT_COMPENSATED("pair_conflict_compensated"),
         PAIR_CONFLICT_BLOCKED("pair_conflict_blocked"),
-        ORDER_ID_QUARANTINED("order_id_quarantined"),
-        INVALID_STATE_QUARANTINED("invalid_state_quarantined"),
+        NEEDS_OPERATOR("needs_operator"),
         COMPENSATION_DISABLED("compensation_disabled"),
         REDRIVEN("redriven"),
         REDRIVE_FAILED("redrive_failed"),

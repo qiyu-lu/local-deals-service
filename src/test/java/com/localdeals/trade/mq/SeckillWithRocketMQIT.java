@@ -28,8 +28,6 @@ import static org.awaitility.Awaitility.await;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,9 +95,6 @@ class SeckillWithRocketMQIT {
                     .map(String::valueOf)
                     .toArray(String[]::new);
             stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, (Object[]) orderIds);
-            stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_QUARANTINE_KEY, (Object[]) orderIds);
-            stringRedisTemplate.opsForHash().delete(
-                    SECKILL_PROCESSING_QUARANTINE_REASON_KEY, (Object[]) orderIds);
         }
     }
 
@@ -158,8 +153,6 @@ class SeckillWithRocketMQIT {
             String member = String.valueOf(orderId);
             assertThat(stringRedisTemplate.opsForZSet().score(
                     SECKILL_PROCESSING_INDEX_KEY, member)).isNull();
-            assertThat(stringRedisTemplate.opsForZSet().score(
-                    SECKILL_PROCESSING_QUARANTINE_KEY, member)).isNull();
         });
 
         System.out.println("Accepted orders: " + acceptedOrderIds.size() + "/" + TOTAL_USERS);

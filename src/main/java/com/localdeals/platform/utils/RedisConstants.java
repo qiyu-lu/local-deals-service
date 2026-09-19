@@ -29,11 +29,6 @@ public class RedisConstants {
     public static final String SECKILL_ORDER_STATUS_KEY = "seckill:order:status:";
     /** Global due-time index. Members are exact decimal order-id strings; scores are epoch seconds. */
     public static final String SECKILL_PROCESSING_INDEX_KEY = "seckill:order:processing";
-    /** Orders removed from automatic reconciliation because their state cannot be proved safe. */
-    public static final String SECKILL_PROCESSING_QUARANTINE_KEY = "seckill:order:processing:quarantine";
-    /** Human-readable quarantine reason keyed by the exact raw processing member. */
-    public static final String SECKILL_PROCESSING_QUARANTINE_REASON_KEY =
-            "seckill:order:processing:quarantine:reason";
     /** Shared lock namespace used by both the MQ consumer and the reconciliation worker. */
     public static final String SECKILL_ORDER_LOCK_KEY = "lock:order:";
     /** Per-order scheduler arbitration lock; losers must not move the winner's due score. */

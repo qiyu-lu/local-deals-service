@@ -21,8 +21,6 @@ import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 
@@ -40,7 +38,6 @@ public class SeckillOrderStateService {
     private static final DefaultRedisScript<Long> VALIDATE_RESERVATION_SCRIPT;
     private static final DefaultRedisScript<List> RECONCILE_DUE_SCRIPT;
     private static final DefaultRedisScript<List> RECONCILE_CLAIM_SCRIPT;
-    private static final DefaultRedisScript<Long> RECONCILE_QUARANTINE_SCRIPT;
     private static final DefaultRedisScript<Long> RECONCILE_DEFER_UNRESOLVED_SCRIPT;
 
     static {
@@ -49,7 +46,6 @@ public class SeckillOrderStateService {
         VALIDATE_RESERVATION_SCRIPT = script("lua/seckill_validate_reservation.lua");
         RECONCILE_DUE_SCRIPT = listScript("lua/seckill_reconcile_due.lua");
         RECONCILE_CLAIM_SCRIPT = listScript("lua/seckill_reconcile_claim.lua");
-        RECONCILE_QUARANTINE_SCRIPT = script("lua/seckill_reconcile_quarantine.lua");
         RECONCILE_DEFER_UNRESOLVED_SCRIPT = script("lua/seckill_reconcile_defer_unresolved.lua");
     }
 
@@ -74,8 +70,7 @@ public class SeckillOrderStateService {
                 VALIDATE_RESERVATION_SCRIPT,
                 Arrays.asList(
                         orderStatusKey(message.getOrderId()),
-                        reservationKey(message.getVoucherId()),
-                        SECKILL_PROCESSING_QUARANTINE_KEY),
+                        reservationKey(message.getVoucherId())),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString()
@@ -124,8 +119,7 @@ public class SeckillOrderStateService {
                         SECKILL_STOCK_KEY + message.getVoucherId(),
                         reservationKey(message.getVoucherId()),
                         orderStatusKey(message.getOrderId()),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY),
+                        SECKILL_PROCESSING_INDEX_KEY),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString(),
@@ -146,8 +140,8 @@ public class SeckillOrderStateService {
 
     /**
      * Returns at most the configured batch size of due order ids without removing them.
-     * Malformed raw members are atomically moved to quarantine so one bad member cannot make
-     * every reconciliation round fail at the Java long conversion boundary.
+     * Malformed raw members cannot be orders; they are dropped from the index so one bad member
+     * cannot make every reconciliation round fail at the Java long conversion boundary.
      */
     public List<Long> findDueOrderIds(int limit) {
         if (limit <= 0) {
@@ -169,11 +163,12 @@ public class SeckillOrderStateService {
             if (orderId != null) {
                 orderIds.add(orderId);
             } else {
+                log.error("Dropping malformed PROCESSING index member. member={}", member);
                 try {
-                    quarantineProcessingMember(member, "INVALID_PROCESSING_INDEX_MEMBER");
-                } catch (RuntimeException quarantineFailure) {
-                    log.error("Unable to quarantine malformed PROCESSING index member. member={}",
-                            member, quarantineFailure);
+                    stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, member);
+                } catch (RuntimeException removeFailure) {
+                    log.error("Unable to drop malformed PROCESSING index member. member={}",
+                            member, removeFailure);
                 }
             }
         }
@@ -188,8 +183,7 @@ public class SeckillOrderStateService {
                 Arrays.asList(
                         orderStatusKey(message.getOrderId()),
                         reservationKey(message.getVoucherId()),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY),
+                        SECKILL_PROCESSING_INDEX_KEY),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString(),
@@ -207,8 +201,8 @@ public class SeckillOrderStateService {
 
     /**
      * Moves an unresolved canonical member out of the head of the bounded due batch without
-     * changing its business status. The Lua also removes a concurrently terminal/quarantined
-     * member, so it cannot recreate an index entry after markSuccess or quarantine wins a race.
+     * changing its business status. The Lua also removes a concurrently terminal member, so it
+     * cannot recreate an index entry after markSuccess wins a race.
      */
     public boolean deferProcessingOrder(Long orderId) {
         if (orderId == null || orderId <= 0L) {
@@ -218,41 +212,9 @@ public class SeckillOrderStateService {
                 RECONCILE_DEFER_UNRESOLVED_SCRIPT,
                 Arrays.asList(
                         orderStatusKey(orderId),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY),
+                        SECKILL_PROCESSING_INDEX_KEY),
                 orderId.toString(),
                 Long.toString(seckillProperties.getReconciliation().getRetryDelay().getSeconds()));
-        return Long.valueOf(1L).equals(result) || Long.valueOf(2L).equals(result) ||
-                Long.valueOf(3L).equals(result);
-    }
-
-    /** Convenience overload for a valid numeric order id. */
-    public boolean quarantineProcessingOrder(Long orderId, String reason) {
-        if (orderId == null) {
-            throw new IllegalArgumentException("orderId must not be null");
-        }
-        return quarantineProcessingMember(orderId.toString(), reason);
-    }
-
-    /**
-     * Atomically moves an exact raw ZSET member to a timestamped quarantine. This raw form is
-     * also used for malformed members which cannot safely be represented as a Java Long.
-     */
-    public boolean quarantineProcessingMember(String orderIdMember, String reason) {
-        if (orderIdMember == null) {
-            throw new IllegalArgumentException("orderIdMember must not be null");
-        }
-        String safeReason = reason == null || reason.trim().isEmpty()
-                ? "UNSPECIFIED_RECONCILIATION_QUARANTINE"
-                : reason.trim();
-        Long result = stringRedisTemplate.execute(
-                RECONCILE_QUARANTINE_SCRIPT,
-                Arrays.asList(
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_REASON_KEY),
-                orderIdMember,
-                safeReason);
         return Long.valueOf(1L).equals(result) || Long.valueOf(2L).equals(result);
     }
 
@@ -328,8 +290,6 @@ public class SeckillOrderStateService {
                 return ReconciliationClaimDecision.RESERVATION_MISMATCH;
             case 7:
                 return ReconciliationClaimDecision.INDEX_MISSING;
-            case 8:
-                return ReconciliationClaimDecision.QUARANTINED;
             default:
                 throw new IllegalStateException("Unexpected reconciliation claim decision: " + code);
         }
@@ -459,8 +419,7 @@ public class SeckillOrderStateService {
         OWNERSHIP_MISMATCH,
         STATE_INVALID,
         RESERVATION_MISMATCH,
-        INDEX_MISSING,
-        QUARANTINED
+        INDEX_MISSING
     }
 
 
