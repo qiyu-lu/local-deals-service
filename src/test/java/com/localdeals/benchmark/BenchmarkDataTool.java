@@ -35,7 +35,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.localdeals.utils.RedisConstants.LOGIN_USER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_RESERVATION_KEY;
@@ -137,7 +136,6 @@ public class BenchmarkDataTool {
 
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucherId, String.valueOf(stock));
         stringRedisTemplate.delete(Arrays.asList(
-                SECKILL_ORDER_KEY + voucherId,
                 SECKILL_RESERVATION_KEY + voucherId,
                 SECKILL_META_KEY + voucherId,
                 STREAM_KEY,

@@ -12,7 +12,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;

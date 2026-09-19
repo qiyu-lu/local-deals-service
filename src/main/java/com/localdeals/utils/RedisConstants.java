@@ -29,8 +29,6 @@ public class RedisConstants {
     public static final String EMPTY_PLACEHOLDER = "_NULL_PLACEHOLDER_";
 
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
-    /** Legacy membership Set retained for compatibility with existing data and tooling. */
-    public static final String SECKILL_ORDER_KEY = "seckill:order:";
     /** Activity metadata Hash: status, beginAt and endAt (epoch seconds). */
     public static final String SECKILL_META_KEY = "seckill:meta:";
     /** Per-voucher reservation Hash: userId -> exact orderId. */

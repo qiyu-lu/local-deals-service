@@ -24,7 +24,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.awaitility.Awaitility.await;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
@@ -65,7 +64,6 @@ class SeckillWithRocketMQIT {
         issuedOrderIds.clear();
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + TEST_VOUCHER_ID, String.valueOf(STOCK));
         stringRedisTemplate.delete(Arrays.asList(
-                SECKILL_ORDER_KEY + TEST_VOUCHER_ID,
                 SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID,
                 SECKILL_META_KEY + TEST_VOUCHER_ID));
         long now = java.time.Instant.now().getEpochSecond();
@@ -83,7 +81,6 @@ class SeckillWithRocketMQIT {
         // WebSocket notifier are mocks, so no persistent order or external push remains.
         stringRedisTemplate.delete(Arrays.asList(
                 SECKILL_STOCK_KEY + TEST_VOUCHER_ID,
-                SECKILL_ORDER_KEY + TEST_VOUCHER_ID,
                 SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID,
                 SECKILL_META_KEY + TEST_VOUCHER_ID));
         if (!issuedOrderIds.isEmpty()) {
@@ -132,9 +129,9 @@ class SeckillWithRocketMQIT {
         // All accepted order IDs are unique.
         assertThat(acceptedOrderIds).doesNotHaveDuplicates();
 
-        // Redis purchased-user set size equals the accepted order count.
-        Long setSize = stringRedisTemplate.opsForSet().size(SECKILL_ORDER_KEY + TEST_VOUCHER_ID);
-        assertThat(setSize).isEqualTo((long) acceptedOrderIds.size());
+        // The exact reservation Hash is the only purchased-user record in Redis.
+        Long reservations = stringRedisTemplate.opsForHash().size(SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID);
+        assertThat(reservations).isEqualTo((long) acceptedOrderIds.size());
 
         // Do not tear down reservations while the real asynchronous consumer is still
         // finalizing them; that creates artificial retries and can leak messages into DLQ.

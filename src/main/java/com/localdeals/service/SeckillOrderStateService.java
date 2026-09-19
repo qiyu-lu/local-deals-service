@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
@@ -122,7 +121,6 @@ public class SeckillOrderStateService {
                 COMPENSATE_SCRIPT,
                 Arrays.asList(
                         SECKILL_STOCK_KEY + message.getVoucherId(),
-                        SECKILL_ORDER_KEY + message.getVoucherId(),
                         reservationKey(message.getVoucherId()),
                         orderStatusKey(message.getOrderId()),
                         SECKILL_PROCESSING_INDEX_KEY,

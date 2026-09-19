@@ -5,11 +5,10 @@ Only an exact userId -> orderId reservation whose order status is still PROCESSI
 may restore stock. Replays after the first successful compensation are no-ops.
 
 KEYS[1] stock String
-KEYS[2] legacy purchased-user Set
-KEYS[3] exact reservation Hash
-KEYS[4] order status Hash
-KEYS[5] global PROCESSING due-time ZSET
-KEYS[6] reconciliation quarantine ZSET
+KEYS[2] exact reservation Hash
+KEYS[3] order status Hash
+KEYS[4] global PROCESSING due-time ZSET
+KEYS[5] reconciliation quarantine ZSET
 
 ARGV[1] userId
 ARGV[2] voucherId
@@ -22,11 +21,10 @@ and 0 when the reservation/state did not match.
 ]]
 
 local stockKey = KEYS[1]
-local legacyOrderKey = KEYS[2]
-local reservationKey = KEYS[3]
-local orderStatusKey = KEYS[4]
-local processingIndexKey = KEYS[5]
-local quarantineKey = KEYS[6]
+local reservationKey = KEYS[2]
+local orderStatusKey = KEYS[3]
+local processingIndexKey = KEYS[4]
+local quarantineKey = KEYS[5]
 
 local userId = ARGV[1]
 local voucherId = ARGV[2]
@@ -70,7 +68,6 @@ end
 -- script, so a retry cannot increment stock for this order a second time.
 redis.call('INCR', stockKey)
 redis.call('HDEL', reservationKey, userId)
-redis.call('SREM', legacyOrderKey, userId)
 
 local redisTime = redis.call('TIME')
 local now = tostring(redisTime[1])

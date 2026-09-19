@@ -19,7 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
@@ -110,7 +109,6 @@ public class SeckillOrderProducer implements RocketMQLocalTransactionListener {
                     SECKILL_CHECK_SCRIPT,
                     Arrays.asList(
                             SECKILL_STOCK_KEY + voucherId,
-                            SECKILL_ORDER_KEY + voucherId,
                             SECKILL_META_KEY + voucherId,
                             SECKILL_RESERVATION_KEY + voucherId,
                             SECKILL_ORDER_STATUS_KEY + orderId,

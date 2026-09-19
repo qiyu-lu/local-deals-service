@@ -23,7 +23,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
@@ -66,7 +65,7 @@ class SeckillOrderStateIT {
     @AfterEach
     void cleanup() {
         stringRedisTemplate.delete(Arrays.asList(
-                stockKey(), legacyOrderKey(), metaKey(), reservationKey(),
+                stockKey(), metaKey(), reservationKey(),
                 statusKey(ORDER_ID), statusKey(SECOND_ORDER_ID)));
         stringRedisTemplate.opsForZSet().remove(
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
@@ -105,7 +104,6 @@ class SeckillOrderStateIT {
 
         assertThat(stringRedisTemplate.opsForValue().get(stockKey())).isEqualTo("2");
         assertThat(stringRedisTemplate.opsForHash().hasKey(reservationKey(), USER_ID.toString())).isFalse();
-        assertThat(stringRedisTemplate.opsForSet().isMember(legacyOrderKey(), USER_ID.toString())).isFalse();
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "status")).isEqualTo("FAILED");
         assertThat(stringRedisTemplate.opsForZSet().score(
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
@@ -364,7 +362,7 @@ class SeckillOrderStateIT {
     private long admit(Long userId, Long orderId) {
         Long result = stringRedisTemplate.execute(
                 ADMISSION_SCRIPT,
-                Arrays.asList(stockKey(), legacyOrderKey(), metaKey(), reservationKey(),
+                Arrays.asList(stockKey(), metaKey(), reservationKey(),
                         statusKey(orderId), SECKILL_PROCESSING_INDEX_KEY),
                 userId.toString(), VOUCHER_ID.toString(), orderId.toString(),
                 "120");
@@ -381,10 +379,6 @@ class SeckillOrderStateIT {
 
     private String stockKey() {
         return SECKILL_STOCK_KEY + VOUCHER_ID;
-    }
-
-    private String legacyOrderKey() {
-        return SECKILL_ORDER_KEY + VOUCHER_ID;
     }
 
     private String metaKey() {

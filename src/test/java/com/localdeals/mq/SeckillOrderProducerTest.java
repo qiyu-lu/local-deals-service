@@ -26,7 +26,6 @@ import static com.localdeals.mq.SeckillOrderProducer.ADMISSION_ACCEPTED;
 import static com.localdeals.mq.SeckillOrderProducer.ADMISSION_NOT_STARTED;
 import static com.localdeals.mq.SeckillOrderProducer.ADMISSION_SYSTEM_ERROR;
 import static com.localdeals.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
 import static com.localdeals.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
