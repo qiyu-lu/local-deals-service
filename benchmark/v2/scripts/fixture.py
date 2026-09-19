@@ -4,7 +4,8 @@
   fixture.py users  N      create N users (ids 10_000_001..) and write their login tokens to
                            Redis and to benchmark/v2/run/tokens.csv
   fixture.py voucher STOCK create one ACTIVE seckill voucher (MySQL + Redis) and print its id
-  fixture.py orders  ID    print persisted order count for a voucher
+  fixture.py orders  ID    print persisted order count for a voucher (table: ORDERS_TABLE,
+                           default trade_order)
 
 Only the stdlib plus the `mysql` and `redis-cli` binaries are used. Connection settings come
 from the variables printed by `scripts/stack.sh env`.
@@ -96,7 +97,9 @@ def voucher(stock):
 
 
 def orders(voucher_id):
-    print(mysql(f"SELECT COUNT(*) FROM trade_order WHERE voucher_id = {int(voucher_id)};").strip())
+    # ORDERS_TABLE=tb_voucher_order measures a build from before M2 (e.g. the v2.0-m1 jar).
+    table = os.environ.get('ORDERS_TABLE', 'trade_order')
+    print(mysql(f"SELECT COUNT(*) FROM {table} WHERE voucher_id = {int(voucher_id)};").strip())
 
 
 if __name__ == '__main__':
