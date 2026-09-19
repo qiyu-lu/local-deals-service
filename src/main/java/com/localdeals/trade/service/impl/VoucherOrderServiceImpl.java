@@ -1,6 +1,6 @@
 package com.localdeals.trade.service.impl;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.dto.SeckillOrderStatusDTO;
@@ -27,8 +27,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 
 /**
  * Voucher seckill service.

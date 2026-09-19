@@ -20,10 +20,10 @@ class RedisTimeoutConfigurationTest {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(RedisAutoConfiguration.class))
                 .withPropertyValues(
-                        "spring.redis.host=127.0.0.1",
-                        "spring.redis.port=6399",
-                        "spring.redis.timeout=500ms",
-                        "spring.redis.lettuce.pool.max-wait=500ms")
+                        "spring.data.redis.host=127.0.0.1",
+                        "spring.data.redis.port=6399",
+                        "spring.data.redis.timeout=500ms",
+                        "spring.data.redis.lettuce.pool.max-wait=500ms")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     LettuceConnectionFactory factory = context.getBean(LettuceConnectionFactory.class);

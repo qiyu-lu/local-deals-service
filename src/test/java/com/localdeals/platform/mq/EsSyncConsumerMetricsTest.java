@@ -4,7 +4,7 @@ import com.localdeals.platform.observability.LocalDealsMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -15,13 +15,13 @@ import static org.mockito.Mockito.mock;
 
 class EsSyncConsumerMetricsTest {
 
-    private ElasticsearchRestTemplate esTemplate;
+    private ElasticsearchOperations esTemplate;
     private SimpleMeterRegistry registry;
     private EsSyncConsumer consumer;
 
     @BeforeEach
     void setUp() {
-        esTemplate = mock(ElasticsearchRestTemplate.class);
+        esTemplate = mock(ElasticsearchOperations.class);
         registry = new SimpleMeterRegistry();
         consumer = new EsSyncConsumer(esTemplate, new LocalDealsMetrics(registry));
     }

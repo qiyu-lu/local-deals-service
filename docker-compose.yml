@@ -86,7 +86,7 @@ services:
 
   elasticsearch:
     build: ./docker/elasticsearch
-    image: hm-dianping-elasticsearch:latest
+    image: local-deals-elasticsearch:8.18.8-ik
     container_name: ${STACK_NAME:-local-deals}-es
     restart: ${STACK_RESTART:-always}
     ports:

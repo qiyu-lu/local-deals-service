@@ -42,7 +42,7 @@ public class AdminBootstrapInitializer implements ApplicationRunner {
     @Override
     @Transactional
     public void run(ApplicationArguments args) {
-        Integer existingPlatformAccounts = accountMapper.selectCount(
+        Long existingPlatformAccounts = accountMapper.selectCount(
                 new QueryWrapper<AdminAccount>().eq("scope_type", AdminPrincipal.SCOPE_PLATFORM));
         if (existingPlatformAccounts != null && existingPlatformAccounts > 0) {
             return;

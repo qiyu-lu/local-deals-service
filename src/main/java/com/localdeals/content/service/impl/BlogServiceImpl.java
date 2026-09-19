@@ -17,7 +17,7 @@ import com.localdeals.content.service.BlogLikeCommandService;
 import com.localdeals.content.service.BlogHotRankReadResult;
 import com.localdeals.content.service.BlogHotRankService;
 import com.localdeals.content.service.BlogHotRankWarmupService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.localdeals.platform.service.IUserService;
 import com.localdeals.content.service.UploadFileService;
 import com.localdeals.platform.service.LocalReadBulkhead;
@@ -25,21 +25,21 @@ import com.localdeals.content.config.BlogHotRankProperties;
 import com.localdeals.platform.utils.SystemConstants;
 import com.localdeals.platform.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.index.query.QueryBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
+import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
-import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -85,7 +85,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     private LocalReadBulkhead localReadBulkhead;
 
     @Autowired
-    private ElasticsearchRestTemplate esRestTemplate;
+    private ElasticsearchOperations elasticsearch;
 
     @Override
     public Result queryHotBlog(Integer current) {
@@ -319,15 +319,15 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     }
 
     private Result searchBlogsAdmitted(String keyword, Integer current) {
-        NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+        NativeQueryBuilder queryBuilder = NativeQuery.builder();
         if (StrUtil.isNotBlank(keyword)) {
-            queryBuilder.withQuery(QueryBuilders.multiMatchQuery(keyword, "title", "content"));
+            queryBuilder.withQuery(q -> q.multiMatch(m -> m.query(keyword).fields("title", "content")));
         } else {
-            queryBuilder.withQuery(QueryBuilders.matchAllQuery());
+            queryBuilder.withQuery(q -> q.matchAll(m -> m));
         }
         queryBuilder.withPageable(PageRequest.of(current - 1, SystemConstants.DEFAULT_PAGE_SIZE));
 
-        SearchHits<BlogDoc> hits = esRestTemplate.search(queryBuilder.build(), BlogDoc.class,
+        SearchHits<BlogDoc> hits = elasticsearch.search(queryBuilder.build(), BlogDoc.class,
                 IndexCoordinates.of("blog_index"));
         List<BlogDoc> docs = hits.getSearchHits().stream()
                 .map(SearchHit::getContent).collect(Collectors.toList());

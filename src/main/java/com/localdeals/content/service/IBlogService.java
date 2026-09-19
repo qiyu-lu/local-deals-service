@@ -2,7 +2,7 @@ package com.localdeals.content.service;
 
 import com.localdeals.platform.dto.Result;
 import com.localdeals.content.entity.Blog;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>

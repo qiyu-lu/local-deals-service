@@ -2,7 +2,7 @@ package com.localdeals.merchant.service;
 
 import com.localdeals.platform.dto.Result;
 import com.localdeals.merchant.entity.ShopType;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 import java.util.List;
 

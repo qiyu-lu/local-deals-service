@@ -9,19 +9,18 @@ import com.localdeals.merchant.mapper.ShopMapper;
 import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.merchant.service.IShopService;
 import com.localdeals.platform.service.LocalReadBulkhead;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.localdeals.platform.utils.CacheClient;
 import com.localdeals.platform.utils.SystemConstants;
-import org.elasticsearch.common.unit.DistanceUnit;
-import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.search.sort.SortBuilders;
-import org.elasticsearch.search.sort.SortOrder;
+import co.elastic.clients.elasticsearch._types.DistanceUnit;
+import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
-import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
+import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
-import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -47,16 +46,16 @@ import static com.localdeals.platform.utils.RedisConstants.*;
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
     private final StringRedisTemplate stringRedisTemplate;
     private final CacheClient cacheClient;
-    private final ElasticsearchRestTemplate esRestTemplate;
+    private final ElasticsearchOperations elasticsearch;
     private final LocalReadBulkhead localReadBulkhead;
 
     public ShopServiceImpl(StringRedisTemplate stringRedisTemplate,
                            CacheClient cacheClient,
-                           ElasticsearchRestTemplate esRestTemplate,
+                           ElasticsearchOperations elasticsearch,
                            LocalReadBulkhead localReadBulkhead) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.cacheClient = cacheClient;
-        this.esRestTemplate = esRestTemplate;
+        this.elasticsearch = elasticsearch;
         this.localReadBulkhead = localReadBulkhead;
     }
 
@@ -151,40 +150,41 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     private Result searchShopsAdmitted(String keyword, Double x, Double y,
                                        Integer radius, Long typeId, Integer current) {
-        NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+        NativeQueryBuilder queryBuilder = NativeQuery.builder();
 
         // 关键词全文检索（name 或 address 包含关键词）
         if (StrUtil.isNotBlank(keyword)) {
-            queryBuilder.withQuery(QueryBuilders.multiMatchQuery(keyword, "name", "address"));
+            queryBuilder.withQuery(q -> q.multiMatch(m -> m.query(keyword).fields("name", "address")));
         } else {
-            queryBuilder.withQuery(QueryBuilders.matchAllQuery());
+            queryBuilder.withQuery(q -> q.matchAll(m -> m));
         }
 
-        // typeId 过滤
+        // 过滤条件：builder 只保留一个 filter，多个条件必须合进同一个 bool
+        List<Query> filters = new ArrayList<>();
         if (typeId != null) {
-            queryBuilder.withFilter(QueryBuilders.termQuery("typeId", typeId));
+            filters.add(Query.of(q -> q.term(t -> t.field("typeId").value(typeId))));
         }
 
         // 地理位置过滤 + 距离排序
         if (x != null && y != null) {
             int radiusMeters = radius != null ? radius : 5000;
-            queryBuilder.withFilter(
-                    QueryBuilders.geoDistanceQuery("location")
-                            .point(y, x)
-                            .distance(radiusMeters + "m")
-            );
-            queryBuilder.withSort(
-                    SortBuilders.geoDistanceSort("location", y, x)
-                            .order(SortOrder.ASC)
-                            .unit(DistanceUnit.METERS)
-            );
+            filters.add(Query.of(q -> q.geoDistance(g -> g.field("location")
+                    .location(l -> l.latlon(p -> p.lat(y).lon(x)))
+                    .distance(radiusMeters + "m"))));
+            queryBuilder.withSort(s -> s.geoDistance(g -> g.field("location")
+                    .location(l -> l.latlon(p -> p.lat(y).lon(x)))
+                    .order(SortOrder.Asc)
+                    .unit(DistanceUnit.Meters)));
+        }
+        if (!filters.isEmpty()) {
+            queryBuilder.withFilter(q -> q.bool(b -> b.filter(filters)));
         }
 
         // 分页
         int pageSize = SystemConstants.DEFAULT_PAGE_SIZE;
         queryBuilder.withPageable(PageRequest.of(current - 1, pageSize));
 
-        SearchHits<ShopDoc> hits = esRestTemplate.search(queryBuilder.build(), ShopDoc.class,
+        SearchHits<ShopDoc> hits = elasticsearch.search(queryBuilder.build(), ShopDoc.class,
                 IndexCoordinates.of("shop_index"));
 
         List<Long> ids = hits.getSearchHits().stream()

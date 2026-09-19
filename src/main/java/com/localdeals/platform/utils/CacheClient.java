@@ -1,5 +1,6 @@
 package com.localdeals.platform.utils;
 
+import cn.hutool.json.JSONConfig;
 import cn.hutool.json.JSONUtil;
 import com.localdeals.platform.config.BoundedCacheProperties;
 import com.localdeals.platform.observability.LocalDealsMetrics;
@@ -103,7 +104,9 @@ public class CacheClient {
             return loadList(resource, cacheKey, dbFallback, false);
         }
         try {
-            List<T> cached = new ArrayList<>(JSONUtil.parseArray(cacheValue).toList(elementType));
+            // Keep null elements: "[null]" is a corrupt payload to repair, not an empty list.
+            List<T> cached = new ArrayList<>(JSONUtil.parseArray(cacheValue,
+                    JSONConfig.create().setIgnoreNullValue(false)).toList(elementType));
             if (cached.isEmpty()) {
                 metrics.recordCache(resource, LocalDealsMetrics.CacheResult.EMPTY_HIT);
                 return cached;

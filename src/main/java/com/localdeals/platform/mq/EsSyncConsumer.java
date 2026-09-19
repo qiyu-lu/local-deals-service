@@ -7,7 +7,7 @@ import com.localdeals.platform.observability.LocalDealsMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
@@ -30,10 +30,10 @@ public class EsSyncConsumer implements RocketMQListener<String> {
     private static final IndexCoordinates SHOP_INDEX = IndexCoordinates.of("shop_index");
     private static final IndexCoordinates BLOG_INDEX = IndexCoordinates.of("blog_index");
 
-    private final ElasticsearchRestTemplate esTemplate;
+    private final ElasticsearchOperations esTemplate;
     private final LocalDealsMetrics metrics;
 
-    public EsSyncConsumer(ElasticsearchRestTemplate esTemplate, LocalDealsMetrics metrics) {
+    public EsSyncConsumer(ElasticsearchOperations esTemplate, LocalDealsMetrics metrics) {
         this.esTemplate = esTemplate;
         this.metrics = metrics;
     }

@@ -19,8 +19,8 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_LOCK_KEY;
 

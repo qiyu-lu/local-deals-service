@@ -6,15 +6,15 @@ import com.localdeals.merchant.service.IShopService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Profile;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 import java.util.List;
 
 @Slf4j
@@ -27,7 +27,7 @@ public class ShopIndexInitializer {
     private IShopService shopService;
 
     @Resource
-    private ElasticsearchRestTemplate esRestTemplate;
+    private ElasticsearchOperations esRestTemplate;
 
     @PostConstruct
     public void init() {

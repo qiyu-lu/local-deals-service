@@ -53,11 +53,11 @@ class BoundedCacheRedisIT {
 
     @DynamicPropertySource
     static void redisProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.redis.host", () -> requiredEnv("M5B_REDIS_HOST"));
-        registry.add("spring.redis.port", () -> requiredEnv("M5B_REDIS_PORT"));
-        registry.add("spring.redis.password", () -> requiredEnv("M5B_REDIS_PASSWORD"));
-        registry.add("spring.redis.timeout", () -> "500ms");
-        registry.add("spring.redis.lettuce.pool.max-wait", () -> "500ms");
+        registry.add("spring.data.redis.host", () -> requiredEnv("M5B_REDIS_HOST"));
+        registry.add("spring.data.redis.port", () -> requiredEnv("M5B_REDIS_PORT"));
+        registry.add("spring.data.redis.password", () -> requiredEnv("M5B_REDIS_PASSWORD"));
+        registry.add("spring.data.redis.timeout", () -> "500ms");
+        registry.add("spring.data.redis.lettuce.pool.max-wait", () -> "500ms");
         registry.add("local-deals.cache.shop-detail-ttl", () -> "30s");
         registry.add("local-deals.cache.shop-detail-empty-ttl", () -> "5s");
         registry.add("local-deals.cache.shop-type-ttl", () -> "100m");

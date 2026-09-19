@@ -3,7 +3,7 @@ package com.localdeals.trade.service.impl;
 import com.localdeals.trade.entity.SeckillVoucher;
 import com.localdeals.trade.mapper.SeckillVoucherMapper;
 import com.localdeals.trade.service.ISeckillVoucherService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
 /**

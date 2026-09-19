@@ -8,7 +8,7 @@ import com.localdeals.content.service.IBlogService;
 import com.localdeals.platform.utils.UserHolder;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>

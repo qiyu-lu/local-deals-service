@@ -8,11 +8,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,10 +48,10 @@ class SeckillWithRocketMQIT {
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
-    @MockBean
+    @MockitoBean
     private IVoucherOrderService voucherOrderService;
 
-    @MockBean
+    @MockitoBean
     private WebSocketNotifier webSocketNotifier;
 
     private static final Long TEST_VOUCHER_ID = 88888L;

@@ -1,5 +1,6 @@
 package com.localdeals.trade.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.dto.SeckillOrderStatusDTO;
@@ -45,7 +46,7 @@ class VoucherOrderServiceImplTest {
         trafficGuard = mock(SeckillTrafficGuard.class);
 
         voucherOrderMapper = mock(VoucherOrderMapper.class);
-        ReflectionTestUtils.setField(service, "baseMapper", voucherOrderMapper);
+        MybatisPlusMocks.injectMapper(service, voucherOrderMapper, VoucherOrder.class);
         ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);

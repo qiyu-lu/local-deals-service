@@ -2,20 +2,21 @@ package com.localdeals.merchant.service;
 
 import com.localdeals.platform.dto.Result;
 import com.localdeals.merchant.dto.ShopDoc;
+import com.localdeals.merchant.entity.Shop;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,10 +29,19 @@ class ShopSearchAfterIT {
     private IShopService shopService;
 
     @Autowired
-    private ElasticsearchRestTemplate esRestTemplate;
+    private ElasticsearchOperations esRestTemplate;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeAll
     void setupIndex() {
+        // 搜索只从 ES 取排好序的 id，再回 MySQL 查整行，所以两边都要有这两家店
+        deleteFixtureShops();
+        insertFixtureShop(9001L, 1L, "小龙坎火锅", "中山路1号", 120.15, 30.33);
+        insertFixtureShop(9002L, 1L, "海底捞火锅", "解放路88号", 120.16, 30.34);
+        insertFixtureShop(9003L, 2L, "老街火锅外卖", "延安路3号", 120.15, 30.36);
+
         // 确保索引存在（若已存在先删后建）；使用 class-bound IndexOperations 才能基于 @Document/@Field 注解创建 mapping
         IndexOperations ops = esRestTemplate.indexOps(ShopDoc.class);
         if (ops.exists()) ops.delete();
@@ -50,10 +60,18 @@ class ShopSearchAfterIT {
         doc2.setTypeId(1L); doc2.setAvgPrice(150L); doc2.setScore(48);
         doc2.setSold(500); doc2.setLocation("30.34,120.16");
 
+        // 同样是火锅、同样在 5 km 内，但类型不同：用来验证 typeId 过滤与地理过滤同时生效
+        com.localdeals.merchant.dto.ShopDoc doc3 = new com.localdeals.merchant.dto.ShopDoc();
+        doc3.setId(9003L); doc3.setName("老街火锅外卖"); doc3.setAddress("延安路3号");
+        doc3.setTypeId(2L); doc3.setAvgPrice(60L); doc3.setScore(40);
+        doc3.setSold(80); doc3.setLocation("30.36,120.15");
+
         IndexQuery q1 = new IndexQueryBuilder().withId("9001").withObject(doc1).build();
         IndexQuery q2 = new IndexQueryBuilder().withId("9002").withObject(doc2).build();
+        IndexQuery q3 = new IndexQueryBuilder().withId("9003").withObject(doc3).build();
         esRestTemplate.index(q1, org.springframework.data.elasticsearch.core.mapping.IndexCoordinates.of("shop_index"));
         esRestTemplate.index(q2, org.springframework.data.elasticsearch.core.mapping.IndexCoordinates.of("shop_index"));
+        esRestTemplate.index(q3, org.springframework.data.elasticsearch.core.mapping.IndexCoordinates.of("shop_index"));
 
         // 刷新索引，保证立即可查
         esRestTemplate.indexOps(
@@ -64,6 +82,18 @@ class ShopSearchAfterIT {
     void tearDown() {
         IndexOperations ops = esRestTemplate.indexOps(ShopDoc.class);
         if (ops.exists()) ops.delete();
+        deleteFixtureShops();
+    }
+
+    private void insertFixtureShop(long id, long typeId, String name, String address, double x, double y) {
+        jdbcTemplate.update("INSERT INTO tb_shop (id, merchant_id, name, type_id, images, address, x, y, "
+                        + "sold, comments, score) SELECT ?, id, ?, ?, '', ?, ?, ?, 0, 0, 40 "
+                        + "FROM tb_merchant WHERE code = 'LEGACY_UNASSIGNED'",
+                id, name, typeId, address, x, y);
+    }
+
+    private void deleteFixtureShops() {
+        jdbcTemplate.update("DELETE FROM tb_shop WHERE id IN (9001, 9002, 9003)");
     }
 
     @Test
@@ -74,9 +104,9 @@ class ShopSearchAfterIT {
 
         assertThat(result.getSuccess()).isTrue();
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> shops = (List<Map<String, Object>>) result.getData();
+        List<Shop> shops = (List<Shop>) result.getData();
         System.out.println("ES search '火锅' results: " + shops.size() + ", elapsed: " + elapsed + "ms");
-        assertThat(shops).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(shops).extracting(Shop::getId).contains(9001L, 9002L);
     }
 
     @Test
@@ -85,7 +115,17 @@ class ShopSearchAfterIT {
         Result result = shopService.searchShops("火锅", 120.15, 30.33, 5000, null, 1);
         assertThat(result.getSuccess()).isTrue();
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> shops = (List<Map<String, Object>>) result.getData();
-        assertThat(shops).isNotEmpty();
+        List<Shop> shops = (List<Shop>) result.getData();
+        // 9002 距圆心约 1.4 km、9003 约 3.3 km，都在半径内；按距离升序
+        assertThat(shops).extracting(Shop::getId).containsExactly(9001L, 9002L, 9003L);
+    }
+
+    @Test
+    void searchShops_typeAndGeo_appliesBothFilters() {
+        Result result = shopService.searchShops("火锅", 120.15, 30.33, 5000, 1L, 1);
+        assertThat(result.getSuccess()).isTrue();
+        @SuppressWarnings("unchecked")
+        List<Shop> shops = (List<Shop>) result.getData();
+        assertThat(shops).extracting(Shop::getId).containsExactly(9001L, 9002L);
     }
 }

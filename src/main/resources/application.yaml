@@ -4,7 +4,7 @@ spring:
   application:
     name: local-deals-service
   datasource:
-    driver-class-name: com.mysql.jdbc.Driver
+    driver-class-name: com.mysql.cj.jdbc.Driver
     url: "${LOCAL_DEALS_DATASOURCE_URL:jdbc:mysql://localhost:3306/local_deals?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true}"
     username: "${LOCAL_DEALS_DATASOURCE_USERNAME:root}"
     password: "${LOCAL_DEALS_DATASOURCE_PASSWORD}"
@@ -14,18 +14,19 @@ spring:
     baseline-on-migrate: true
     baseline-version: 1
     validate-on-migrate: true
-  redis:
-    host: "${LOCAL_DEALS_REDIS_HOST:localhost}"
-    port: "${LOCAL_DEALS_REDIS_PORT:6379}"
-    password: "${LOCAL_DEALS_REDIS_PASSWORD}"
-    timeout: "${LOCAL_DEALS_REDIS_COMMAND_TIMEOUT:500ms}"
-    lettuce:
-      pool:
-        max-active: 10
-        max-idle: 10
-        min-idle: 1
-        max-wait: "${LOCAL_DEALS_REDIS_POOL_MAX_WAIT:500ms}"
-        time-between-eviction-runs: 10s
+  data:
+    redis:
+      host: "${LOCAL_DEALS_REDIS_HOST:localhost}"
+      port: "${LOCAL_DEALS_REDIS_PORT:6379}"
+      password: "${LOCAL_DEALS_REDIS_PASSWORD}"
+      timeout: "${LOCAL_DEALS_REDIS_COMMAND_TIMEOUT:500ms}"
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 10
+          min-idle: 1
+          max-wait: "${LOCAL_DEALS_REDIS_POOL_MAX_WAIT:500ms}"
+          time-between-eviction-runs: 10s
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
   servlet:
@@ -33,8 +34,7 @@ spring:
       max-file-size: "${LOCAL_DEALS_MAX_IMAGE_SIZE:5MB}"
       max-request-size: "${LOCAL_DEALS_MAX_UPLOAD_REQUEST_SIZE:6MB}"
   elasticsearch:
-    rest:
-      uris: http://localhost:9200
+    uris: http://localhost:9200
 mybatis-plus:
   type-aliases-package: com.localdeals.*.entity # 别名扫描包
 logging:
