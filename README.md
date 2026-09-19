@@ -1,14 +1,14 @@
 # HM Dianping 本地生活平台
 
-> Java 8 模块化单体：围绕本地生活交易、内容与营销场景，建立可审计的一致性和故障恢复边界。
+> Java 21 模块化单体：围绕本地生活交易、内容与营销场景，建立可审计的一致性和故障恢复边界。
 
 本项目基于黑马点评教程原型持续改造。它保留商铺、优惠券、秒杀、笔记等核心业务，
 重点补齐商户后台、权限与数据隔离、异步交易一致性、持久化点赞与热榜、营销发券和
 可观测性。
 
-架构选择以业务事实和恢复能力为中心，而不是以中间件数量为目标。当前 modernization
-mainline 与 M7-RC 已完成；项目仍运行在 Java 8 / Spring Boot 2.3.12，M8、Java 17 和
-Spring Boot 3 升级尚未开始。
+架构选择以业务事实和恢复能力为中心，而不是以中间件数量为目标。V2 按
+[重构计划](docs/plan/v2-high-concurrency-plan.md) 逐里程碑推进；M1 起运行在 Java 21 /
+Spring Boot 3.5（[ADR 0002](docs/adr/0002-m1-java21-boot3.md)）。
 
 ## 系统边界
 
@@ -53,11 +53,12 @@ V1 的历史证据保留在 tag `v1-final` 的 `docs/evidence/`，与 V2 口径�
 版本按当前 `pom.xml`、`docker-compose.yml` 和
 `frontend/admin/package.json` 核对：
 
-- 后端：Java 8、Spring Boot 2.3.12.RELEASE、MyBatis-Plus 3.4.3、Flyway 6.4.4。
-- 数据：MySQL 8.0、Redis 6.2、Spring Data Elasticsearch 4.0.9 / Elasticsearch Java client 7.6.2。
-- 搜索运行环境：仓库镜像基于 Elasticsearch 7.17.18，并安装 IK 分词器。
-- 消息：RocketMQ Spring Boot Starter 2.2.3，传递依赖的 RocketMQ client 5.0.0。
-- 测试 Broker：Pre-M8 正式证据使用 `apache/rocketmq:4.9.4`；Broker 版本不等同于客户端版本。
+- 后端：Java 21、Spring Boot 3.5.16（Jakarta EE 10）、MyBatis-Plus 3.5.17、Flyway 11.7、
+  mysql-connector-j、Redisson 3.52、Hutool 5.8。
+- 数据：MySQL 8.0、Redis 6.2、Spring Data Elasticsearch 5.5 / Elasticsearch Java client 8.18.8。
+- 搜索运行环境：仓库镜像基于 Elasticsearch 8.18.8，并安装 IK 8.18.8 分词器。
+- 消息：RocketMQ Spring Boot Starter 2.3.6（RocketMQ client 5.3.2）；Broker 仍为
+  `apache/rocketmq:4.9.4`，M2 升 5.x（定时消息）。
 - 实时与观测：Spring WebSocket、Actuator、Micrometer、Prometheus。
 - 前端：用户端 Vue 2 + Element UI；管理端 Vue 3.4、Vue Router 4.3、Element Plus 2.7、Vite 5.2；nginx 1.22。
 
