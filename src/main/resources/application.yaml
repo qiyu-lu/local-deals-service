@@ -144,6 +144,11 @@ local-deals:
       enabled: "${LOCAL_DEALS_ORDER_SCAN_ENABLED:true}"
       fixed-delay: "${LOCAL_DEALS_ORDER_SCAN_FIXED_DELAY:10s}"
       grace: "${LOCAL_DEALS_ORDER_SCAN_GRACE:30s}"
+  payment:
+    # Shared with the mock channel. Override outside local development.
+    callback-secret: "${LOCAL_DEALS_PAYMENT_CALLBACK_SECRET:local-dev-mock-channel-secret}"
+    mock-channel:
+      notify-base-url: "${LOCAL_DEALS_PAYMENT_NOTIFY_BASE_URL:http://127.0.0.1:${server.port}}"
   coupon:
     expiry-enabled: "${LOCAL_DEALS_COUPON_EXPIRY_ENABLED:true}"
   seckill:

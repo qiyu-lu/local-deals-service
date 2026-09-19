@@ -25,6 +25,13 @@ public final class ApiErrorCodes {
     public static final String COUPON_EXPIRED = "COUPON_EXPIRED";
     public static final String COUPON_NOT_USABLE = "COUPON_NOT_USABLE";
     public static final String COUPON_VERIFY_RATE_LIMITED = "COUPON_VERIFY_RATE_LIMITED";
+    public static final String ORDER_NOT_FOUND = "ORDER_NOT_FOUND";
+    public static final String ORDER_NOT_PAYABLE = "ORDER_NOT_PAYABLE";
+    public static final String ORDER_ALREADY_USED = "ORDER_ALREADY_USED";
+    public static final String ORDER_NOT_REFUNDABLE = "ORDER_NOT_REFUNDABLE";
+    public static final String REFUND_IN_PROGRESS = "REFUND_IN_PROGRESS";
+    public static final String PAYMENT_SIGNATURE_INVALID = "PAYMENT_SIGNATURE_INVALID";
+    public static final String PAYMENT_NOT_FOUND = "PAYMENT_NOT_FOUND";
 
     private ApiErrorCodes() {
     }
