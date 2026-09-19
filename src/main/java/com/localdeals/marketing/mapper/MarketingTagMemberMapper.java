@@ -12,10 +12,8 @@ import java.util.List;
 
 public interface MarketingTagMemberMapper extends BaseMapper<MarketingTagMember> {
     @Select("SELECT COUNT(*) FROM tb_user u WHERE u.id = #{userId} AND (" +
-            "EXISTS (SELECT 1 FROM tb_voucher_order o " +
-            "JOIN tb_voucher v ON v.id = o.voucher_id " +
-            "JOIN tb_shop s ON s.id = v.shop_id " +
-            "WHERE o.user_id = u.id AND s.merchant_id = #{merchantId}) OR " +
+            "EXISTS (SELECT 1 FROM trade_order o " +
+            "WHERE o.user_id = u.id AND o.merchant_id = #{merchantId}) OR " +
             "EXISTS (SELECT 1 FROM tb_voucher_grant g " +
             "WHERE g.user_id = u.id AND g.merchant_id = #{merchantId}))")
     int countBusinessRelationship(@Param("merchantId") Long merchantId,

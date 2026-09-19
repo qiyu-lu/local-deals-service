@@ -170,7 +170,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
         LocalDealsMetrics.SeckillDbPersistResult result =
                 LocalDealsMetrics.SeckillDbPersistResult.FAILURE;
         try {
-            voucherOrderService.createVoucherOrder(msg.toVoucherOrder());
+            voucherOrderService.createPendingOrder(msg);
             result = LocalDealsMetrics.SeckillDbPersistResult.SUCCESS;
         } finally {
             localDealsMetrics.recordSeckillDbPersist(result, System.nanoTime() - startedAt);

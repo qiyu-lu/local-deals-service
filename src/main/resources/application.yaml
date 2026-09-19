@@ -135,6 +135,8 @@ local-deals:
     notification-batch-size: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_BATCH_SIZE:50}"
     notification-max-attempts: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_ATTEMPTS:10}"
     notification-max-backoff: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_BACKOFF:5m}"
+  order:
+    pay-timeout: "${LOCAL_DEALS_ORDER_PAY_TIMEOUT:15m}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"

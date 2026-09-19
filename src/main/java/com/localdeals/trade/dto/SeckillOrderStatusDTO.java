@@ -14,4 +14,6 @@ public class SeckillOrderStatusDTO {
     private Long voucherId;
     private String status;
     private String reason;
+    /** trade_order status once the order is durable (PENDING_PAY, PAID, CLOSED, ...), else null. */
+    private String orderStatus;
 }
