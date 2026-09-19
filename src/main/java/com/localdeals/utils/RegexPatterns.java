@@ -13,10 +13,6 @@ public abstract class RegexPatterns {
      */
     public static final String EMAIL_REGEX = "^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)+$";
     /**
-     * 密码正则。4~32位的字母、数字、下划线
-     */
-    public static final String PASSWORD_REGEX = "^\\w{4,32}$";
-    /**
      * 验证码正则：严格 6 位 ASCII 数字。
      */
     public static final String VERIFY_CODE_REGEX = "^[0-9]{6}$";

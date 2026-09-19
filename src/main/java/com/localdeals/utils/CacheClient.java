@@ -1,7 +1,5 @@
 package com.localdeals.utils;
 
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.localdeals.config.BoundedCacheProperties;
 import com.localdeals.observability.LocalDealsMetrics;
@@ -10,15 +8,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiPredicate;
@@ -39,9 +34,6 @@ public class CacheClient {
     private final LocalReadBulkhead localReadBulkhead;
     private final AtomicLong lastWriteWarningAt = new AtomicLong();
 
-    private static final ExecutorService CACHE_REBUILD_EXECUTOR =
-            Executors.newFixedThreadPool(10);
-
     public CacheClient(StringRedisTemplate stringRedisTemplate,
                        LocalDealsMetrics metrics,
                        BoundedCacheProperties properties,
@@ -52,22 +44,6 @@ public class CacheClient {
         this.properties = properties;
         this.singleFlightLoader = singleFlightLoader;
         this.localReadBulkhead = localReadBulkhead;
-    }
-
-    //方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
-    public void set(String key, Object value, Long time, TimeUnit unit) {
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value),time, unit);
-    }
-
-    // 方法2：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置逻辑过期时间，用于处理缓存击穿问题
-    public void setWithLogicExpire(String key, Object value, Long time, TimeUnit unit){
-        RedisData redisData = new RedisData();
-        redisData.setData(value);
-        //if(unit == TimeUnit.MINUTES)  redisData.setExpireTime(LocalDateTime.now().plusMinutes(Time));
-        redisData.setExpireTime(
-                LocalDateTime.now().plusSeconds(unit.toSeconds(time))
-        );
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
     }
 
     // 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存透问题
@@ -252,52 +228,5 @@ public class CacheClient {
             }
         }
         return true;
-    }
-
-    // 方法4：根据指定的key查询缓存，并反序列化为指定类型，需要利用逻辑过期解决缓存击穿问题
-    public <T, ID> T queryWithLogicalExpire(
-            String keyPrefix,
-            ID id,
-            Class<T> type,
-            Function<ID, T> dbFallback,
-            Long time,
-            TimeUnit unit)
-    {
-        String cacheKey = keyPrefix + id.toString();
-        String cacheValue = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (StrUtil.isBlank(cacheValue)) { return null; }
-        RedisData redisData = JSONUtil.toBean(cacheValue, RedisData.class);
-        if(redisData.getData() == null){
-            return null;
-        }
-        T res = JSONUtil.toBean((JSONObject) redisData.getData(), type);
-        //没有过期
-        if(redisData.getExpireTime().isAfter(LocalDateTime.now())){
-            return res;
-        }
-
-        //过期了,尝试重建
-        String lockKey = "lock:" + keyPrefix + id.toString();
-        boolean locked = Boolean.TRUE.equals(
-                stringRedisTemplate.opsForValue()
-                        .setIfAbsent(lockKey, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS)
-        );
-        if(locked){
-            CACHE_REBUILD_EXECUTOR.submit(()->{
-                try{
-                    T shop = dbFallback.apply(id);
-                    this.setWithLogicExpire(keyPrefix+id, shop, time, unit);
-//                    RedisData temp = new RedisData();
-//                    temp.setData(shop);
-//                    temp.setExpireTime(LocalDateTime.now().plusSeconds(unit.toSeconds(time)));
-//                    stringRedisTemplate.opsForValue().set(keyPrefix+id.toString(), JSONUtil.toJsonStr(temp));
-                }
-                catch (Exception e){ throw  new RuntimeException(e); }
-                finally {
-                    stringRedisTemplate.delete(lockKey);
-                }
-            });
-        }
-        return res;
     }
 }

@@ -34,11 +34,6 @@ class InfraSetupTool {
     private StringRedisTemplate stringRedisTemplate;
 
     @Test
-    void testSaveShop2RedisCache() {
-        shopService.saveShop2RedisCache(1L, 10L);
-    }
-
-    @Test
     void loadShopData() {
         List<Shop> list = shopService.list();
         Map<Long, List<Shop>> map = list.stream().collect(Collectors.groupingBy(Shop::getTypeId));
@@ -56,18 +51,4 @@ class InfraSetupTool {
         }
     }
 
-    @Test
-    void testHyperLogLog() {
-        String[] users = new String[1000];
-        int index = 0;
-        for (int i = 1; i <= 1_000_000; i++) {
-            users[index++] = "user_" + i;
-            if (i % 1000 == 0) {
-                index = 0;
-                stringRedisTemplate.opsForHyperLogLog().add("hll1", users);
-            }
-        }
-        Long size = stringRedisTemplate.opsForHyperLogLog().size("hll1");
-        log.info("HyperLogLog estimated UV: {}", size);
-    }
 }
