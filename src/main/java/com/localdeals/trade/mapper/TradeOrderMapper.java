@@ -7,6 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
 
     /**
@@ -46,4 +48,17 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
     @Select("SELECT * FROM trade_order WHERE user_id = #{userId} AND voucher_id = #{voucherId} " +
             "AND active_flag = 1")
     TradeOrder selectActive(@Param("userId") long userId, @Param("voucherId") long voucherId);
+
+    @Update("UPDATE trade_order SET release_pending = NULL WHERE order_no = #{orderNo} AND release_pending = 1")
+    int clearReleasePending(@Param("orderNo") long orderNo);
+
+    /** Unpaid orders past their deadline by more than {@code graceSeconds}: their timer message was lost. */
+    @Select("SELECT order_no FROM trade_order WHERE status = 'PENDING_PAY' " +
+            "AND expire_at <= NOW(3) - INTERVAL #{graceSeconds} SECOND ORDER BY expire_at LIMIT #{limit}")
+    List<Long> selectOverduePending(@Param("graceSeconds") long graceSeconds, @Param("limit") int limit);
+
+    @Select("SELECT * FROM trade_order WHERE release_pending = 1 " +
+            "AND update_time <= NOW(3) - INTERVAL #{olderThanSeconds} SECOND LIMIT #{limit}")
+    List<TradeOrder> selectReleasePending(@Param("olderThanSeconds") long olderThanSeconds,
+                                          @Param("limit") int limit);
 }
