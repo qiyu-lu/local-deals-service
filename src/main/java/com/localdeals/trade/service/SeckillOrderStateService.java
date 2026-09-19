@@ -55,12 +55,14 @@ public class SeckillOrderStateService {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final SeckillProperties seckillProperties;
+    private final SeckillSoldOutRegistry soldOutRegistry;
 
     public SeckillOrderStateService(StringRedisTemplate stringRedisTemplate,
                                     SeckillProperties seckillProperties,
                                     SeckillSoldOutRegistry soldOutRegistry) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.seckillProperties = seckillProperties;
+        this.soldOutRegistry = soldOutRegistry;
     }
 
     /**
@@ -130,7 +132,12 @@ public class SeckillOrderStateService {
                 reason,
                 SECKILL_ORDER_STATUS_TTL_SECONDS.toString()
         );
-        if (Long.valueOf(1L).equals(result) || Long.valueOf(2L).equals(result)) {
+        if (Long.valueOf(1L).equals(result)) {
+            // A unit went back to Redis: every instance may admit again.
+            soldOutRegistry.clear(message.getVoucherId());
+            return true;
+        }
+        if (Long.valueOf(2L).equals(result)) {
             return true;
         }
         Snapshot snapshot = find(message.getOrderId());

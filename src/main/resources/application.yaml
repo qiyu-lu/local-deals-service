@@ -154,6 +154,12 @@ local-deals:
     verify-limit-per-minute: "${LOCAL_DEALS_COUPON_VERIFY_LIMIT_PER_MINUTE:120}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
+    funnel:
+      # L2: per-instance permits/s = remaining stock x factor (never below the floor).
+      stock-factor: "${LOCAL_DEALS_SECKILL_STOCK_FACTOR:2.0}"
+      min-permits-per-second: "${LOCAL_DEALS_SECKILL_MIN_PERMITS:50}"
+      # L1: a voucher flagged sold out still sends one probe per interval to Redis.
+      sold-out-probe-interval: "${LOCAL_DEALS_SECKILL_SOLD_OUT_PROBE:1s}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"
     reconciliation:
       # Operational switches: the worker, and separately the stock-releasing compensation.

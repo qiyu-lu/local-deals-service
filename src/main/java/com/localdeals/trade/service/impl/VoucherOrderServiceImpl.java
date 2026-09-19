@@ -19,6 +19,8 @@ import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.trade.service.OrderStateMachine;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.trade.service.SeckillLocalRateLimiter;
+import com.localdeals.trade.service.SeckillSoldOutRegistry;
 import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
@@ -33,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 
+import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.ACTIVITY;
 import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.IP;
 import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.REDIS;
 import static com.localdeals.platform.observability.LocalDealsMetrics.TrafficReason.USER;
@@ -68,10 +71,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private LocalDealsMetrics localDealsMetrics;
 
     @Resource
-    private com.localdeals.trade.service.SeckillSoldOutRegistry seckillSoldOutRegistry;
+    private SeckillSoldOutRegistry seckillSoldOutRegistry;
 
     @Resource
-    private com.localdeals.trade.service.SeckillLocalRateLimiter seckillLocalRateLimiter;
+    private SeckillLocalRateLimiter seckillLocalRateLimiter;
 
     @Resource
     private SeckillOrderStateService seckillOrderStateService;
@@ -88,6 +91,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
 
     private Counter requestAcceptedCounter;
     private Counter requestRateRejectedCounter;
+    private Counter requestBusyRejectedCounter;
     private Counter requestStockRejectedCounter;
     private Counter requestDuplicateRejectedCounter;
     private Counter requestActivityRejectedCounter;
@@ -102,6 +106,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
                 .tag("result", "accepted").register(meterRegistry);
         requestRateRejectedCounter = Counter.builder("local_deals.seckill.requests")
                 .tag("result", "rejected_rate").register(meterRegistry);
+        requestBusyRejectedCounter = Counter.builder("local_deals.seckill.requests")
+                .tag("result", "rejected_busy").register(meterRegistry);
         requestStockRejectedCounter = Counter.builder("local_deals.seckill.requests")
                 .tag("result", "rejected_stock").register(meterRegistry);
         requestDuplicateRejectedCounter = Counter.builder("local_deals.seckill.requests")
@@ -121,6 +127,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     @Override
     public Result seckillVoucher(Long voucherId, String clientIp) {
         Long userId = UserHolder.getUser().getId();
+        // L2: more requests than the remaining stock can satisfy never cost a Redis round trip.
+        if (!seckillLocalRateLimiter.tryAcquire(voucherId)) {
+            requestBusyRejectedCounter.increment();
+            localDealsMetrics.recordTraffic(SECKILL, REJECTED, ACTIVITY);
+            throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    ApiErrorCodes.SECKILL_BUSY, "排队人数过多，请稍后重试");
+        }
         long orderId = allocateOrderId(voucherId, userId);
         SeckillAdmissionService.Admission admission = admit(voucherId, userId, orderId, clientIp);
         if (admission.code() == SeckillAdmissionService.ORDER_ID_IN_USE) {
@@ -129,6 +142,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
             orderId = allocateOrderId(voucherId, userId);
             admission = admit(voucherId, userId, orderId, clientIp);
         }
+        seckillLocalRateLimiter.observe(voucherId, admission.remainingStock());
+        updateSoldOutFlag(voucherId, admission);
 
         switch (admission.code()) {
             case SeckillAdmissionService.ACCEPTED:
@@ -164,6 +179,17 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
                 log.error("Unexpected seckill admission result. voucherId={} code={}",
                         voucherId, admission.code());
                 throw submitUnavailable();
+        }
+    }
+
+    /** L1 bookkeeping: Redis just told us whether this voucher still has stock. */
+    private void updateSoldOutFlag(Long voucherId, SeckillAdmissionService.Admission admission) {
+        if (admission.code() == SeckillAdmissionService.OUT_OF_STOCK
+                || (admission.code() == SeckillAdmissionService.ACCEPTED && admission.remainingStock() == 0)) {
+            seckillSoldOutRegistry.markSoldOut(voucherId);
+        } else if (admission.code() == SeckillAdmissionService.ACCEPTED && seckillSoldOutRegistry.isSoldOut(voucherId)) {
+            // This request was the probe of a stale flag, and there was stock after all.
+            seckillSoldOutRegistry.clear(voucherId);
         }
     }
 

@@ -5,6 +5,9 @@ import com.localdeals.merchant.interceptor.AdminSessionInterceptor;
 import com.localdeals.platform.interceptor.LoginInterceptor;
 import com.localdeals.platform.interceptor.RefreshTokenInterceptor;
 import com.localdeals.merchant.service.AdminSessionService;
+import com.localdeals.trade.interceptor.SeckillSoldOutInterceptor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -51,8 +54,15 @@ public class WebConfig implements WebMvcConfigurer {
     @Resource
     private AdminSessionService adminSessionService;
 
+    @Autowired
+    private ObjectProvider<SeckillSoldOutInterceptor> seckillSoldOutInterceptor;
+
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // L1 of the seckill funnel runs before authentication: a sold-out answer needs no Redis.
+        seckillSoldOutInterceptor.ifAvailable(interceptor -> registry.addInterceptor(interceptor)
+                .addPathPatterns("/voucher-order/seckill/{id}")
+                .order(-1));
         //每一个 HTTP 请求进入 Controller 之前，都要经过 LoginInterceptor 的 preHandle()
         registry.addInterceptor(new LoginInterceptor(PUBLIC_GET_PATHS, PUBLIC_POST_PATHS))
                 .excludePathPatterns("/admin/**")
