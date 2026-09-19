@@ -41,7 +41,6 @@ public class SeckillOrderStateService {
     private static final DefaultRedisScript<List> RECONCILE_DUE_SCRIPT;
     private static final DefaultRedisScript<List> RECONCILE_CLAIM_SCRIPT;
     private static final DefaultRedisScript<Long> RECONCILE_QUARANTINE_SCRIPT;
-    private static final DefaultRedisScript<Long> RECONCILE_BACKFILL_SCRIPT;
     private static final DefaultRedisScript<Long> RECONCILE_DEFER_UNRESOLVED_SCRIPT;
 
     static {
@@ -51,7 +50,6 @@ public class SeckillOrderStateService {
         RECONCILE_DUE_SCRIPT = listScript("lua/seckill_reconcile_due.lua");
         RECONCILE_CLAIM_SCRIPT = listScript("lua/seckill_reconcile_claim.lua");
         RECONCILE_QUARANTINE_SCRIPT = script("lua/seckill_reconcile_quarantine.lua");
-        RECONCILE_BACKFILL_SCRIPT = script("lua/seckill_reconcile_backfill.lua");
         RECONCILE_DEFER_UNRESOLVED_SCRIPT = script("lua/seckill_reconcile_defer_unresolved.lua");
     }
 
@@ -248,47 +246,6 @@ public class SeckillOrderStateService {
                 orderIdMember,
                 safeReason);
         return Long.valueOf(1L).equals(result) || Long.valueOf(2L).equals(result);
-    }
-
-    /**
-     * Adds an old exact PROCESSING reservation to the durable due index without overwriting
-     * an existing live score. Exact old status hashes are persisted atomically with the add.
-     */
-    public ProcessingBackfillDecision backfillProcessingOrder(SeckillOrderMessage message) {
-        requireCompleteMessage(message);
-        Long result = stringRedisTemplate.execute(
-                RECONCILE_BACKFILL_SCRIPT,
-                Arrays.asList(
-                        orderStatusKey(message.getOrderId()),
-                        reservationKey(message.getVoucherId()),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY),
-                message.getUserId().toString(),
-                message.getVoucherId().toString(),
-                message.getOrderId().toString(),
-                Long.toString(seckillProperties.getReconciliation().getStaleAfter().getSeconds()));
-        if (Long.valueOf(1L).equals(result)) {
-            return ProcessingBackfillDecision.INDEXED;
-        }
-        if (Long.valueOf(2L).equals(result)) {
-            return ProcessingBackfillDecision.ALREADY_INDEXED;
-        }
-        if (Long.valueOf(3L).equals(result)) {
-            return ProcessingBackfillDecision.TERMINAL;
-        }
-        if (Long.valueOf(4L).equals(result)) {
-            return ProcessingBackfillDecision.OWNERSHIP_MISMATCH;
-        }
-        if (Long.valueOf(5L).equals(result)) {
-            return ProcessingBackfillDecision.STATE_INVALID;
-        }
-        if (Long.valueOf(6L).equals(result)) {
-            return ProcessingBackfillDecision.RESERVATION_MISMATCH;
-        }
-        if (Long.valueOf(7L).equals(result)) {
-            return ProcessingBackfillDecision.QUARANTINED;
-        }
-        throw new IllegalStateException("Unexpected Redis PROCESSING backfill result: " + result);
     }
 
     /** Fail closed when Redis and DB stock disagree until an operator reconciles the voucher. */
@@ -498,15 +455,6 @@ public class SeckillOrderStateService {
         QUARANTINED
     }
 
-    public enum ProcessingBackfillDecision {
-        INDEXED,
-        ALREADY_INDEXED,
-        TERMINAL,
-        OWNERSHIP_MISMATCH,
-        STATE_INVALID,
-        RESERVATION_MISMATCH,
-        QUARANTINED
-    }
 
     public static final class ReconciliationClaim {
         private final ReconciliationClaimDecision decision;

@@ -6,9 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.core.Cursor;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -54,10 +52,6 @@ public class BenchmarkDataTool {
     private static final String DEFAULT_PHONE_PREFIX = "1990000";
     private static final String DEFAULT_TOKENS_FILE = "benchmark/tokens.csv";
     private static final String BENCHMARK_VOUCHER_TITLE = "[BENCHMARK] Seckill Voucher";
-    private static final String STREAM_KEY = "stream.orders";
-    private static final String GROUP_NAME = "g1";
-    private static final String DEAD_LETTER_KEY = "stream.orders.dlq";
-    private static final String RETRY_KEY_PATTERN = "seckill:stream:retry:*";
 
     @Resource
     private IUserService userService;
@@ -137,9 +131,7 @@ public class BenchmarkDataTool {
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucherId, String.valueOf(stock));
         stringRedisTemplate.delete(Arrays.asList(
                 SECKILL_RESERVATION_KEY + voucherId,
-                SECKILL_META_KEY + voucherId,
-                STREAM_KEY,
-                DEAD_LETTER_KEY));
+                SECKILL_META_KEY + voucherId));
         long now = Instant.now().getEpochSecond();
         Map<String, String> metadata = new LinkedHashMap<>();
         metadata.put("status", "ACTIVE");
@@ -156,11 +148,6 @@ public class BenchmarkDataTool {
                     previousOrderIds.stream().map(String::valueOf).toArray());
             stringRedisTemplate.delete(statusKeys);
         }
-        Set<String> retryKeys = stringRedisTemplate.keys(RETRY_KEY_PATTERN);
-        if (retryKeys != null && !retryKeys.isEmpty()) {
-            stringRedisTemplate.delete(retryKeys);
-        }
-        recreateStreamGroup();
 
         log.info(
                 "Reset seckill benchmark data. voucherId={}, stock={}, deletedOrders={}, " +
@@ -393,28 +380,6 @@ public class BenchmarkDataTool {
             log.info("Created benchmark seckill voucher row. voucherId={}, stock={}", voucherId, stock);
         }
         return voucherId;
-    }
-
-    private void recreateStreamGroup() {
-        try {
-            stringRedisTemplate.execute((RedisCallback<Object>) connection -> connection.execute(
-                    "XGROUP",
-                    raw("CREATE"),
-                    raw(STREAM_KEY),
-                    raw(GROUP_NAME),
-                    raw("$"),
-                    raw("MKSTREAM")
-            ));
-        } catch (RedisSystemException e) {
-            String message = e.getMessage();
-            if (message == null || !message.contains("BUSYGROUP")) {
-                throw e;
-            }
-        }
-    }
-
-    private byte[] raw(String value) {
-        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private List<Long> extractUserIds(List<User> users) {

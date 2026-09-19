@@ -133,16 +133,6 @@ class SeckillLuaScriptContractTest {
                 "redis.call('ZADD', KEYS[2], tonumber(redisTime[1]) + retryDelaySeconds, orderId)");
         assertThat(deferUnresolved).doesNotContain("HSET", "HDEL", "INCR", "DECR", "SADD", "SREM");
 
-        String backfill = readScript("lua/seckill_reconcile_backfill.lua");
-        int backfillQuarantineGuard = backfill.indexOf("redis.call('ZSCORE', KEYS[4], orderId)");
-        int persist = backfill.indexOf("redis.call('PERSIST', KEYS[1])");
-        int add = backfill.indexOf("redis.call('ZADD', KEYS[3], 'NX'");
-        assertThat(backfillQuarantineGuard).isGreaterThanOrEqualTo(0);
-        assertThat(persist).isGreaterThan(backfillQuarantineGuard);
-        assertThat(add).isGreaterThan(persist);
-        assertThat(backfill).contains("redis.call('ZREM', KEYS[3], orderId)");
-        assertThat(backfill).contains("parseCreatedAt(state[5], now)", "parsed > now");
-        assertThat(backfill).doesNotContain("tonumber(ARGV[3])");
     }
 
     @Test

@@ -210,27 +210,6 @@ class SeckillOrderStateServiceTest {
     }
 
     @Test
-    void backfillMapsExactAndUnsafeDecisions() {
-        doReturn(1L, 2L, 3L, 4L, 5L, 6L, 7L).when(redisTemplate).execute(
-                any(RedisScript.class), anyList(), any(), any(), any(), any());
-
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.INDEXED);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.ALREADY_INDEXED);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.TERMINAL);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.OWNERSHIP_MISMATCH);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.STATE_INVALID);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.RESERVATION_MISMATCH);
-        assertThat(service.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.QUARANTINED);
-    }
-
-    @Test
     void exactAlreadyFailedScriptCodeIsAcceptedWithoutFallbackRead() {
         doReturn(2L).when(redisTemplate).execute(
                 any(RedisScript.class), anyList(), any(), any(), any(), any(), any());

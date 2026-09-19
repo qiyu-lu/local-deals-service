@@ -34,7 +34,6 @@ local-deals:
     legacy-backfill-on-startup: false
   seckill:
     reconciliation:
-      # Tests opt in explicitly when exercising the worker or one-time backfill.
+      # Tests opt in explicitly when exercising the worker.
       enabled: false
       compensation-enabled: false
-      backfill-on-startup: false

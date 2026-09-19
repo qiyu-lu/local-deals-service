@@ -167,8 +167,6 @@ class SeckillOrderStateIT {
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
         assertThat(stringRedisTemplate.opsForZSet().score(
                 SECKILL_PROCESSING_QUARANTINE_KEY, ORDER_ID.toString())).isNotNull();
-        assertThat(stateService.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.QUARANTINED);
         assertThat(stateService.claimForReconciliation(message).getDecision())
                 .isEqualTo(SeckillOrderStateService.ReconciliationClaimDecision.QUARANTINED);
         assertThat(stateService.compensate(message, "PROCESSING_TIMEOUT")).isFalse();
@@ -221,26 +219,6 @@ class SeckillOrderStateIT {
     }
 
     @Test
-    void exactLegacyProcessingBackfillPersistsStatusAndDoesNotOverwriteExistingScore() {
-        assertThat(admit(USER_ID, ORDER_ID)).isZero();
-        stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString());
-        stringRedisTemplate.expire(statusKey(ORDER_ID), 30, java.util.concurrent.TimeUnit.SECONDS);
-
-        SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
-        assertThat(stateService.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.INDEXED);
-        assertThat(stringRedisTemplate.getExpire(statusKey(ORDER_ID))).isEqualTo(-1L);
-        Double firstScore = stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString());
-        assertThat(firstScore).isNotNull();
-
-        assertThat(stateService.backfillProcessingOrder(message))
-                .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.ALREADY_INDEXED);
-        assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isEqualTo(firstScore);
-    }
-
-    @Test
     void malformedDueMemberIsQuarantinedWithoutBlockingValidMember() {
         long dueAt = Instant.now().getEpochSecond() - 1;
         for (String malformed : Arrays.asList("malformed-id", "01", "+1", "", " ")) {
@@ -284,7 +262,7 @@ class SeckillOrderStateIT {
     }
 
     @Test
-    void malformedCreatedAtCannotDriveClaimOrBackfillDeadlines() {
+    void malformedCreatedAtCannotDriveClaimDeadlines() {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
         stringRedisTemplate.opsForZSet().add(
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
@@ -297,9 +275,6 @@ class SeckillOrderStateIT {
             assertThat(stateService.claimForReconciliation(message).getDecision())
                     .as("claim createdAt %s", malformed)
                     .isEqualTo(SeckillOrderStateService.ReconciliationClaimDecision.STATE_INVALID);
-            assertThat(stateService.backfillProcessingOrder(message))
-                    .as("backfill createdAt %s", malformed)
-                    .isEqualTo(SeckillOrderStateService.ProcessingBackfillDecision.STATE_INVALID);
         }
         assertThat(stringRedisTemplate.opsForZSet().score(
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNotNull();

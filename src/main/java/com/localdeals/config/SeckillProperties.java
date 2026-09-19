@@ -15,7 +15,6 @@ public class SeckillProperties {
 
     private String topic = "seckill-order-topic";
     private String consumerGroup = "seckill-consumer-group";
-    private Stream stream = new Stream();
     private Reconciliation reconciliation = new Reconciliation();
 
     @PostConstruct
@@ -31,43 +30,21 @@ public class SeckillProperties {
     }
 
     @Data
-    public static class Stream {
-        private String key = "stream.orders";
-        private String group = "g1";
-        private String consumer = "c1";
-        private String deadLetterKey = "stream.orders.dlq";
-        private String retryKeyPrefix = "seckill:stream:retry:";
-        private int readCount = 10;
-        private int workerCount = 1;
-        private int maxRetry = 3;
-        private Duration block = Duration.ofSeconds(2);
-    }
-
-    @Data
     public static class Reconciliation {
         private static final int MAX_BATCH_SIZE = 1_000;
-        private static final int MAX_SCAN_COUNT = 10_000;
 
         /** Master switch for the scheduled reconciliation worker. */
         private boolean enabled = false;
         /** Destructive timeout compensation requires an additional explicit switch. */
         private boolean compensationEnabled = false;
-        /** One-time exact PROCESSING index backfill is opt-in. */
-        private boolean backfillOnStartup = false;
         private Duration initialDelay = Duration.ofSeconds(30);
         private Duration fixedDelay = Duration.ofSeconds(10);
         private Duration staleAfter = Duration.ofMinutes(2);
         private Duration retryDelay = Duration.ofMinutes(1);
         private Duration finalTimeout = Duration.ofMinutes(15);
         private int batchSize = 100;
-        private int scanCount = 500;
 
         public void validate() {
-            if (backfillOnStartup && enabled) {
-                throw new IllegalStateException(
-                        "local-deals.seckill.reconciliation.backfill-on-startup and enabled " +
-                                "must not be true in the same startup");
-            }
             requirePositiveSeconds(initialDelay, "initialDelay");
             requirePositiveSeconds(fixedDelay, "fixedDelay");
             requirePositiveSeconds(staleAfter, "staleAfter");
@@ -80,10 +57,6 @@ public class SeckillProperties {
             if (batchSize < 1 || batchSize > MAX_BATCH_SIZE) {
                 throw new IllegalStateException(
                         "local-deals.seckill.reconciliation.batch-size must be between 1 and " + MAX_BATCH_SIZE);
-            }
-            if (scanCount < 1 || scanCount > MAX_SCAN_COUNT) {
-                throw new IllegalStateException(
-                        "local-deals.seckill.reconciliation.scan-count must be between 1 and " + MAX_SCAN_COUNT);
             }
         }
 
