@@ -57,6 +57,7 @@ public final class TradeFixture {
         deleteIfPresent("DELETE FROM payment_record WHERE order_no IN " +
                 "(SELECT order_no FROM trade_order WHERE voucher_id = ?)", voucherId);
         deleteIfPresent("DELETE FROM user_coupon WHERE voucher_id = ?", voucherId);
+        deleteIfPresent("DELETE FROM admin_audit_log WHERE merchant_id = ?", merchantId);
         deleteIfPresent("DELETE FROM trade_order WHERE voucher_id = ?", voucherId);
         jdbc.update("DELETE FROM tb_seckill_voucher WHERE voucher_id = ?", voucherId);
         jdbc.update("DELETE FROM tb_voucher WHERE id = ?", voucherId);

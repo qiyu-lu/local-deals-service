@@ -20,6 +20,11 @@ public final class ApiErrorCodes {
     public static final String DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE";
     public static final String SEARCH_UNAVAILABLE = "SEARCH_UNAVAILABLE";
     public static final String TASK_NOT_COMPLETED = "TASK_NOT_COMPLETED";
+    public static final String COUPON_INVALID = "COUPON_INVALID";
+    public static final String COUPON_ALREADY_USED = "COUPON_ALREADY_USED";
+    public static final String COUPON_EXPIRED = "COUPON_EXPIRED";
+    public static final String COUPON_NOT_USABLE = "COUPON_NOT_USABLE";
+    public static final String COUPON_VERIFY_RATE_LIMITED = "COUPON_VERIFY_RATE_LIMITED";
 
     private ApiErrorCodes() {
     }

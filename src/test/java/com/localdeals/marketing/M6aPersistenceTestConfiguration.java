@@ -45,7 +45,8 @@ import org.springframework.context.annotation.Import;
         MybatisPlusAutoConfiguration.class
 })
 @Import({BusinessDateConfiguration.class, MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
-        VoucherGrantTransactionService.class, VoucherCampaignUserService.class})
+        VoucherGrantTransactionService.class, VoucherCampaignUserService.class,
+        com.localdeals.trade.service.CouponIssuer.class, com.localdeals.trade.service.VerifyCodeGenerator.class})
 public class M6aPersistenceTestConfiguration {
 
     @Bean
@@ -87,6 +88,12 @@ public class M6aPersistenceTestConfiguration {
     @Bean
     public MapperFactoryBean<VoucherMapper> voucherMapper(SqlSessionFactory sqlSessionFactory) {
         return mapper(VoucherMapper.class, sqlSessionFactory);
+    }
+
+    @Bean
+    public MapperFactoryBean<com.localdeals.trade.mapper.UserCouponMapper> userCouponMapper(
+            SqlSessionFactory sqlSessionFactory) {
+        return mapper(com.localdeals.trade.mapper.UserCouponMapper.class, sqlSessionFactory);
     }
 
     @Bean
