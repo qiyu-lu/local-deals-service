@@ -144,6 +144,8 @@ local-deals:
       enabled: "${LOCAL_DEALS_ORDER_SCAN_ENABLED:true}"
       fixed-delay: "${LOCAL_DEALS_ORDER_SCAN_FIXED_DELAY:10s}"
       grace: "${LOCAL_DEALS_ORDER_SCAN_GRACE:30s}"
+  coupon:
+    expiry-enabled: "${LOCAL_DEALS_COUPON_EXPIRY_ENABLED:true}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"

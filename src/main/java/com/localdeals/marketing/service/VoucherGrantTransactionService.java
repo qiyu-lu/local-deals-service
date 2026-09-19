@@ -110,6 +110,8 @@ public class VoucherGrantTransactionService {
         if (notificationOutboxMapper.insertPending(notification) != 1) {
             throw new IllegalStateException("发券通知 Outbox 写入失败");
         }
+        // The grant row is the issuance record (idempotency, quota); the coupon is the asset.
+        couponIssuer.issueForGrant(grant);
         return GrantTransactionResult.created(grant);
     }
 

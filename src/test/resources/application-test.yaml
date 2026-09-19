@@ -34,6 +34,8 @@ local-deals:
     # Tests drive the batch and notification workers explicitly.
     job-worker-enabled: false
     notification-worker-enabled: false
+  coupon:
+    expiry-enabled: false
   order:
     scan:
       # Tests call OrderTimeoutScanner.scanOnce() explicitly.

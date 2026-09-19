@@ -24,6 +24,10 @@ public interface UserCouponMapper extends BaseMapper<UserCoupon> {
     @Select("SELECT * FROM user_coupon WHERE coupon_no = #{couponNo}")
     UserCoupon selectByCouponNo(@Param("couponNo") String couponNo);
 
+    /** Locking read: sees the latest committed status, not the transaction's snapshot. */
+    @Select("SELECT * FROM user_coupon WHERE id = #{id} FOR UPDATE")
+    UserCoupon selectForUpdate(@Param("id") long id);
+
     @Select("SELECT * FROM user_coupon WHERE verify_code = #{verifyCode}")
     UserCoupon selectByVerifyCode(@Param("verifyCode") String verifyCode);
 
