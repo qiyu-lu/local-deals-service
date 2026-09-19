@@ -33,6 +33,11 @@ JAVA8_HOME="${JAVA8_HOME:-${HOME}/.jdks/dragonwell-ex-1.8.0_472}"
 APP_CPUS="${APP_CPUS:-}"
 DEPS_CPUS="${DEPS_CPUS:-}"
 APP_JAVA_OPTS="${APP_JAVA_OPTS:--Xms2g -Xmx2g}"
+# Broker store root on a disk with free space; read from the environment or the local .env.
+# Each stack gets <root>/<stack-name>; unset -> a named docker volume.
+ROCKETMQ_STORE_ROOT="${LOCAL_DEALS_ROCKETMQ_STORE_ROOT:-$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)}"
+BROKER_STORE=rocketmq-store
+[[ -z "$ROCKETMQ_STORE_ROOT" ]] || BROKER_STORE="${ROCKETMQ_STORE_ROOT}/${STACK_NAME}"
 FORBIDDEN_PORTS=(3306 6379 9876 10911 9200 8083 8088)
 
 fail() { echo "stack: $*" >&2; exit 1; }
@@ -53,7 +58,7 @@ compose() {
     BROKER_PORT="$BROKER_PORT" ES_PORT="$ES_PORT" \
     MYSQL_ROOT_PASSWORD="$MYSQL_PASSWORD" MYSQL_DATABASE="$SCHEMA" \
     LOCAL_DEALS_REDIS_PASSWORD="$REDIS_PASSWORD" \
-    MYSQL_VOLUME=mysql-data REDIS_VOLUME=redis-data ES_VOLUME=es-data \
+    MYSQL_VOLUME=mysql-data REDIS_VOLUME=redis-data ES_VOLUME=es-data BROKER_STORE="$BROKER_STORE" \
     docker compose --project-name "$STACK_NAME" --project-directory "$PROJECT_DIR" \
     --env-file /dev/null --file "${PROJECT_DIR}/docker-compose.yml" "$@"
 }
@@ -94,8 +99,17 @@ redis_ready() { redis-cli -h 127.0.0.1 -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --n
 es_ready() { curl -fs "http://127.0.0.1:${ES_PORT}/_cluster/health"; }
 rmq_ready() { docker exec "${STACK_NAME}-broker" sh mqadmin clusterList -n namesrv:9876 | grep -q "$STACK_NAME"; }
 
+prepare_broker_store() {
+  [[ "$BROKER_STORE" == /* ]] || return 0
+  mkdir -p "$BROKER_STORE"
+  # the broker runs as uid 3000 inside the image
+  docker run --rm -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:4.9.4 -R 3000:3000 /store 2>/dev/null ||
+    docker run --rm -u 0 -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:4.9.4 -R 3000:3000 /store
+}
+
 up() {
   check_isolation
+  prepare_broker_store
   compose up -d mysql redis namesrv broker elasticsearch
   wait_for MySQL mysql_ready
   wait_for Redis redis_ready
@@ -125,6 +139,10 @@ down() {
   check_isolation
   app_stop
   compose down --volumes --remove-orphans
+  if [[ "$BROKER_STORE" == /* && -d "$BROKER_STORE" ]]; then
+    docker run --rm -u 0 -v "$(dirname "$BROKER_STORE"):/root-store" --entrypoint rm apache/rocketmq:4.9.4 \
+      -rf "/root-store/$(basename "$BROKER_STORE")"
+  fi
 }
 
 status() {
