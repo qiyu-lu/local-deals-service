@@ -113,26 +113,25 @@ class SeckillOrderConsumerTest {
         verify(webSocketNotifier).notify(5L, false, 995L, 88888L);
     }
 
+    /**
+     * The admission script never lets two reservations share an order id's status, so a DB row
+     * owned by someone else says nothing about this reservation: it is released like any other
+     * DB conflict instead of being parked in a quarantine.
+     */
     @Test
-    void onMessage_orderIdCollisionSuspendsAndQuarantinesWithoutCompensation() {
+    void onMessage_orderIdCollisionIsCompensatedLikeAnyDbConflict() {
         doThrow(new OrderIdConflictException("id belongs to another order"))
                 .when(voucherOrderService).createPendingOrder(any());
         SeckillOrderMessage msg = new SeckillOrderMessage(88888L, 15L, 985L);
-        when(seckillOrderStateService.quarantineProcessingOrder(
-                985L, "DB_ORDER_ID_CONFLICT")).thenReturn(true);
+        when(seckillOrderStateService.compensate(msg, "DB_ORDER_ID_CONFLICT")).thenReturn(true);
 
-        assertThatCode(() -> consumer.onMessage(msg))
-                .isInstanceOf(OrderIdConflictException.class)
-                .hasMessageContaining("another order");
+        assertThatCode(() -> consumer.onMessage(msg)).doesNotThrowAnyException();
 
         InOrder order = inOrder(seckillOrderStateService);
-        order.verify(seckillOrderStateService)
-                .suspendVoucher(88888L, "DB_ORDER_ID_CONFLICT");
-        order.verify(seckillOrderStateService)
-                .quarantineProcessingOrder(985L, "DB_ORDER_ID_CONFLICT");
-        verify(seckillOrderStateService, never()).compensate(any(), anyString());
+        order.verify(seckillOrderStateService).suspendVoucher(88888L, "DB_ORDER_ID_CONFLICT");
+        order.verify(seckillOrderStateService).compensate(msg, "DB_ORDER_ID_CONFLICT");
         verify(seckillOrderStateService, never()).markSuccess(any());
-        verifyNoInteractions(webSocketNotifier);
+        verify(webSocketNotifier).notify(15L, false, 985L, 88888L);
     }
 
     @Test

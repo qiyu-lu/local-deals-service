@@ -63,13 +63,26 @@ class SeckillLuaScriptContractTest {
         assertThat(new ClassPathResource("lua/seckill_traffic_guard.lua").exists()).isFalse();
     }
 
+    /**
+     * Snowflake ids plus the admission script's "status already exists" refusal make an order-id
+     * collision impossible to write into Redis, so the quarantine that isolated one is gone.
+     */
+    @Test
+    void noScriptKeepsAQuarantineAnyMore() throws IOException {
+        assertThat(new ClassPathResource("lua/seckill_reconcile_quarantine.lua").exists()).isFalse();
+        for (String name : new String[]{"seckill_compensate", "seckill_validate_reservation",
+                "seckill_reconcile_claim", "seckill_reconcile_defer_unresolved",
+                "seckill_processing_observability"}) {
+            assertThat(readScript("lua/" + name + ".lua")).as(name).doesNotContainIgnoringCase("quarantine");
+        }
+    }
+
     @Test
     void compensationScript_guardsExactProcessingOrderBeforeSingleStockRestore()
             throws IOException {
         String script = readScript("lua/seckill_compensate.lua");
 
         int statusRead = script.indexOf("redis.call('HMGET', orderStatusKey");
-        int quarantineGuard = script.indexOf("redis.call('ZSCORE', quarantineKey, orderId)");
         int reservationRead = script.indexOf("redis.call('HGET', reservationKey, userId)");
         int exactReservationGuard = script.indexOf("reservedOrderId ~= orderId");
         int processingGuard = script.indexOf("statusData[1] ~= 'PROCESSING'");
@@ -77,8 +90,7 @@ class SeckillLuaScriptContractTest {
         int reservationDelete = script.indexOf("redis.call('HDEL', reservationKey, userId)");
         int failedTransition = script.indexOf("'status', 'FAILED'");
 
-        assertThat(quarantineGuard).isGreaterThanOrEqualTo(0);
-        assertThat(statusRead).isGreaterThan(quarantineGuard);
+        assertThat(statusRead).isGreaterThanOrEqualTo(0);
         assertThat(reservationRead).isGreaterThan(statusRead);
         assertThat(exactReservationGuard).isGreaterThan(reservationRead);
         assertThat(processingGuard).isGreaterThan(exactReservationGuard);
@@ -100,7 +112,6 @@ class SeckillLuaScriptContractTest {
         String script = readScript("lua/seckill_validate_reservation.lua");
 
         assertThat(script).contains("redis.call('HMGET', statusKey");
-        assertThat(script).contains("redis.call('ZSCORE', quarantineKey, orderId)");
         assertThat(script).contains("state[2] ~= orderId");
         assertThat(script).contains("state[3] ~= userId");
         assertThat(script).contains("state[4] ~= voucherId");
@@ -121,14 +132,12 @@ class SeckillLuaScriptContractTest {
         assertThat(due).doesNotContain("ZREM");
 
         String claim = readScript("lua/seckill_reconcile_claim.lua");
-        int claimQuarantineGuard = claim.indexOf("redis.call('ZSCORE', quarantineKey, orderId)");
         int ownershipGuard = claim.indexOf("state[2] ~= orderId");
         int reservationGuard = claim.indexOf("redis.call('HGET', reservationKey, userId) ~= orderId");
         int dueRead = claim.indexOf("redis.call('ZSCORE', processingIndexKey, orderId)");
         int attemptIncrement = claim.indexOf("redis.call('HINCRBY', statusKey, 'reconcileAttempts', 1)");
         int scoreAdvance = claim.indexOf("redis.call('ZADD', processingIndexKey, now + retryDelaySeconds, orderId)");
-        assertThat(claimQuarantineGuard).isGreaterThanOrEqualTo(0);
-        assertThat(ownershipGuard).isGreaterThan(claimQuarantineGuard);
+        assertThat(ownershipGuard).isGreaterThanOrEqualTo(0);
         assertThat(reservationGuard).isGreaterThan(ownershipGuard);
         assertThat(dueRead).isGreaterThan(reservationGuard);
         assertThat(attemptIncrement).isGreaterThan(dueRead);
@@ -138,15 +147,8 @@ class SeckillLuaScriptContractTest {
         assertThat(claim).contains("parseCreatedAt(state[5], now)", "parsed > now");
         assertThat(claim).doesNotContain("tonumber(ARGV[3])");
 
-        String quarantine = readScript("lua/seckill_reconcile_quarantine.lua");
-        assertThat(quarantine).contains(
-                "redis.call('ZREM', KEYS[1], orderId)",
-                "redis.call('ZADD', KEYS[2], redisTime[1], orderId)",
-                "redis.call('HSET', KEYS[3], orderId, reason)");
-
         String deferUnresolved = readScript("lua/seckill_reconcile_defer_unresolved.lua");
         assertThat(deferUnresolved).contains(
-                "redis.call('ZSCORE', KEYS[3], orderId)",
                 "state[2] == orderId and state[3] and state[4]",
                 "redis.call('ZADD', KEYS[2], tonumber(redisTime[1]) + retryDelaySeconds, orderId)");
         assertThat(deferUnresolved).doesNotContain("HSET", "HDEL", "INCR", "DECR", "SADD", "SREM");

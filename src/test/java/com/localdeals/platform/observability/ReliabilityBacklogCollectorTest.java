@@ -98,14 +98,13 @@ class ReliabilityBacklogCollectorTest {
         collector.collectSeckill();
         assertThat(registry.get("local_deals.seckill.processing.due").gauge().value()).isNaN();
 
-        when(redisTemplate.execute(any(RedisScript.class), anyList())).thenReturn("4|11|2");
+        when(redisTemplate.execute(any(RedisScript.class), anyList())).thenReturn("4|11");
         collector.collectSeckill();
         assertThat(registry.get("local_deals.seckill.processing.due").gauge().value())
                 .isEqualTo(4D);
         assertThat(registry.get("local_deals.seckill.processing.oldest_overdue").gauge().value())
                 .isEqualTo(11D);
-        assertThat(registry.get("local_deals.seckill.processing.quarantine").gauge().value())
-                .isEqualTo(2D);
+        assertThat(registry.find("local_deals.seckill.processing.quarantine").gauge()).isNull();
     }
 
     @Test
