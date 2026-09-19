@@ -32,7 +32,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.elasticsearch.client.RestHighLevelClient;
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -76,7 +76,7 @@ class MarketingAdminIsolationIT {
         assertThat(applicationContext.getBeansOfType(DefaultRocketMQListenerContainer.class)).isEmpty();
         assertThat(applicationContext.getBeansOfType(RocketMQTemplate.class)).isEmpty();
         assertThat(applicationContext.getBeansOfType(RedisConnectionFactory.class)).isEmpty();
-        assertThat(applicationContext.getBeansOfType(RestHighLevelClient.class)).isEmpty();
+        assertThat(applicationContext.getBeansOfType(ElasticsearchClient.class)).isEmpty();
     }
 
     @Test

@@ -5,7 +5,7 @@ import com.localdeals.platform.dto.Result;
 import com.localdeals.merchant.service.IShopService;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>

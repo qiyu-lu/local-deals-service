@@ -3,7 +3,7 @@ package com.localdeals.trade.service;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.entity.VoucherOrder;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>

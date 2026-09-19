@@ -3,7 +3,7 @@ package com.localdeals.platform.service.impl;
 import com.localdeals.platform.entity.UserInfo;
 import com.localdeals.platform.mapper.UserInfoMapper;
 import com.localdeals.platform.service.IUserInfoService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
 /**

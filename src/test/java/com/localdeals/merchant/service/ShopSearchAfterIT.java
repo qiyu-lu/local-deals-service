@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
@@ -28,7 +28,7 @@ class ShopSearchAfterIT {
     private IShopService shopService;
 
     @Autowired
-    private ElasticsearchRestTemplate esRestTemplate;
+    private ElasticsearchOperations esRestTemplate;
 
     @BeforeAll
     void setupIndex() {

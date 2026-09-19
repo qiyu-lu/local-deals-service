@@ -5,8 +5,7 @@ logging:
     com.zaxxer.hikari: WARN
 spring:
   elasticsearch:
-    rest:
-      uris: http://localhost:9200
+    uris: http://localhost:9200
 rocketmq:
   name-server: localhost:9876
   producer:

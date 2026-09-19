@@ -1,5 +1,6 @@
 package com.localdeals.content.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.platform.dto.UserDTO;
 import com.localdeals.content.entity.Blog;
@@ -53,7 +54,7 @@ class BlogServiceAfterCommitTest {
         service = new BlogServiceImpl();
         ReflectionTestUtils.setField(service, "metrics",
                 new LocalDealsMetrics(new SimpleMeterRegistry()));
-        ReflectionTestUtils.setField(service, "baseMapper", blogMapper);
+        MybatisPlusMocks.injectMapper(service, blogMapper, Blog.class);
         ReflectionTestUtils.setField(service, "uploadFileService", uploadFileService);
         ReflectionTestUtils.setField(service, "blogHotRankService", hotRankService);
 

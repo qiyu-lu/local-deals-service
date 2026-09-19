@@ -6,7 +6,7 @@
 #   scripts/stack.sh up                 start dependencies (named volumes, 127.0.0.1 ports)
 #   scripts/stack.sh env                print the variables the app/tests need (eval-able)
 #   scripts/stack.sh it 'Seckill*IT'    run tests against this stack
-#   scripts/stack.sh build              package the app jar with Java 8
+#   scripts/stack.sh build              package the app jar with APP_JAVA_HOME (Java 21)
 #   scripts/stack.sh app-start|app-stop start/stop the jar (pinned with taskset when APP_CPUS set)
 #   scripts/stack.sh pin                pin dependency containers to DEPS_CPUS
 #   scripts/stack.sh status|down
@@ -29,7 +29,8 @@ MYSQL_PASSWORD="${STACK_MYSQL_PASSWORD:-ld-stack-mysql}"
 REDIS_PASSWORD="${STACK_REDIS_PASSWORD:-ld-stack-redis}"
 SCHEMA="${STACK_SCHEMA:-local_deals}"
 RUN_DIR="${RUN_DIR:-${PROJECT_DIR}/benchmark/v2/run/${STACK_ID}}"
-JAVA8_HOME="${JAVA8_HOME:-${HOME}/.jdks/dragonwell-ex-1.8.0_472}"
+# JDK for build, tests and the app; point it at another JDK to rerun an older tag.
+APP_JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}"
 APP_CPUS="${APP_CPUS:-}"
 DEPS_CPUS="${DEPS_CPUS:-}"
 APP_JAVA_OPTS="${APP_JAVA_OPTS:--Xms2g -Xmx2g}"
@@ -77,7 +78,7 @@ export LOCAL_DEALS_REDIS_HOST=127.0.0.1
 export LOCAL_DEALS_REDIS_PORT=${REDIS_PORT}
 export LOCAL_DEALS_REDIS_PASSWORD='${REDIS_PASSWORD}'
 export ROCKETMQ_NAMESERVER=127.0.0.1:${NAMESRV_PORT}
-export SPRING_ELASTICSEARCH_REST_URIS=http://127.0.0.1:${ES_PORT}
+export SPRING_ELASTICSEARCH_URIS=http://127.0.0.1:${ES_PORT}
 export STACK_MYSQL="mysql -h127.0.0.1 -P${MYSQL_PORT} -uroot -p${MYSQL_PASSWORD} ${SCHEMA}"
 export STACK_REDIS="redis-cli -h 127.0.0.1 -p ${REDIS_PORT} -a ${REDIS_PASSWORD} --no-auth-warning"
 export STACK_APP=http://127.0.0.1:${APP_PORT}
@@ -158,13 +159,12 @@ run_tests() {
   check_isolation
   local pattern="${2:?usage: stack.sh it <surefire -Dtest pattern>}"
   eval "$(print_env)"
-  # Java 8 is the project target; MyBatis-Plus 3.4 lambda queries fail on newer JDKs.
-  (cd "$PROJECT_DIR" && JAVA_HOME="$JAVA8_HOME" mvn -o -q test -Dtest="$pattern" -DfailIfNoTests=false)
+  (cd "$PROJECT_DIR" && JAVA_HOME="$APP_JAVA_HOME" mvn -o -q test -Dtest="$pattern" -DfailIfNoTests=false)
 }
 
 build() {
-  [[ -x "${JAVA8_HOME}/bin/java" ]] || fail "JAVA8_HOME has no java: ${JAVA8_HOME}"
-  (cd "$PROJECT_DIR" && JAVA_HOME="$JAVA8_HOME" mvn -q package -DskipTests)
+  [[ -x "${APP_JAVA_HOME}/bin/java" ]] || fail "APP_JAVA_HOME has no java: ${APP_JAVA_HOME}"
+  (cd "$PROJECT_DIR" && JAVA_HOME="$APP_JAVA_HOME" mvn -q package -DskipTests)
 }
 
 app_jar() {
@@ -185,7 +185,7 @@ app_start() {
   [[ -z "$APP_CPUS" ]] || pin_cmd=(taskset -c "$APP_CPUS")
   eval "$(print_env)"
   # shellcheck disable=SC2086
-  nohup "${pin_cmd[@]}" "${JAVA8_HOME}/bin/java" $APP_JAVA_OPTS ${APP_EXTRA_JAVA_OPTS:-} -jar "$jar" \
+  nohup "${pin_cmd[@]}" "${APP_JAVA_HOME}/bin/java" $APP_JAVA_OPTS ${APP_EXTRA_JAVA_OPTS:-} -jar "$jar" \
     --server.port="$APP_PORT" \
     --management.server.port="$MANAGEMENT_PORT" \
     ${APP_ARGS:-} >"${RUN_DIR}/app.log" 2>&1 &

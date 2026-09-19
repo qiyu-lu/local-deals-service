@@ -1,5 +1,6 @@
 package com.localdeals.trade.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
 import com.localdeals.trade.entity.Voucher;
 import com.localdeals.trade.mapper.VoucherMapper;
 import com.localdeals.trade.service.ISeckillVoucherService;
@@ -57,7 +58,7 @@ class VoucherServiceImplTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
 
         service = new VoucherServiceImpl();
-        ReflectionTestUtils.setField(service, "baseMapper", voucherMapper);
+        MybatisPlusMocks.injectMapper(service, voucherMapper, Voucher.class);
         ReflectionTestUtils.setField(service, "seckillVoucherService", seckillVoucherService);
         ReflectionTestUtils.setField(service, "stringRedisTemplate", redisTemplate);
 

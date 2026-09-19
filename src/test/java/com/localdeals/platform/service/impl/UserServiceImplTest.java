@@ -1,5 +1,6 @@
 package com.localdeals.platform.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.localdeals.platform.dto.LoginFormDTO;
 import com.localdeals.platform.dto.Result;
@@ -131,7 +132,7 @@ class UserServiceImplTest {
         user.setPhone(PHONE);
         user.setNickName("tester");
         doReturn(user).when(userMapper).selectOne(any(Wrapper.class));
-        ReflectionTestUtils.setField(service, "baseMapper", userMapper);
+        MybatisPlusMocks.injectMapper(service, userMapper, User.class);
 
         HashOperations hashOperations = mock(HashOperations.class);
         doReturn(hashOperations).when(redisTemplate).opsForHash();

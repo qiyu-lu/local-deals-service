@@ -1,5 +1,7 @@
 package com.localdeals.merchant.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
+import com.localdeals.merchant.entity.Shop;
 import com.localdeals.platform.config.TrafficControlProperties;
 import com.localdeals.platform.exception.ApiErrorCodes;
 import com.localdeals.platform.exception.ApiStatusException;
@@ -9,11 +11,10 @@ import com.localdeals.platform.service.LocalReadBulkhead;
 import com.localdeals.platform.utils.CacheClient;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -30,11 +31,11 @@ import static org.mockito.Mockito.when;
 class SearchTrafficContractTest {
     @Test
     void elasticsearchFailureReturns503WithoutMysqlLikeFallback() {
-        ElasticsearchRestTemplate elasticsearch = mock(ElasticsearchRestTemplate.class);
+        ElasticsearchOperations elasticsearch = mock(ElasticsearchOperations.class);
         ShopMapper mapper = mock(ShopMapper.class);
         ShopServiceImpl service = new ShopServiceImpl(mock(StringRedisTemplate.class),
                 mock(CacheClient.class), elasticsearch, bulkhead(new TrafficControlProperties()));
-        ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        MybatisPlusMocks.injectMapper(service, mapper, Shop.class);
         when(elasticsearch.search(any(Query.class), eq(com.localdeals.merchant.dto.ShopDoc.class),
                 any(IndexCoordinates.class))).thenThrow(new RuntimeException("es down"));
 
@@ -52,7 +53,7 @@ class SearchTrafficContractTest {
         properties.getRead().setSearchMaxConcurrent(1);
         properties.getRead().setSearchMaxWait(Duration.ZERO);
         LocalReadBulkhead bulkhead = bulkhead(properties);
-        ElasticsearchRestTemplate elasticsearch = mock(ElasticsearchRestTemplate.class);
+        ElasticsearchOperations elasticsearch = mock(ElasticsearchOperations.class);
         ShopServiceImpl service = new ShopServiceImpl(mock(StringRedisTemplate.class),
                 mock(CacheClient.class), elasticsearch, bulkhead);
         CountDownLatch entered = new CountDownLatch(1);

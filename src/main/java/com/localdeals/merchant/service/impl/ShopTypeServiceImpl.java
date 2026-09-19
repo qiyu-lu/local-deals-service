@@ -4,7 +4,7 @@ import com.localdeals.merchant.entity.ShopType;
 import com.localdeals.merchant.mapper.ShopTypeMapper;
 import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.merchant.service.IShopTypeService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.localdeals.platform.utils.CacheClient;
 import org.springframework.stereotype.Service;
 

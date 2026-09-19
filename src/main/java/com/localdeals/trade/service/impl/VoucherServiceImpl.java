@@ -1,6 +1,6 @@
 package com.localdeals.trade.service.impl;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.entity.Voucher;
 import com.localdeals.trade.mapper.VoucherMapper;
@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;

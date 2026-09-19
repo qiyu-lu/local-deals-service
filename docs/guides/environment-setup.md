@@ -16,7 +16,7 @@ docker compose --profile dev up -d nginx canal-server   # 需要前端或 Canal 
 
 ```bash
 scripts/stack.sh up                 # MySQL/Redis/RocketMQ/ES
-scripts/stack.sh it '*IT'           # 在隔离栈上用 Java 8 跑集成测试
+scripts/stack.sh it '*IT'           # 在隔离栈上用 Java 21 跑集成测试
 scripts/stack.sh build && scripts/stack.sh app-start
 scripts/bench.sh users 100000       # 压测用户与 token
 scripts/bench.sh step 500 1000 2000 # 开环阶梯压测，结果写 benchmark/v2/<milestone>/summary.csv

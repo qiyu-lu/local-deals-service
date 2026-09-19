@@ -3,7 +3,7 @@ package com.localdeals.platform.service;
 import com.localdeals.platform.config.ClientIpProperties;
 import org.junit.jupiter.api.Test;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Arrays;
 import java.util.Collections;
 

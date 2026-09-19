@@ -5,8 +5,8 @@ import com.localdeals.merchant.service.AdminSessionService;
 import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 public class AdminSessionInterceptor implements HandlerInterceptor {
     private final AdminSessionService adminSessionService;

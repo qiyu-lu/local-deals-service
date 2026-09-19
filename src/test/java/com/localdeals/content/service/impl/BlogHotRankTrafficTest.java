@@ -1,5 +1,6 @@
 package com.localdeals.content.service.impl;
 
+import com.localdeals.platform.testsupport.MybatisPlusMocks;
 import com.localdeals.content.config.BlogHotRankProperties;
 import com.localdeals.platform.config.TrafficControlProperties;
 import com.localdeals.platform.dto.Result;
@@ -41,8 +42,8 @@ class BlogHotRankTrafficTest {
         blog2.setId(2L);
         Blog blog19 = new Blog();
         blog19.setId(19L);
-        when(mapper.selectBatchIds(anyCollection())).thenReturn(Arrays.asList(blog2, blog19));
-        ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        when(mapper.selectByIds(anyCollection())).thenReturn(Arrays.asList(blog2, blog19));
+        MybatisPlusMocks.injectMapper(service, mapper, Blog.class);
         ReflectionTestUtils.setField(service, "blogHotRankService", rank);
         ReflectionTestUtils.setField(service, "blogHotRankWarmupService",
                 mock(BlogHotRankWarmupService.class));
@@ -64,7 +65,7 @@ class BlogHotRankTrafficTest {
         BlogMapper mapper = mock(BlogMapper.class);
         BlogHotRankService rank = mock(BlogHotRankService.class);
         when(rank.readPage(1)).thenReturn(BlogHotRankReadResult.hit(Collections.emptyList()));
-        ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        MybatisPlusMocks.injectMapper(service, mapper, Blog.class);
         ReflectionTestUtils.setField(service, "blogHotRankService", rank);
 
         Result result = service.queryHotBlog(1);

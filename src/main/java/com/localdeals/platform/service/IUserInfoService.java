@@ -1,7 +1,7 @@
 package com.localdeals.platform.service;
 
 import com.localdeals.platform.entity.UserInfo;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>

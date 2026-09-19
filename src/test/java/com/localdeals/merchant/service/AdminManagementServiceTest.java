@@ -103,7 +103,7 @@ class AdminManagementServiceTest {
         assertThatThrownBy(() -> service.createMerchant(null))
                 .hasMessage("仅平台管理员可执行此操作");
 
-        verify(merchantMapper, never()).insert(any());
+        verify(merchantMapper, never()).insert(any(Merchant.class));
     }
 
     @Test

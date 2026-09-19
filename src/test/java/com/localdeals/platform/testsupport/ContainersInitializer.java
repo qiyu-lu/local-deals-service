@@ -35,9 +35,9 @@ public class ContainersInitializer implements ApplicationContextInitializer<Conf
                 "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC");
         properties.put("spring.datasource.username", mysql.getUsername());
         properties.put("spring.datasource.password", mysql.getPassword());
-        properties.put("spring.redis.host", redis.getHost());
-        properties.put("spring.redis.port", redis.getMappedPort(6379));
-        properties.put("spring.redis.password", REDIS_PASSWORD);
+        properties.put("spring.data.redis.host", redis.getHost());
+        properties.put("spring.data.redis.port", redis.getMappedPort(6379));
+        properties.put("spring.data.redis.password", REDIS_PASSWORD);
         context.getEnvironment().getPropertySources()
                 .addFirst(new MapPropertySource("testcontainers", properties));
     }

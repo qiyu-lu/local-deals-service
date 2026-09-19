@@ -1,11 +1,11 @@
 package com.localdeals.platform.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import com.localdeals.platform.dto.LoginFormDTO;
 import com.localdeals.platform.dto.Result;
 import com.localdeals.platform.entity.User;
 
-import javax.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpSession;
 
 /**
  * <p>

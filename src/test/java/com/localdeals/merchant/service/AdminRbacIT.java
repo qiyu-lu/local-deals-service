@@ -112,7 +112,7 @@ class AdminRbacIT {
 
     @Test
     void rbacMigrationsBackfillShopsAndEnableCredentialVersioning() {
-        Integer unscoped = shopMapper.selectCount(
+        Long unscoped = shopMapper.selectCount(
                 new QueryWrapper<com.localdeals.merchant.entity.Shop>().isNull("merchant_id"));
         Merchant legacy = merchantMapper.selectOne(new QueryWrapper<Merchant>()
                 .eq("code", "LEGACY_UNASSIGNED").last("LIMIT 1"));

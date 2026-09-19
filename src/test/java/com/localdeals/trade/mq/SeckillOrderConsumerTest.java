@@ -22,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -53,7 +54,7 @@ class SeckillOrderConsumerTest {
         ReflectionTestUtils.setField(consumer, "meterRegistry", registry);
         ReflectionTestUtils.setField(consumer, "localDealsMetrics", new LocalDealsMetrics(registry));
         ReflectionTestUtils.invokeMethod(consumer, "registerMetrics");
-        lenient().when(redissonClient.getLock(any())).thenReturn(lock);
+        lenient().when(redissonClient.getLock(anyString())).thenReturn(lock);
         lenient().when(lock.tryLock()).thenReturn(true);
         lenient().when(seckillOrderStateService.validateForConsumption(any()))
                 .thenReturn(SeckillOrderStateService.ReservationDecision.PROCESS);

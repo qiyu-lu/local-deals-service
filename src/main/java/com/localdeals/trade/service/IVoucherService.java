@@ -2,7 +2,7 @@ package com.localdeals.trade.service;
 
 import com.localdeals.platform.dto.Result;
 import com.localdeals.trade.entity.Voucher;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * <p>
