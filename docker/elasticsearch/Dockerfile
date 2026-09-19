@@ -1,7 +1,5 @@
-# docker/elasticsearch/Dockerfile
-FROM elasticsearch:7.17.18
-# NOTE: infinilabs/analysis-ik no longer publishes versioned zips under GitHub Releases
-# (github.com/infinilabs/analysis-ik/releases/download/... 404s). The project now
-# distributes packaged plugin zips from release.infinilabs.com instead.
+# Server version matches the Elasticsearch Java client managed by Spring Boot (8.18.8).
+FROM elasticsearch:8.18.8
+# infinilabs publishes the IK plugin zips on release.infinilabs.com (GitHub release assets 404).
 RUN bin/elasticsearch-plugin install --batch \
-    https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-7.17.18.zip
+    https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-8.18.8.zip
