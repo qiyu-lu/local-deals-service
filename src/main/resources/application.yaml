@@ -151,6 +151,7 @@ local-deals:
       notify-base-url: "${LOCAL_DEALS_PAYMENT_NOTIFY_BASE_URL:http://127.0.0.1:${server.port}}"
   coupon:
     expiry-enabled: "${LOCAL_DEALS_COUPON_EXPIRY_ENABLED:true}"
+    verify-limit-per-minute: "${LOCAL_DEALS_COUPON_VERIFY_LIMIT_PER_MINUTE:120}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
     consumer-group: "${LOCAL_DEALS_SECKILL_CONSUMER_GROUP:seckill-consumer-group}"
