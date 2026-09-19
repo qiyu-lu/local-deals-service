@@ -39,6 +39,10 @@ APP_JAVA_OPTS="${APP_JAVA_OPTS:--Xms2g -Xmx2g}"
 ROCKETMQ_STORE_ROOT="${LOCAL_DEALS_ROCKETMQ_STORE_ROOT:-$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)}"
 BROKER_STORE=rocketmq-store
 [[ -z "$ROCKETMQ_STORE_ROOT" ]] || BROKER_STORE="${ROCKETMQ_STORE_ROOT}/${STACK_NAME}"
+# Same for Elasticsearch: 8.x stops allocating shards above the 90% high disk watermark.
+ES_DATA_ROOT="${LOCAL_DEALS_ES_DATA_ROOT:-$(sed -n 's/^LOCAL_DEALS_ES_DATA_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)}"
+ES_DATA=es-data
+[[ -z "$ES_DATA_ROOT" ]] || ES_DATA="${ES_DATA_ROOT}/${STACK_NAME}"
 FORBIDDEN_PORTS=(3306 6379 9876 10911 9200 8083 8088)
 
 fail() { echo "stack: $*" >&2; exit 1; }
@@ -59,7 +63,7 @@ compose() {
     BROKER_PORT="$BROKER_PORT" ES_PORT="$ES_PORT" \
     MYSQL_ROOT_PASSWORD="$MYSQL_PASSWORD" MYSQL_DATABASE="$SCHEMA" \
     LOCAL_DEALS_REDIS_PASSWORD="$REDIS_PASSWORD" \
-    MYSQL_VOLUME=mysql-data REDIS_VOLUME=redis-data ES_VOLUME=es-data BROKER_STORE="$BROKER_STORE" \
+    MYSQL_VOLUME=mysql-data REDIS_VOLUME=redis-data ES_VOLUME="$ES_DATA" BROKER_STORE="$BROKER_STORE" \
     docker compose --project-name "$STACK_NAME" --project-directory "$PROJECT_DIR" \
     --env-file /dev/null --file "${PROJECT_DIR}/docker-compose.yml" "$@"
 }
@@ -108,9 +112,17 @@ prepare_broker_store() {
     docker run --rm -u 0 -v "${BROKER_STORE}:/store" --entrypoint chown apache/rocketmq:4.9.4 -R 3000:3000 /store
 }
 
+prepare_es_data() {
+  [[ "$ES_DATA" == /* ]] || return 0
+  mkdir -p "$ES_DATA"
+  # the node runs as uid 1000 (gid 0) inside the image
+  docker run --rm -u 0 -v "${ES_DATA}:/data" --entrypoint chown alpine:3 -R 1000:0 /data
+}
+
 up() {
   check_isolation
   prepare_broker_store
+  prepare_es_data
   compose up -d mysql redis namesrv broker elasticsearch
   wait_for MySQL mysql_ready
   wait_for Redis redis_ready
@@ -143,6 +155,10 @@ down() {
   if [[ "$BROKER_STORE" == /* && -d "$BROKER_STORE" ]]; then
     docker run --rm -u 0 -v "$(dirname "$BROKER_STORE"):/root-store" --entrypoint rm apache/rocketmq:4.9.4 \
       -rf "/root-store/$(basename "$BROKER_STORE")"
+  fi
+  if [[ "$ES_DATA" == /* && -d "$ES_DATA" ]]; then
+    docker run --rm -u 0 -v "$(dirname "$ES_DATA"):/root-data" --entrypoint rm alpine:3 \
+      -rf "/root-data/$(basename "$ES_DATA")"
   fi
 }
 
