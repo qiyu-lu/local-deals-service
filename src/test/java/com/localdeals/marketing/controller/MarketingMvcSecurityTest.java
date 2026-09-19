@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -51,12 +51,12 @@ class MarketingMvcSecurityTest {
     private static final String USER_TOKEN = "m6a-consumer-token";
 
     @Autowired private MockMvc mockMvc;
-    @MockBean private MarketingAdminService marketingAdminService;
-    @MockBean private VoucherGrantService grantService;
-    @MockBean private VoucherBatchJobService batchJobService;
-    @MockBean private VoucherCampaignUserService campaignUserService;
-    @MockBean private AdminSessionService adminSessionService;
-    @MockBean private StringRedisTemplate redisTemplate;
+    @MockitoBean private MarketingAdminService marketingAdminService;
+    @MockitoBean private VoucherGrantService grantService;
+    @MockitoBean private VoucherBatchJobService batchJobService;
+    @MockitoBean private VoucherCampaignUserService campaignUserService;
+    @MockitoBean private AdminSessionService adminSessionService;
+    @MockitoBean private StringRedisTemplate redisTemplate;
 
     @BeforeEach
     @SuppressWarnings("unchecked")

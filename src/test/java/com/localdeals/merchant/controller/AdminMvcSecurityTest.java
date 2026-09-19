@@ -20,7 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.annotation.Import;
@@ -62,21 +62,21 @@ class AdminMvcSecurityTest {
 
     @Autowired
     private MockMvc mockMvc;
-    @MockBean
+    @MockitoBean
     private AdminAuthService adminAuthService;
-    @MockBean
+    @MockitoBean
     private AdminSessionService adminSessionService;
-    @MockBean
+    @MockitoBean
     private TrustedClientIpResolver clientIpResolver;
-    @MockBean
+    @MockitoBean
     private AdminCatalogService adminCatalogService;
-    @MockBean
+    @MockitoBean
     private AdminManagementService adminManagementService;
-    @MockBean
+    @MockitoBean
     private IShopService shopService;
-    @MockBean
+    @MockitoBean
     private IVoucherService voucherService;
-    @MockBean
+    @MockitoBean
     private StringRedisTemplate redisTemplate;
 
     @BeforeEach

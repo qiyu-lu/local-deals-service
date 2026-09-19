@@ -8,7 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.annotation.DirtiesContext;
@@ -51,13 +51,13 @@ class SeckillOrderRetryIT {
     @Autowired
     private RocketMQTemplate rocketMQTemplate;
 
-    @MockBean
+    @MockitoBean
     private IVoucherOrderService voucherOrderService;
 
-    @MockBean
+    @MockitoBean
     private WebSocketNotifier webSocketNotifier;
 
-    @MockBean
+    @MockitoBean
     private SeckillOrderStateService seckillOrderStateService;
 
     private static final String TOPIC = System.getProperty(
