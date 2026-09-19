@@ -16,7 +16,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 STOCK="${1:-20000}" RATE="${2:-2000}" KILL_AFTER="${3:-5}"
 STACK_ID="${STACK_ID:-v2}"
 RUN_DIR="${PROJECT_DIR}/benchmark/v2/run/${STACK_ID}"
-OUT="${PROJECT_DIR}/benchmark/v2/${MILESTONE:-m3}/raw"
+OUT="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE:-m3}}/raw"
 FIXTURE="${PROJECT_DIR}/benchmark/v2/scripts/fixture.py"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
 mkdir -p "$OUT"
@@ -26,7 +26,7 @@ voucher="$(python3 "$FIXTURE" voucher "$STOCK")"
 name="kill-drill-v${voucher}-$(date +%H%M%S)"
 docker run --rm --network host --cpuset-cpus "${K6_CPUS:-6-7,14-15}" --user "$(id -u):$(id -g)" \
   -v "${PROJECT_DIR}/benchmark/v2/scripts:/scripts:ro" -v "${PROJECT_DIR}/benchmark/v2/run:/data:ro" \
-  -v "${OUT}:/out" grafana/k6:2.2.0 run --quiet \
+  -v "${OUT}:/out" "${K6_IMAGE:-grafana/k6:2.2.0}" run --quiet \
   -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$RATE" -e DURATION="$(( KILL_AFTER * 2 ))s" \
   -e TOKENS=/data/tokens.csv -e USER_OFFSET=0 -e TIMEOUT=2s ${SECKILL_TOKEN_SECRET:+-e SECKILL_TOKEN_SECRET="$SECKILL_TOKEN_SECRET"} \
   --summary-export "/out/${name}.json" /scripts/seckill.js >"${OUT}/${name}.log" 2>&1 &
