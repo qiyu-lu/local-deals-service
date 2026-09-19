@@ -14,6 +14,7 @@ import com.localdeals.platform.utils.CacheClient;
 import com.localdeals.platform.utils.SystemConstants;
 import co.elastic.clients.elasticsearch._types.DistanceUnit;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
@@ -158,21 +159,25 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             queryBuilder.withQuery(q -> q.matchAll(m -> m));
         }
 
-        // typeId 过滤
+        // 过滤条件：builder 只保留一个 filter，多个条件必须合进同一个 bool
+        List<Query> filters = new ArrayList<>();
         if (typeId != null) {
-            queryBuilder.withFilter(q -> q.term(t -> t.field("typeId").value(typeId)));
+            filters.add(Query.of(q -> q.term(t -> t.field("typeId").value(typeId))));
         }
 
         // 地理位置过滤 + 距离排序
         if (x != null && y != null) {
             int radiusMeters = radius != null ? radius : 5000;
-            queryBuilder.withFilter(q -> q.geoDistance(g -> g.field("location")
+            filters.add(Query.of(q -> q.geoDistance(g -> g.field("location")
                     .location(l -> l.latlon(p -> p.lat(y).lon(x)))
-                    .distance(radiusMeters + "m")));
+                    .distance(radiusMeters + "m"))));
             queryBuilder.withSort(s -> s.geoDistance(g -> g.field("location")
                     .location(l -> l.latlon(p -> p.lat(y).lon(x)))
                     .order(SortOrder.Asc)
                     .unit(DistanceUnit.Meters)));
+        }
+        if (!filters.isEmpty()) {
+            queryBuilder.withFilter(q -> q.bool(b -> b.filter(filters)));
         }
 
         // 分页
