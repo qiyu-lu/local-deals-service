@@ -96,7 +96,7 @@ def voucher(stock):
 
 
 def orders(voucher_id):
-    print(mysql(f"SELECT COUNT(*) FROM tb_voucher_order WHERE voucher_id = {int(voucher_id)};").strip())
+    print(mysql(f"SELECT COUNT(*) FROM trade_order WHERE voucher_id = {int(voucher_id)};").strip())
 
 
 if __name__ == '__main__':
