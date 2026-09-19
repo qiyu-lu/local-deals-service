@@ -34,6 +34,7 @@ class SeckillOrderStateServiceTest {
     private HashOperations<String, Object, Object> hashOperations;
     private SeckillOrderStateService service;
     private SeckillOrderMessage message;
+    private SeckillSoldOutRegistry soldOut;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -41,7 +42,8 @@ class SeckillOrderStateServiceTest {
         redisTemplate = mock(StringRedisTemplate.class);
         hashOperations = mock(HashOperations.class);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties());
+        soldOut = mock(SeckillSoldOutRegistry.class);
+        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties(), soldOut);
         message = new SeckillOrderMessage(17L, 23L, 90071992547409931L);
     }
 
@@ -217,6 +219,26 @@ class SeckillOrderStateServiceTest {
         assertThat(service.compensate(message, "PROCESSING_TIMEOUT")).isTrue();
 
         org.mockito.Mockito.verifyNoInteractions(hashOperations);
+    }
+
+    @Test
+    void aFreshCompensationGivesTheUnitBackAndClearsTheSoldOutFlag() {
+        doReturn(1L).when(redisTemplate).execute(
+                any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
+
+        assertThat(service.compensate(message, "DB_STOCK_EXHAUSTED")).isTrue();
+
+        verify(soldOut).clear(17L);
+    }
+
+    @Test
+    void aReplayedCompensationDoesNotBroadcast() {
+        doReturn(2L).when(redisTemplate).execute(
+                any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
+
+        service.compensate(message, "DB_STOCK_EXHAUSTED");
+
+        org.mockito.Mockito.verifyNoInteractions(soldOut);
     }
 
     private Map<Object, Object> state(String status, String reason) {

@@ -68,6 +68,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private LocalDealsMetrics localDealsMetrics;
 
     @Resource
+    private com.localdeals.trade.service.SeckillSoldOutRegistry seckillSoldOutRegistry;
+
+    @Resource
+    private com.localdeals.trade.service.SeckillLocalRateLimiter seckillLocalRateLimiter;
+
+    @Resource
     private SeckillOrderStateService seckillOrderStateService;
 
 

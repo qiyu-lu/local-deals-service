@@ -10,6 +10,8 @@ import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.trade.service.SeckillLocalRateLimiter;
+import com.localdeals.trade.service.SeckillSoldOutRegistry;
 import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
@@ -39,6 +41,8 @@ class VoucherOrderServiceImplTest {
     private SeckillAdmissionService admissionService;
     private SeckillOrderProducer producer;
     private SeckillOrderStateService stateService;
+    private SeckillSoldOutRegistry soldOut;
+    private SeckillLocalRateLimiter bucket;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +51,9 @@ class VoucherOrderServiceImplTest {
         admissionService = mock(SeckillAdmissionService.class);
         producer = mock(SeckillOrderProducer.class);
         stateService = mock(SeckillOrderStateService.class);
+        soldOut = mock(SeckillSoldOutRegistry.class);
+        bucket = mock(SeckillLocalRateLimiter.class);
+        when(bucket.tryAcquire(17L)).thenReturn(true);
 
         tradeOrderMapper = mock(TradeOrderMapper.class);
         MybatisPlusMocks.injectMapper(service, tradeOrderMapper, TradeOrder.class);
@@ -54,6 +61,8 @@ class VoucherOrderServiceImplTest {
         ReflectionTestUtils.setField(service, "seckillAdmissionService", admissionService);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
+        ReflectionTestUtils.setField(service, "seckillSoldOutRegistry", soldOut);
+        ReflectionTestUtils.setField(service, "seckillLocalRateLimiter", bucket);
         ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
         ReflectionTestUtils.setField(service, "localDealsMetrics", mock(LocalDealsMetrics.class));
         ReflectionTestUtils.invokeMethod(service, "registerMetrics");
@@ -203,6 +212,58 @@ class VoucherOrderServiceImplTest {
                                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE));
 
         verifyNoInteractions(admissionService, producer, stateService);
+    }
+
+    @Test
+    void theLocalBucketTurnsExcessAwayBeforeAnyIdOrRedisCall() {
+        when(bucket.tryAcquire(17L)).thenReturn(false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.seckillVoucher(17L, "203.0.113.9"))
+                .isInstanceOfSatisfying(com.localdeals.platform.exception.ApiStatusException.class, error -> {
+                    assertThat(error.getStatus().value()).isEqualTo(429);
+                    assertThat(error.getCode()).isEqualTo(com.localdeals.platform.exception.ApiErrorCodes.SECKILL_BUSY);
+                });
+        verifyNoInteractions(orderIdGenerator, admissionService, producer);
+    }
+
+    @Test
+    void theRemainingStockReportedByRedisSizesTheBucket() {
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(bucket).observe(17L, 5L);
+    }
+
+    @Test
+    void outOfStockFlagsTheVoucherSoldOutForTheWholeCluster() {
+        admissionReturns(SeckillAdmissionService.OUT_OF_STOCK);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).markSoldOut(17L);
+    }
+
+    @Test
+    void takingTheLastUnitFlagsSoldOutRightAway() {
+        when(admissionService.admit(17L, 23L, LARGE_ORDER_ID, "203.0.113.9"))
+                .thenReturn(new SeckillAdmissionService.Admission(SeckillAdmissionService.ACCEPTED, 0L));
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).markSoldOut(17L);
+    }
+
+    @Test
+    void aProbeThatFindsStockClearsAStaleFlag() {
+        when(soldOut.isSoldOut(17L)).thenReturn(true);
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).clear(17L);
+        verify(soldOut, org.mockito.Mockito.never()).markSoldOut(17L);
     }
 
     @Test

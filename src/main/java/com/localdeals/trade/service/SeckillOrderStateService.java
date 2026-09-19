@@ -57,7 +57,8 @@ public class SeckillOrderStateService {
     private final SeckillProperties seckillProperties;
 
     public SeckillOrderStateService(StringRedisTemplate stringRedisTemplate,
-                                    SeckillProperties seckillProperties) {
+                                    SeckillProperties seckillProperties,
+                                    SeckillSoldOutRegistry soldOutRegistry) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.seckillProperties = seckillProperties;
     }

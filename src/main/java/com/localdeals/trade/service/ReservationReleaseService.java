@@ -37,7 +37,8 @@ public class ReservationReleaseService {
     private final ISeckillVoucherService seckillVoucherService;
 
     public ReservationReleaseService(StringRedisTemplate stringRedisTemplate, TradeOrderMapper tradeOrderMapper,
-                                     ISeckillVoucherService seckillVoucherService) {
+                                     ISeckillVoucherService seckillVoucherService,
+                                     SeckillSoldOutRegistry soldOutRegistry) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.tradeOrderMapper = tradeOrderMapper;
         this.seckillVoucherService = seckillVoucherService;

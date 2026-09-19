@@ -368,7 +368,8 @@ class SeckillOrderStateIT {
         @Bean
         SeckillOrderStateService seckillOrderStateService(StringRedisTemplate stringRedisTemplate,
                                                           SeckillProperties seckillProperties) {
-            return new SeckillOrderStateService(stringRedisTemplate, seckillProperties);
+            return new SeckillOrderStateService(stringRedisTemplate, seckillProperties,
+                    org.mockito.Mockito.mock(SeckillSoldOutRegistry.class));
         }
     }
 }
