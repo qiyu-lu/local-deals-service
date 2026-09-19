@@ -1,6 +1,7 @@
 package com.localdeals.trade.utils;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,9 +27,11 @@ class WorkerIdLeaseIT {
 
     private final List<WorkerIdLease> leases = new ArrayList<>();
 
+    @BeforeEach
     @AfterEach
     void releaseAll() {
         leases.forEach(WorkerIdLease::release);
+        leases.clear();
         for (int id = 0; id < WorkerIdLease.MAX_WORKERS; id++) {
             redis.delete(WorkerIdLease.KEY_PREFIX + id);
         }

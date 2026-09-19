@@ -19,6 +19,8 @@ public class OrderProperties {
     private String closeConsumerGroup = "order-close-consumer-group";
     /** Fallback scan for lost timer messages and unfinished Redis releases. */
     private Scan scan = new Scan();
+    /** Redis lease on this instance's Snowflake worker id; renewed every third of it. */
+    private Duration workerLeaseTtl = Duration.ofSeconds(30);
 
     @PostConstruct
     public void validate() {
@@ -27,6 +29,9 @@ public class OrderProperties {
         }
         if (closeTopic == null || closeTopic.isBlank() || closeConsumerGroup == null || closeConsumerGroup.isBlank()) {
             throw new IllegalStateException("local-deals.order close-topic and close-consumer-group must not be blank");
+        }
+        if (workerLeaseTtl == null || workerLeaseTtl.getSeconds() < 3) {
+            throw new IllegalStateException("local-deals.order.worker-lease-ttl must be at least three seconds");
         }
         scan.validate();
     }

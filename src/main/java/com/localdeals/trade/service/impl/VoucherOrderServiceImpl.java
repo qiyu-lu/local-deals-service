@@ -19,7 +19,7 @@ import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.trade.service.OrderStateMachine;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillTrafficGuard;
-import com.localdeals.trade.utils.RedisIdWorker;
+import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,7 +48,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private ISeckillVoucherService seckillVoucherService;
 
     @Resource
-    private RedisIdWorker redisIdWorker;
+    private SnowflakeOrderIdGenerator orderIdGenerator;
 
     @Resource
     private SeckillOrderProducer seckillOrderProducer;
@@ -113,7 +113,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
 
         final long orderId;
         try {
-            orderId = redisIdWorker.nextId("order");
+            orderId = orderIdGenerator.nextId(userId);
         } catch (RuntimeException e) {
             requestUnavailableCounter.increment();
             log.warn("Unable to allocate seckill order id. voucherId={}, userId={}",

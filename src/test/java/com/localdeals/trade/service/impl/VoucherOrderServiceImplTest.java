@@ -10,7 +10,7 @@ import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillTrafficGuard;
-import com.localdeals.trade.utils.RedisIdWorker;
+import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -32,7 +32,7 @@ class VoucherOrderServiceImplTest {
 
     private VoucherOrderServiceImpl service;
     private TradeOrderMapper tradeOrderMapper;
-    private RedisIdWorker redisIdWorker;
+    private SnowflakeOrderIdGenerator orderIdGenerator;
     private SeckillOrderProducer producer;
     private SeckillOrderStateService stateService;
     private SeckillTrafficGuard trafficGuard;
@@ -40,14 +40,14 @@ class VoucherOrderServiceImplTest {
     @BeforeEach
     void setUp() {
         service = new VoucherOrderServiceImpl();
-        redisIdWorker = mock(RedisIdWorker.class);
+        orderIdGenerator = mock(SnowflakeOrderIdGenerator.class);
         producer = mock(SeckillOrderProducer.class);
         stateService = mock(SeckillOrderStateService.class);
         trafficGuard = mock(SeckillTrafficGuard.class);
 
         tradeOrderMapper = mock(TradeOrderMapper.class);
         MybatisPlusMocks.injectMapper(service, tradeOrderMapper, TradeOrder.class);
-        ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
+        ReflectionTestUtils.setField(service, "orderIdGenerator", orderIdGenerator);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
         ReflectionTestUtils.setField(service, "seckillTrafficGuard", trafficGuard);
@@ -66,7 +66,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void acceptedOrderIdUsesExactStringWireContract() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID);
         when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(0);
 
         Result result = service.seckillVoucher(17L, "203.0.113.9");
@@ -77,7 +77,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void ambiguousProducerFailureRecoversOnlyTheExactProcessingReservation() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID);
         when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(-1);
         when(stateService.find(LARGE_ORDER_ID)).thenReturn(new SeckillOrderStateService.Snapshot(
                 LARGE_ORDER_ID, 23L, 17L, SeckillOrderStateService.STATUS_PROCESSING, null));
@@ -90,7 +90,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void businessRejectionsKeepHttp200BodyContractWithStableCodes() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID);
         String[] expectedCodes = {
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_OUT_OF_STOCK,
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_DUPLICATE,
@@ -110,7 +110,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void unavailableMetadataAndUnrecoveredProducerFailureReturn503Codes() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID);
         when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(5);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
@@ -134,7 +134,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void idAllocationFailureDoesNotSendMq() {
-        when(redisIdWorker.nextId("order")).thenThrow(new RuntimeException("redis down"));
+        when(orderIdGenerator.nextId(23L)).thenThrow(new RuntimeException("redis down"));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
@@ -156,7 +156,7 @@ class VoucherOrderServiceImplTest {
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
                 .isInstanceOf(com.localdeals.platform.exception.ApiStatusException.class);
 
-        verifyNoInteractions(redisIdWorker, producer, stateService);
+        verifyNoInteractions(orderIdGenerator, producer, stateService);
     }
 
     @Test

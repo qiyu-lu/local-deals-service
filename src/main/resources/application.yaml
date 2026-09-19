@@ -137,6 +137,7 @@ local-deals:
     notification-max-backoff: "${LOCAL_DEALS_VOUCHER_NOTIFICATION_MAX_BACKOFF:5m}"
   order:
     pay-timeout: "${LOCAL_DEALS_ORDER_PAY_TIMEOUT:15m}"
+    worker-lease-ttl: "${LOCAL_DEALS_ORDER_WORKER_LEASE_TTL:30s}"
     close-topic: "${LOCAL_DEALS_ORDER_CLOSE_TOPIC:order-close-topic}"
     close-consumer-group: "${LOCAL_DEALS_ORDER_CLOSE_CONSUMER_GROUP:order-close-consumer-group}"
     scan:

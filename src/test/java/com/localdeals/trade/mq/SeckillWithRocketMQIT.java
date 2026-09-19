@@ -1,6 +1,6 @@
 package com.localdeals.trade.mq;
 
-import com.localdeals.trade.utils.RedisIdWorker;
+import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import org.junit.jupiter.api.AfterEach;
@@ -43,7 +43,7 @@ class SeckillWithRocketMQIT {
     private SeckillOrderProducer seckillOrderProducer;
 
     @Resource
-    private RedisIdWorker redisIdWorker;
+    private SnowflakeOrderIdGenerator orderIdGenerator;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -109,7 +109,7 @@ class SeckillWithRocketMQIT {
             final long userId = 10000L + i;
             pool.submit(() -> {
                 try {
-                    long orderId = redisIdWorker.nextId("order");
+                    long orderId = orderIdGenerator.nextId(userId);
                     issuedOrderIds.add(orderId);
                     int r = seckillOrderProducer.sendSeckillTransaction(TEST_VOUCHER_ID, userId, orderId);
                     results.add(r);
