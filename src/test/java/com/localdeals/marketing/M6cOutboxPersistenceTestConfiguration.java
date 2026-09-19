@@ -1,8 +1,8 @@
 package com.localdeals.marketing;
 
-import com.localdeals.entity.VoucherGrantNotificationOutbox;
-import com.localdeals.service.VoucherGrantNotificationOutboxService;
-import com.localdeals.websocket.WebSocketNotifier;
+import com.localdeals.marketing.entity.VoucherGrantNotificationOutbox;
+import com.localdeals.marketing.service.VoucherGrantNotificationOutboxService;
+import com.localdeals.platform.websocket.WebSocketNotifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.boot.test.context.TestComponent;

@@ -1,9 +1,9 @@
 package com.localdeals.marketing;
 
-import com.localdeals.dto.VoucherGrantCommand;
-import com.localdeals.exception.ApiErrorCodes;
-import com.localdeals.exception.ApiStatusException;
-import com.localdeals.service.VoucherGrantService;
+import com.localdeals.marketing.dto.VoucherGrantCommand;
+import com.localdeals.platform.exception.ApiErrorCodes;
+import com.localdeals.platform.exception.ApiStatusException;
+import com.localdeals.marketing.service.VoucherGrantService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
