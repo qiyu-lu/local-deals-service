@@ -1,3 +1,0 @@
-Label,# Samples,Average,Min,Max,Std. Dev.,Error %,Throughput,Received KB/sec,Sent KB/sec,Avg. Bytes
-seckill voucher,100,2,1,17,2.22,0.000%,20.49180,4.28,4.56,214.0
-TOTAL,100,2,1,17,2.22,0.000%,20.49180,4.28,4.56,214.0

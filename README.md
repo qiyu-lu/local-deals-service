@@ -41,28 +41,12 @@ flowchart LR
 | 营销闭环 | 标签、签到、统一 Grant、有限批量 Job 与通知 Outbox |
 | 运行保障 | 入口限流、有界缓存降级、Prometheus 指标与专用环境故障演练 |
 
-详细设计、执行证据和历史实验由 [文档索引](docs/README.md) 统一组织。
+设计与决策记录见 [文档索引](docs/README.md)。
 
 ## 可量化数据
 
-| 验证项 | 正式结果 |
-| --- | --- |
-| Java 8 默认安全测试 | 321/321 PASS，0 failure/error/skip |
-| RocketMQ S1 正确性 | 三轮均 1000/1000 成功 |
-| RocketMQ S1 P99 | 64 / 45 / 61 ms |
-| RocketMQ S1 中位吞吐 | 208.855 req/s |
-| RocketMQ S1 一致性 | 零重复、零超卖、最终 MQ main/retry/DLQ lag = 0/0/0 |
-| RocketMQ S2 库存竞争 | accepted/rejected_stock = 100/900 |
-| M6C 批量发券 | 1000/1000 发券；idempotent/skipped/failed = 0/0/0；重复 Grant = 0 |
-| M5D 故障矩阵 | F1–F5 均保留专用故障证据；F4 明确为 consumer-level |
-
-数据来自专用单机环境，只用于当前实现的正确性、恢复性和本机观测，不是生产 SLA。
-S1 的 `1000 threads` 是 JMeter 配置，不表示 1000 个请求严格同时到达；历史 Redis Stream
-实验与当前 RocketMQ 链路不可直接计算性能提升百分比。
-
-正式数据、运行边界和失败轮次见
-[Pre-M8 最终结果](docs/evidence/pre-m8/pre-m8-baseline-results.md) 与
-[M7 结果](docs/evidence/m7/m7-results.md)。
+V2 的对照组基线（M0，未做任何优化）见 [M0 基线与瓶颈分析](benchmark/v2/m0/baseline.md)；
+V1 的历史证据保留在 tag `v1-final` 的 `docs/evidence/`，与 V2 口径不同，不直接比较。
 
 ## 技术栈
 
@@ -89,7 +73,7 @@ Redis Stream 仅存在于历史归档，不属于当前正式秒杀链路。
 - Node.js 与 npm 仅在需要重新构建管理端时使用。
 
 更完整的版本检查、IDE 设置和常见问题见
-[环境搭建](docs/guides/environment-setup.md)。
+[环境与常见问题](docs/guides/environment-setup.md)。
 
 ### 准备环境变量
 
@@ -158,12 +142,9 @@ mvn -o test
 
 ## 文档入口
 
-- [详细文档索引](docs/README.md)
-- [环境搭建](docs/guides/environment-setup.md)
-- [系统设计与证据边界](docs/evidence/m7/m7-evidence-index.md)
-- [项目演示手册](docs/guides/project-demo.md)
-- [Pre-M8 最终结果](docs/evidence/pre-m8/pre-m8-baseline-results.md)
-- [Modernization 路线](docs/modernization-roadmap.md)
+- [文档索引](docs/README.md)
+- [V2 重构计划与进度](docs/plan/v2-high-concurrency-plan.md)
+- [环境与常见问题](docs/guides/environment-setup.md)
 
 ## 已知边界
 

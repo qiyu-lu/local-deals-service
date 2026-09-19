@@ -1,3 +1,0 @@
-Label,# Samples,Average,Median,90% Line,95% Line,99% Line,Min,Max,Error %,Throughput,Received KB/sec,Sent KB/sec
-seckill voucher,100,3,2,3,3,19,2,19,0.000%,20.53388,4.29,4.57
-TOTAL,100,3,2,3,3,19,2,19,0.000%,20.53388,4.29,4.57
