@@ -2,6 +2,7 @@ package com.localdeals.merchant.service;
 
 import com.localdeals.platform.dto.Result;
 import com.localdeals.merchant.dto.ShopDoc;
+import com.localdeals.merchant.entity.Shop;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -12,10 +13,10 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,8 +31,16 @@ class ShopSearchAfterIT {
     @Autowired
     private ElasticsearchOperations esRestTemplate;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @BeforeAll
     void setupIndex() {
+        // 搜索只从 ES 取排好序的 id，再回 MySQL 查整行，所以两边都要有这两家店
+        deleteFixtureShops();
+        insertFixtureShop(9001L, "小龙坎火锅", "中山路1号", 120.15, 30.33);
+        insertFixtureShop(9002L, "海底捞火锅", "解放路88号", 120.16, 30.34);
+
         // 确保索引存在（若已存在先删后建）；使用 class-bound IndexOperations 才能基于 @Document/@Field 注解创建 mapping
         IndexOperations ops = esRestTemplate.indexOps(ShopDoc.class);
         if (ops.exists()) ops.delete();
@@ -64,6 +73,18 @@ class ShopSearchAfterIT {
     void tearDown() {
         IndexOperations ops = esRestTemplate.indexOps(ShopDoc.class);
         if (ops.exists()) ops.delete();
+        deleteFixtureShops();
+    }
+
+    private void insertFixtureShop(long id, String name, String address, double x, double y) {
+        jdbcTemplate.update("INSERT INTO tb_shop (id, merchant_id, name, type_id, images, address, x, y, "
+                        + "sold, comments, score) SELECT ?, id, ?, 1, '', ?, ?, ?, 0, 0, 40 "
+                        + "FROM tb_merchant WHERE code = 'LEGACY_UNASSIGNED'",
+                id, name, address, x, y);
+    }
+
+    private void deleteFixtureShops() {
+        jdbcTemplate.update("DELETE FROM tb_shop WHERE id IN (9001, 9002)");
     }
 
     @Test
@@ -74,9 +95,9 @@ class ShopSearchAfterIT {
 
         assertThat(result.getSuccess()).isTrue();
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> shops = (List<Map<String, Object>>) result.getData();
+        List<Shop> shops = (List<Shop>) result.getData();
         System.out.println("ES search '火锅' results: " + shops.size() + ", elapsed: " + elapsed + "ms");
-        assertThat(shops).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(shops).extracting(Shop::getId).contains(9001L, 9002L);
     }
 
     @Test
@@ -85,7 +106,8 @@ class ShopSearchAfterIT {
         Result result = shopService.searchShops("火锅", 120.15, 30.33, 5000, null, 1);
         assertThat(result.getSuccess()).isTrue();
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> shops = (List<Map<String, Object>>) result.getData();
-        assertThat(shops).isNotEmpty();
+        List<Shop> shops = (List<Shop>) result.getData();
+        // 9002 距圆心约 1.4 km，同在半径内；按距离升序
+        assertThat(shops).extracting(Shop::getId).containsExactly(9001L, 9002L);
     }
 }
