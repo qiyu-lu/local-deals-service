@@ -9,6 +9,7 @@ V2 以代码为准；V1 的过程文档、执行证据和学习笔记已从主�
 | [ADR](adr/) | 每个里程碑一页：背景 / 备选 / 决策 / 代价 |
 | [M0 基线与瓶颈分析](../benchmark/v2/m0/baseline.md) | 开环阶梯压测、落库速率、火焰图结论（对照组） |
 | [M1 同场复测](../benchmark/v2/m1/comparison.md) | Java 21 / Boot 3.5 对 `v2.0-m0` 的 A/B：准入、落库 |
+| [M2 落库复测](../benchmark/v2/m2/comparison.md) | 订单闭环对 `v2.0-m1` 的落库 A/B 与消费线程耗时分解 |
 | [环境与常见问题](guides/environment-setup.md) | 开发栈、隔离栈、压测命令、JDK 设置 |
 | [设计（V1，待按 ADR 重写）](design/) | 与 V2 冲突的部分随对应里程碑改写为 ADR，M9 删除 |
 
