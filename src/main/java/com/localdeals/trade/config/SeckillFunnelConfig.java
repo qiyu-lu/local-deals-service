@@ -36,6 +36,13 @@ public class SeckillFunnelConfig {
     }
 
     @Bean
+    public com.localdeals.trade.service.SeckillTokenService seckillTokenService(StringRedisTemplate redis,
+                                                                               SeckillProperties properties) {
+        return new com.localdeals.trade.service.SeckillTokenService(redis, properties.getToken(),
+                () -> System.currentTimeMillis() / 1000);
+    }
+
+    @Bean
     public SeckillLocalRateLimiter seckillLocalRateLimiter(SeckillProperties properties) {
         SeckillProperties.Funnel funnel = properties.getFunnel();
         return new SeckillLocalRateLimiter(funnel.getStockFactor(), funnel.getMinPermitsPerSecond(), System::nanoTime);
