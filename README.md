@@ -57,8 +57,8 @@ V1 的历史证据保留在 tag `v1-final` 的 `docs/evidence/`，与 V2 口径�
   mysql-connector-j、Redisson 3.52、Hutool 5.8。
 - 数据：MySQL 8.0、Redis 6.2、Spring Data Elasticsearch 5.5 / Elasticsearch Java client 8.18.8。
 - 搜索运行环境：仓库镜像基于 Elasticsearch 8.18.8，并安装 IK 8.18.8 分词器。
-- 消息：RocketMQ Spring Boot Starter 2.3.6（RocketMQ client 5.3.2）；Broker 仍为
-  `apache/rocketmq:4.9.4`，M2 升 5.x（定时消息）。
+- 消息：RocketMQ Spring Boot Starter 2.3.6（RocketMQ client 5.3.2）；Broker
+  `apache/rocketmq:5.3.2`（定时消息用于订单超时关单）。
 - 实时与观测：Spring WebSocket、Actuator、Micrometer、Prometheus。
 - 前端：用户端 Vue 2 + Element UI；管理端 Vue 3.4、Vue Router 4.3、Element Plus 2.7、Vite 5.2；nginx 1.22。
 
@@ -69,7 +69,7 @@ Redis Stream 仅存在于历史归档，不属于当前正式秒杀链路。
 ### 环境要求
 
 - JDK 8 与 Maven 3.x。
-- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、RocketMQ 4.9.4、Elasticsearch 7.17.18 和 nginx。
+- Docker Engine 与 Docker Compose v2，用于启动 MySQL 8、Redis 6.2、RocketMQ 5.3.2、Elasticsearch 8.18.8 和 nginx。
 - 主 Compose 已包含 RocketMQ NameServer/Broker（默认 `9876`/`10911`，端口被占用时用 `NAMESRV_PORT`/`BROKER_PORT` 覆盖）。
 - Node.js 与 npm 仅在需要重新构建管理端时使用。
 
