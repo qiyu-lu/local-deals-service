@@ -154,6 +154,12 @@ local-deals:
     verify-limit-per-minute: "${LOCAL_DEALS_COUPON_VERIFY_LIMIT_PER_MINUTE:120}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
+    token:
+      # Purchases need a short-lived token issued only while the activity is open.
+      required: "${LOCAL_DEALS_SECKILL_TOKEN_REQUIRED:true}"
+      # Override outside local development.
+      secret: "${LOCAL_DEALS_SECKILL_TOKEN_SECRET:local-dev-seckill-token-secret}"
+      ttl: "${LOCAL_DEALS_SECKILL_TOKEN_TTL:10m}"
     funnel:
       # L2: per-instance permits/s = remaining stock x factor (never below the floor).
       stock-factor: "${LOCAL_DEALS_SECKILL_STOCK_FACTOR:2.0}"

@@ -79,6 +79,7 @@ run_k6() { # name voucher rate duration
     "$K6_IMAGE" run --quiet \
     -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$rate" -e DURATION="$duration" \
     -e TOKENS=/data/tokens.csv -e USER_OFFSET="$offset" \
+    ${SECKILL_TOKEN_SECRET:+-e SECKILL_TOKEN_SECRET="$SECKILL_TOKEN_SECRET"} \
     --summary-export "/out/${name}.json" /scripts/seckill.js >"${RAW_DIR}/${name}.log" 2>&1 || true
   [[ -s "${RAW_DIR}/${name}.json" ]] || fail "k6 produced no summary; see ${RAW_DIR}/${name}.log"
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localdeals.trade.interceptor.SeckillSoldOutInterceptor;
 import com.localdeals.trade.service.SeckillLocalRateLimiter;
 import com.localdeals.trade.service.SeckillSoldOutRegistry;
+import com.localdeals.trade.service.SeckillTokenService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
@@ -13,7 +14,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
-/** The two JVM-local layers of the admission funnel (L1 sold-out flag, L2 token bucket). */
+/** The JVM-local parts of the admission funnel: L1 sold-out flag, L2 token bucket, purchase tokens. */
 @Configuration
 public class SeckillFunnelConfig {
 
@@ -36,10 +37,8 @@ public class SeckillFunnelConfig {
     }
 
     @Bean
-    public com.localdeals.trade.service.SeckillTokenService seckillTokenService(StringRedisTemplate redis,
-                                                                               SeckillProperties properties) {
-        return new com.localdeals.trade.service.SeckillTokenService(redis, properties.getToken(),
-                () -> System.currentTimeMillis() / 1000);
+    public SeckillTokenService seckillTokenService(StringRedisTemplate redis, SeckillProperties properties) {
+        return new SeckillTokenService(redis, properties.getToken(), () -> System.currentTimeMillis() / 1000);
     }
 
     @Bean
