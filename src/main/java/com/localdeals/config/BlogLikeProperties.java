@@ -16,7 +16,7 @@ public class BlogLikeProperties {
     private static final int MAX_BATCH_SIZE = 5_000;
 
     /** Allows the scheduled aggregate worker to consume committed outbox rows. */
-    private boolean workerEnabled = false;
+    private boolean workerEnabled = true;
     private Duration initialDelay = Duration.ofSeconds(5);
     private Duration fixedDelay = Duration.ofMillis(200);
     private int batchSize = 500;

@@ -29,6 +29,10 @@ local-deals:
   blog-like:
     # Tests call the batch worker explicitly; never drain shared test data in the background.
     worker-enabled: false
+  voucher-batch:
+    # Tests drive the batch and notification workers explicitly.
+    job-worker-enabled: false
+    notification-worker-enabled: false
   seckill:
     reconciliation:
       # Tests opt in explicitly when exercising the worker.

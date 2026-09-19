@@ -16,7 +16,7 @@ public class ObservabilityProperties {
     private static final Duration MINIMUM_SAMPLING_INTERVAL = Duration.ofSeconds(15);
 
     /** Sampling is independent from business workers and is safe to leave disabled. */
-    private boolean samplingEnabled = false;
+    private boolean samplingEnabled = true;
     private Duration initialDelay = Duration.ofSeconds(10);
     private Duration samplingInterval = Duration.ofSeconds(30);
 

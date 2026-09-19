@@ -19,6 +19,7 @@ class BlogHotRankWarmupServiceTest {
     void disabledRefreshDoesNotScheduleWork() {
         BlogHotRankService rank = mock(BlogHotRankService.class);
         BlogHotRankProperties properties = new BlogHotRankProperties();
+        properties.setRefreshEnabled(false);
         QueueExecutor executor = new QueueExecutor();
 
         new BlogHotRankWarmupService(rank, properties, executor).triggerIfEnabled();

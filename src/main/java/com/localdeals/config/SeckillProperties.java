@@ -34,9 +34,9 @@ public class SeckillProperties {
         private static final int MAX_BATCH_SIZE = 1_000;
 
         /** Master switch for the scheduled reconciliation worker. */
-        private boolean enabled = false;
-        /** Destructive timeout compensation requires an additional explicit switch. */
-        private boolean compensationEnabled = false;
+        private boolean enabled = true;
+        /** Timeout compensation keeps its own switch so an operator can pause stock release alone. */
+        private boolean compensationEnabled = true;
         private Duration initialDelay = Duration.ofSeconds(30);
         private Duration fixedDelay = Duration.ofSeconds(10);
         private Duration staleAfter = Duration.ofMinutes(2);

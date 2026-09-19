@@ -16,7 +16,7 @@ public class BlogHotRankProperties {
     private static final int MAX_TOP_K = 100_000;
     private static final int MAX_PAGE_SIZE = 100;
 
-    private boolean refreshEnabled = false;
+    private boolean refreshEnabled = true;
     private int topK = 1_000;
     private int pageSize = 10;
     private Duration initialDelay = Duration.ofSeconds(10);

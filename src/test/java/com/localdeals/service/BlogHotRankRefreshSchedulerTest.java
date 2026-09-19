@@ -34,6 +34,7 @@ class BlogHotRankRefreshSchedulerTest {
     void disabledRuntimeGateDoesNotInvokeTheBuilder() {
         BlogHotRankService service = mock(BlogHotRankService.class);
         BlogHotRankProperties properties = new BlogHotRankProperties();
+        properties.setRefreshEnabled(false);
         BlogHotRankRefreshScheduler scheduler =
                 new BlogHotRankRefreshScheduler(service, properties);
 

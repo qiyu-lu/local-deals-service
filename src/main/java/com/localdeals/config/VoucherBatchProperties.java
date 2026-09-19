@@ -15,8 +15,8 @@ public class VoucherBatchProperties {
     private static final int MAX_BATCH_SIZE = 500;
     private static final int MAX_ATTEMPTS = 100;
 
-    private boolean jobWorkerEnabled = false;
-    private boolean notificationWorkerEnabled = false;
+    private boolean jobWorkerEnabled = true;
+    private boolean notificationWorkerEnabled = true;
     private Duration initialDelay = Duration.ofSeconds(5);
     private Duration fixedDelay = Duration.ofSeconds(1);
     private int batchSize = 50;
