@@ -29,7 +29,6 @@ import static com.localdeals.service.BlogHotRankReadResult.MissReason.BAD_MEMBER
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.INCONSISTENT_SNAPSHOT;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.NOT_READY;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.OUTSIDE_TOP_K;
-import static com.localdeals.service.BlogHotRankReadResult.MissReason.READ_DISABLED;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.REDIS_UNAVAILABLE;
 import static com.localdeals.service.BlogHotRankService.GENERATION_KEY;
 import static com.localdeals.service.BlogHotRankService.GLOBAL_HASH_TAG;
@@ -88,17 +87,7 @@ class BlogHotRankServiceTest {
     }
 
     @Test
-    void disabledReadIsAnExplicitMissWithoutTouchingRedis() {
-        BlogHotRankReadResult result = service.readPage(1);
-
-        assertThat(result.isHit()).isFalse();
-        assertThat(result.getMissReason()).isEqualTo(READ_DISABLED);
-        verifyNoInteractions(redisTemplate);
-    }
-
-    @Test
     void unreadyRankIsAnExplicitMiss() {
-        enableReads();
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(hashOperations.get(META_KEY, "ready")).thenReturn(null);
 
@@ -111,7 +100,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void pageStartingOutsideTopKIsAMissWithoutTouchingRedis() {
-        enableReads();
         properties.setTopK(20);
         properties.setPageSize(10);
 
@@ -124,7 +112,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void pageCrossingTheTopKBoundaryFallsBackAsAWholePage() {
-        enableReads();
         properties.setTopK(25);
         properties.setPageSize(10);
 
@@ -137,7 +124,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void readyRankReturnsStrictlyParsedIdsInRedisOrder() {
-        enableReads();
         prepareReadyMetadata("7", "7");
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(zSetOperations.reverseRange(LIVE_KEY, 0L, 9L)).thenReturn(linkedSet(
@@ -153,7 +139,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void malformedMemberMakesTheWholeReadMiss() {
-        enableReads();
         prepareReadyMetadata("8", "8");
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(zSetOperations.reverseRange(LIVE_KEY, 0L, 9L)).thenReturn(linkedSet(
@@ -169,7 +154,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void missingLiveRankCannotMasqueradeAsAReadyEmptyRank() {
-        enableReads();
         prepareReadyMetadata("8", "8");
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(zSetOperations.zCard(LIVE_KEY)).thenReturn(0L);
@@ -182,7 +166,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void generationChangeDuringReadMakesTheSnapshotMiss() {
-        enableReads();
         prepareReadyMetadata("9", "10");
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(zSetOperations.reverseRange(LIVE_KEY, 0L, 9L))
@@ -196,7 +179,6 @@ class BlogHotRankServiceTest {
 
     @Test
     void redisFailureIsAnExplicitMiss() {
-        enableReads();
         when(redisTemplate.opsForHash()).thenThrow(new IllegalStateException("redis unavailable"));
 
         BlogHotRankReadResult result = service.readPage(1);
@@ -324,9 +306,6 @@ class BlogHotRankServiceTest {
         assertThatCode(() -> service.addNewBlogAfterCommit(25L)).doesNotThrowAnyException();
     }
 
-    private void enableReads() {
-        properties.setReadEnabled(true);
-    }
 
     private void prepareReadyMetadata(String generationBefore, String generationAfter) {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);

@@ -25,13 +25,10 @@ local-deals:
     # Tests opt in only when they own isolated MySQL and Redis targets.
     sampling-enabled: false
   blog-hot-rank:
-    read-enabled: false
     refresh-enabled: false
   blog-like:
     # Tests call the batch worker explicitly; never drain shared test data in the background.
-    write-enabled: true
     worker-enabled: false
-    legacy-backfill-on-startup: false
   seckill:
     reconciliation:
       # Tests opt in explicitly when exercising the worker.

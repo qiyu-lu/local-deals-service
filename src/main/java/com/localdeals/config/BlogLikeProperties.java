@@ -17,8 +17,6 @@ public class BlogLikeProperties {
 
     /** Allows the scheduled aggregate worker to consume committed outbox rows. */
     private boolean workerEnabled = false;
-    /** Fail-closed maintenance gate for the desired-state command path. */
-    private boolean writeEnabled = false;
     private Duration initialDelay = Duration.ofSeconds(5);
     private Duration fixedDelay = Duration.ofMillis(200);
     private int batchSize = 500;
@@ -27,18 +25,9 @@ public class BlogLikeProperties {
     private int cleanupBatchSize = 2_000;
     /** Maximum bounded delete batches per cleanup tick. */
     private int cleanupMaxBatches = 5;
-    /** One-startup import of legacy blog:liked:* ZSET identities. */
-    private boolean legacyBackfillOnStartup = false;
-    private int legacyScanCount = 500;
-    private int legacyBatchSize = 500;
 
     @PostConstruct
     public void validate() {
-        if (legacyBackfillOnStartup && (workerEnabled || writeEnabled)) {
-            throw new IllegalStateException(
-                    "local-deals.blog-like legacy backfill requires both write-enabled and " +
-                            "worker-enabled to be false");
-        }
         requirePositive(initialDelay, "initial-delay");
         requirePositive(fixedDelay, "fixed-delay");
         requirePositive(processedRetention, "processed-retention");
@@ -54,14 +43,6 @@ public class BlogLikeProperties {
         if (cleanupMaxBatches < 1 || cleanupMaxBatches > 100) {
             throw new IllegalStateException(
                     "local-deals.blog-like.cleanup-max-batches must be between 1 and 100");
-        }
-        if (legacyScanCount < 1 || legacyScanCount > 10_000) {
-            throw new IllegalStateException(
-                    "local-deals.blog-like.legacy-scan-count must be between 1 and 10000");
-        }
-        if (legacyBatchSize < 1 || legacyBatchSize > MAX_BATCH_SIZE) {
-            throw new IllegalStateException(
-                    "local-deals.blog-like.legacy-batch-size must be between 1 and " + MAX_BATCH_SIZE);
         }
     }
 

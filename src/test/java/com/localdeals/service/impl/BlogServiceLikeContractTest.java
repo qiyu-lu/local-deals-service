@@ -1,6 +1,5 @@
 package com.localdeals.service.impl;
 
-import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.dto.BlogLikeCommandResult;
 import com.localdeals.dto.UserDTO;
 import com.localdeals.exception.ApiStatusException;
@@ -34,9 +33,6 @@ class BlogServiceLikeContractTest {
     @BeforeEach
     void setUp() {
         service = new BlogServiceImpl();
-        BlogLikeProperties properties = new BlogLikeProperties();
-        properties.setWriteEnabled(true);
-        ReflectionTestUtils.setField(service, "blogLikeProperties", properties);
         ReflectionTestUtils.setField(service, "blogLikeCommandService", commandService);
         ReflectionTestUtils.setField(service, "metrics",
                 new LocalDealsMetrics(new SimpleMeterRegistry()));

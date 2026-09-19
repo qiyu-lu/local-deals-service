@@ -1,6 +1,5 @@
 package com.localdeals.service;
 
-import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.dto.BlogLikeCommandResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,9 +33,7 @@ class BlogLikeCommandServiceTest {
     @BeforeEach
     void setUp() {
         jdbcTemplate = mock(JdbcTemplate.class);
-        BlogLikeProperties properties = new BlogLikeProperties();
-        properties.setWriteEnabled(true);
-        service = new BlogLikeCommandService(jdbcTemplate, properties);
+        service = new BlogLikeCommandService(jdbcTemplate);
     }
 
     @Test
@@ -165,18 +162,6 @@ class BlogLikeCommandServiceTest {
         assertThatThrownBy(() -> service.isLiked(BLOG_ID, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("userId");
-        verifyNoInteractions(jdbcTemplate);
-    }
-
-    @Test
-    void maintenanceGateFailsBeforeJdbcMutation() {
-        BlogLikeProperties properties = new BlogLikeProperties();
-        properties.setWriteEnabled(false);
-        BlogLikeCommandService gated = new BlogLikeCommandService(jdbcTemplate, properties);
-
-        assertThatThrownBy(() -> gated.setLiked(BLOG_ID, USER_ID, true))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("disabled");
         verifyNoInteractions(jdbcTemplate);
     }
 

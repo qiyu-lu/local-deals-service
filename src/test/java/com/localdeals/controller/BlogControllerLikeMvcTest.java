@@ -19,7 +19,6 @@ import org.springframework.http.HttpStatus;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -86,33 +85,6 @@ class BlogControllerLikeMvcTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.desired").value(false))
                 .andExpect(jsonPath("$.data.changed").value(true));
-
-        verify(blogService).setBlogLiked(BLOG_ID, false);
-    }
-
-    @Test
-    void legacyRouteWithoutDesiredStateIsBadRequestAndDoesNotInvokeService() throws Exception {
-        authenticate();
-
-        mockMvc.perform(put("/blog/like/{id}", BLOG_ID))
-                .andExpect(status().isBadRequest());
-
-        verify(blogService, never()).setBlogLiked(BLOG_ID, true);
-        verify(blogService, never()).setBlogLiked(BLOG_ID, false);
-    }
-
-    @Test
-    void legacyRouteWithDesiredStateDelegatesExplicitly() throws Exception {
-        authenticate();
-        when(blogService.setBlogLiked(BLOG_ID, false))
-                .thenReturn(Result.ok(BlogLikeCommandResult.unchanged(false)));
-
-        mockMvc.perform(put("/blog/like/{id}", BLOG_ID)
-                        .param("liked", "false"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.desired").value(false))
-                .andExpect(jsonPath("$.data.changed").value(false));
 
         verify(blogService).setBlogLiked(BLOG_ID, false);
     }

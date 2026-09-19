@@ -14,7 +14,6 @@ class BlogLikePropertiesTest {
         BlogLikeProperties properties = new BlogLikeProperties();
         properties.validate();
 
-        assertThat(properties.isWriteEnabled()).isFalse();
         assertThat(properties.isWorkerEnabled()).isFalse();
         assertThat(properties.getCleanupFixedDelay()).isEqualTo(Duration.ofSeconds(1));
         assertThat(properties.getCleanupBatchSize()).isEqualTo(2_000);
@@ -46,13 +45,5 @@ class BlogLikePropertiesTest {
         assertThatThrownBy(zeroRetention::validate)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("processed-retention");
-
-        BlogLikeProperties unsafeBackfill = new BlogLikeProperties();
-        unsafeBackfill.setLegacyBackfillOnStartup(true);
-        unsafeBackfill.setWorkerEnabled(true);
-        unsafeBackfill.setWriteEnabled(false);
-        assertThatThrownBy(unsafeBackfill::validate)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("requires");
     }
 }

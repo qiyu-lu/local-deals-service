@@ -29,7 +29,6 @@ import static com.localdeals.service.BlogHotRankReadResult.MissReason.INCONSISTE
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.INVALID_PAGE;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.NOT_READY;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.OUTSIDE_TOP_K;
-import static com.localdeals.service.BlogHotRankReadResult.MissReason.READ_DISABLED;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.REDIS_UNAVAILABLE;
 import static com.localdeals.service.BlogHotRankReadResult.MissReason.STALE;
 
@@ -98,9 +97,6 @@ public class BlogHotRankService {
      * Reads one bounded page from the derived rank. Every unsafe condition is an explicit miss.
      */
     public BlogHotRankReadResult readPage(Integer page) {
-        if (!properties.isReadEnabled()) {
-            return observed(BlogHotRankReadResult.miss(READ_DISABLED));
-        }
         if (page == null || page <= 0) {
             return observed(BlogHotRankReadResult.miss(INVALID_PAGE));
         }

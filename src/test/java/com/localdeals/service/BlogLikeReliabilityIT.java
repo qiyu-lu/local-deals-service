@@ -53,8 +53,8 @@ class BlogLikeReliabilityIT {
         blogId = 8_800_000_000_000L + (System.nanoTime() % 1_000_000_000L);
         jdbcTemplate.update(
                 "INSERT INTO tb_blog " +
-                        "(id, shop_id, user_id, title, images, content, liked, legacy_liked_offset) " +
-                        "VALUES (?, 1, ?, 'like reliability', '', 'test', 7, 7)",
+                        "(id, shop_id, user_id, title, images, content, liked) " +
+                        "VALUES (?, 1, ?, 'like reliability', '', 'test', 0)",
                 blogId, USER_ID);
     }
 
@@ -71,7 +71,7 @@ class BlogLikeReliabilityIT {
     }
 
     @Test
-    void repeatedDesiredCommandsProduceOneDeltaAndPreserveLegacyOffset() {
+    void repeatedDesiredCommandsProduceOneDelta() {
         BlogLikeCommandResult firstLike = commandService.setLiked(blogId, USER_ID, true);
         BlogLikeCommandResult repeatedLike = commandService.setLiked(blogId, USER_ID, true);
 
@@ -83,12 +83,12 @@ class BlogLikeReliabilityIT {
         BlogLikeOutboxBatchService.BatchResult likeBatch = batchService.processNextBatch(100);
 
         assertThat(likeBatch.getProcessedEvents()).isEqualTo(1);
-        assertThat(likedCount()).isEqualTo(8);
-        assertThat(likedCount()).isEqualTo(legacyOffset() + activeRelationships());
+        assertThat(likedCount()).isEqualTo(1);
+        assertThat(likedCount()).isEqualTo(activeRelationships());
 
         BlogLikeOutboxBatchService.BatchResult replayBatch = batchService.processNextBatch(100);
         assertThat(replayBatch.getProcessedEvents()).isZero();
-        assertThat(likedCount()).isEqualTo(8);
+        assertThat(likedCount()).isEqualTo(1);
 
         BlogLikeCommandResult firstUnlike = commandService.setLiked(blogId, USER_ID, false);
         BlogLikeCommandResult repeatedUnlike = commandService.setLiked(blogId, USER_ID, false);
@@ -98,8 +98,8 @@ class BlogLikeReliabilityIT {
 
         batchService.processNextBatch(100);
 
-        assertThat(likedCount()).isEqualTo(7);
-        assertThat(likedCount()).isEqualTo(legacyOffset() + activeRelationships());
+        assertThat(likedCount()).isEqualTo(0);
+        assertThat(likedCount()).isEqualTo(activeRelationships());
     }
 
     @Test
@@ -150,7 +150,7 @@ class BlogLikeReliabilityIT {
             assertThat(pendingEvents()).isEqualTo(1);
 
             batchService.processNextBatch(100);
-            assertThat(likedCount()).isEqualTo(8);
+            assertThat(likedCount()).isEqualTo(1);
 
             CountDownLatch unlikeReady = new CountDownLatch(callers);
             CountDownLatch unlikeStart = new CountDownLatch(1);
@@ -176,8 +176,8 @@ class BlogLikeReliabilityIT {
             assertThat(pendingEvents()).isEqualTo(1);
 
             batchService.processNextBatch(100);
-            assertThat(likedCount()).isEqualTo(7);
-            assertThat(likedCount()).isEqualTo(legacyOffset() + activeRelationships());
+            assertThat(likedCount()).isEqualTo(0);
+            assertThat(likedCount()).isEqualTo(activeRelationships());
         } finally {
             executor.shutdownNow();
         }
@@ -200,7 +200,7 @@ class BlogLikeReliabilityIT {
 
             assertThat(activeRelationships()).isZero();
             assertThat(outboxEvents()).isZero();
-            assertThat(likedCount()).isEqualTo(7);
+            assertThat(likedCount()).isEqualTo(0);
         } finally {
             dropFaultTrigger();
         }
@@ -222,7 +222,7 @@ class BlogLikeReliabilityIT {
             assertThatThrownBy(() -> batchService.processNextBatch(100))
                     .isInstanceOf(DataAccessException.class);
 
-            assertThat(likedCount()).isEqualTo(7);
+            assertThat(likedCount()).isEqualTo(0);
             assertThat(pendingEvents()).isEqualTo(1);
             assertThat(processedEvents()).isZero();
         } finally {
@@ -230,7 +230,7 @@ class BlogLikeReliabilityIT {
         }
 
         assertThat(batchService.processNextBatch(100).getProcessedEvents()).isEqualTo(1);
-        assertThat(likedCount()).isEqualTo(8);
+        assertThat(likedCount()).isEqualTo(1);
         assertThat(pendingEvents()).isZero();
     }
 
@@ -262,8 +262,8 @@ class BlogLikeReliabilityIT {
             assertThat(processed).isEqualTo(1);
             assertThat(pendingEvents()).isZero();
             assertThat(processedEvents()).isEqualTo(1);
-            assertThat(likedCount()).isEqualTo(8);
-            assertThat(likedCount()).isEqualTo(legacyOffset() + activeRelationships());
+            assertThat(likedCount()).isEqualTo(1);
+            assertThat(likedCount()).isEqualTo(activeRelationships());
             assertThat(batchService.processNextBatch(1).getProcessedEvents()).isZero();
         } finally {
             executor.shutdownNow();
@@ -302,11 +302,6 @@ class BlogLikeReliabilityIT {
     private int likedCount() {
         return jdbcTemplate.queryForObject(
                 "SELECT liked FROM tb_blog WHERE id = ?", Integer.class, blogId);
-    }
-
-    private int legacyOffset() {
-        return jdbcTemplate.queryForObject(
-                "SELECT legacy_liked_offset FROM tb_blog WHERE id = ?", Integer.class, blogId);
     }
 
     private void dropFaultTrigger() {

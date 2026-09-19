@@ -13,7 +13,6 @@ class BlogHotRankPropertiesTest {
     void defaultsAreFailClosedAndBounded() {
         BlogHotRankProperties properties = new BlogHotRankProperties();
 
-        assertThat(properties.isReadEnabled()).isFalse();
         assertThat(properties.isRefreshEnabled()).isFalse();
         assertThat(properties.getTopK()).isEqualTo(1_000);
         assertThat(properties.getPageSize()).isEqualTo(10);

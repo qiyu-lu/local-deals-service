@@ -1,6 +1,5 @@
 package com.localdeals.service;
 
-import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.dto.BlogLikeCommandResult;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.DuplicateKeyException;
@@ -41,11 +40,9 @@ public class BlogLikeCommandService {
             "SELECT blog_id FROM tb_blog_like WHERE user_id = ? AND blog_id IN (";
 
     private final JdbcTemplate jdbcTemplate;
-    private final BlogLikeProperties properties;
 
-    public BlogLikeCommandService(JdbcTemplate jdbcTemplate, BlogLikeProperties properties) {
+    public BlogLikeCommandService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
-        this.properties = properties;
     }
 
     /**
@@ -57,9 +54,6 @@ public class BlogLikeCommandService {
      */
     @Transactional
     public BlogLikeCommandResult setLiked(Long blogId, Long userId, boolean desired) {
-        if (!properties.isWriteEnabled()) {
-            throw new IllegalStateException("Blog-like writes are disabled for maintenance");
-        }
         requirePositive(blogId, "blogId");
         requirePositive(userId, "userId");
 

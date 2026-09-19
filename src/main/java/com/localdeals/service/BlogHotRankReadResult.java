@@ -10,7 +10,6 @@ import java.util.List;
 public final class BlogHotRankReadResult {
 
     public enum MissReason {
-        READ_DISABLED,
         INVALID_PAGE,
         OUTSIDE_TOP_K,
         NOT_READY,

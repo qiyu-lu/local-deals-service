@@ -40,17 +40,6 @@ public class BlogController {
         return blogService.setBlogLiked(id, false);
     }
 
-    /**
-     * Migration bridge for clients which already send an explicit desired state. Parameterless
-     * legacy toggle requests are deliberately rejected because an HTTP retry could invert state.
-     */
-    @Deprecated
-    @PutMapping("/like/{id}")
-    public Result setBlogLikedCompatibility(@PathVariable("id") Long id,
-                                            @RequestParam("liked") boolean liked) {
-        return blogService.setBlogLiked(id, liked);
-    }
-
     @GetMapping("/of/me")
     public Result queryMyBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
         UserDTO user = UserHolder.getUser();

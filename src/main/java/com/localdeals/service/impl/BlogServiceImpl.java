@@ -25,7 +25,6 @@ import com.localdeals.service.IUserService;
 import com.localdeals.service.UploadFileService;
 import com.localdeals.service.LocalReadBulkhead;
 import com.localdeals.config.BlogHotRankProperties;
-import com.localdeals.config.BlogLikeProperties;
 import com.localdeals.utils.SystemConstants;
 import com.localdeals.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
@@ -92,9 +91,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private BlogHotRankProperties blogHotRankProperties;
-
-    @Resource
-    private BlogLikeProperties blogLikeProperties;
 
     @Resource
     private LocalDealsMetrics metrics;
@@ -220,10 +216,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 ? LocalDealsMetrics.LikeOperation.LIKE
                 : LocalDealsMetrics.LikeOperation.UNLIKE;
         try {
-            if (!blogLikeProperties.isWriteEnabled()) {
-                throw new ApiStatusException(
-                        HttpStatus.SERVICE_UNAVAILABLE, "点赞功能维护中，请稍后重试");
-            }
             Long userId = UserHolder.getUser().getId();
             BlogLikeCommandResult commandResult = blogLikeCommandService.setLiked(id, userId, liked);
             if (commandResult.getOutcome() == BlogLikeCommandResult.Outcome.NOT_FOUND) {

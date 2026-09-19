@@ -7,7 +7,7 @@ import javax.annotation.PostConstruct;
 import java.time.Duration;
 
 /**
- * Fail-closed rollout controls and bounded sizing for the Redis-derived blog hot rank.
+ * Refresh control and bounded sizing for the Redis-derived blog hot rank.
  */
 @Component
 @ConfigurationProperties(prefix = "local-deals.blog-hot-rank")
@@ -16,7 +16,6 @@ public class BlogHotRankProperties {
     private static final int MAX_TOP_K = 100_000;
     private static final int MAX_PAGE_SIZE = 100;
 
-    private boolean readEnabled = false;
     private boolean refreshEnabled = false;
     private int topK = 1_000;
     private int pageSize = 10;
@@ -49,14 +48,6 @@ public class BlogHotRankProperties {
             throw new IllegalStateException(
                     "local-deals.blog-hot-rank." + property + " must be positive");
         }
-    }
-
-    public boolean isReadEnabled() {
-        return readEnabled;
-    }
-
-    public void setReadEnabled(boolean readEnabled) {
-        this.readEnabled = readEnabled;
     }
 
     public boolean isRefreshEnabled() {
