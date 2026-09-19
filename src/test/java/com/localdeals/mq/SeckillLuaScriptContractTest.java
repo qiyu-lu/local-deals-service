@@ -24,7 +24,7 @@ class SeckillLuaScriptContractTest {
         assertThat(script).contains("activityStatus ~= 'ACTIVE'");
         assertThat(script).contains("now < beginAt");
         assertThat(script).contains("now > endAt");
-        assertThat(script).contains("redis.call('SADD', legacyOrderKey, userId)");
+        assertThat(script).doesNotContain("legacyOrderKey", "SISMEMBER", "SADD");
         assertThat(script).contains("redis.call('HSET', reservationKey, userId, orderId)");
         assertThat(script).contains("'status', 'PROCESSING'");
         assertThat(script).contains("'orderId', orderId");
@@ -70,7 +70,7 @@ class SeckillLuaScriptContractTest {
         assertThat(script).contains("statusData[2] ~= orderId");
         assertThat(script).contains("statusData[3] ~= userId");
         assertThat(script).contains("statusData[4] ~= voucherId");
-        assertThat(script).contains("redis.call('SREM', legacyOrderKey, userId)");
+        assertThat(script).doesNotContain("legacyOrderKey", "SREM");
         assertThat(script).contains("redis.call('ZREM', processingIndexKey, orderId)");
         assertThat(script).contains("return 2");
         assertThat(script).contains("return 1");

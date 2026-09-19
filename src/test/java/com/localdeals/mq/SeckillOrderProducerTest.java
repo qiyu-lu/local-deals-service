@@ -90,7 +90,6 @@ class SeckillOrderProducerTest {
                 eq(Long.toString(ORDER_ID)), eq("120"));
         assertThat(keys.getValue()).containsExactly(
                 SECKILL_STOCK_KEY + VOUCHER_ID,
-                SECKILL_ORDER_KEY + VOUCHER_ID,
                 SECKILL_META_KEY + VOUCHER_ID,
                 SECKILL_RESERVATION_KEY + VOUCHER_ID,
                 SECKILL_ORDER_STATUS_KEY + ORDER_ID,

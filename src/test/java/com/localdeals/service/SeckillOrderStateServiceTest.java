@@ -112,7 +112,6 @@ class SeckillOrderStateServiceTest {
                 any(RedisScript.class),
                 eq(Arrays.asList(
                         SECKILL_STOCK_KEY + message.getVoucherId(),
-                        SECKILL_ORDER_KEY + message.getVoucherId(),
                         SECKILL_RESERVATION_KEY + message.getVoucherId(),
                         SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
                         SECKILL_PROCESSING_INDEX_KEY,
