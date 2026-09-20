@@ -12,39 +12,38 @@ import java.util.List;
 public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
 
     /**
-     * Creates a PENDING_PAY order and snapshots price, shop and merchant from the voucher in the
-     * same statement. The deadline is computed by the database clock, which every later
-     * comparison (close CAS, fallback scan) also uses. Returns 0 when the voucher is missing.
+     * Creates a PENDING_PAY order from a snapshot the caller already read off the voucher.
+     * The deadline is still computed by the database clock, which every later comparison (close
+     * CAS, fallback scan) also uses. A duplicate raises DuplicateKeyException for the caller to
+     * classify, exactly as it did when this was an INSERT ... SELECT.
      */
     @Insert("INSERT INTO trade_order (order_no, user_id, voucher_id, shop_id, merchant_id, amount, " +
-            "status, expire_at) " +
-            "SELECT #{orderNo}, #{userId}, v.id, v.shop_id, s.merchant_id, v.pay_value, 'PENDING_PAY', " +
-            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND) " +
-            "FROM tb_voucher v JOIN tb_shop s ON s.id = v.shop_id WHERE v.id = #{voucherId}")
-    int insertPendingFromVoucher(@Param("orderNo") long orderNo, @Param("userId") long userId,
-                                 @Param("voucherId") long voucherId,
-                                 @Param("payTimeoutSeconds") long payTimeoutSeconds);
+            "status, expire_at) VALUES (#{orderNo}, #{userId}, #{voucher.voucherId}, #{voucher.shopId}, " +
+            "#{voucher.merchantId}, #{voucher.payValue}, 'PENDING_PAY', " +
+            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND))")
+    int insertPending(@Param("orderNo") long orderNo, @Param("userId") long userId,
+                      @Param("voucher") VoucherMapper.VoucherSnapshot voucher,
+                      @Param("payTimeoutSeconds") long payTimeoutSeconds);
 
     /**
-     * The batch form of {@link #insertPendingFromVoucher}: one statement inserts the whole
-     * slice of a consumer batch that belongs to one voucher, snapshotting price, shop and
-     * merchant exactly as the single-row statement does. {@code IGNORE} makes a redelivered
-     * message a no-op instead of failing the whole batch; the caller compares the affected-row
-     * count with the slice size and falls back to the single-message path when they differ.
+     * The batch form: one statement for the whole slice of a consumer batch that belongs to one
+     * voucher. ShardingSphere splits the rows across the tables their user ids belong to and
+     * sums the affected rows. {@code IGNORE} makes a redelivered message a no-op instead of
+     * failing the batch; the caller compares the count with the slice size and falls back to the
+     * single-message path when they differ.
      */
     @Insert("<script>INSERT IGNORE INTO trade_order (order_no, user_id, voucher_id, shop_id, " +
-            "merchant_id, amount, status, expire_at) " +
-            "SELECT b.order_no, b.user_id, v.id, v.shop_id, s.merchant_id, v.pay_value, " +
-            "'PENDING_PAY', DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND) FROM (" +
-            "<foreach collection=\"rows\" item=\"row\" separator=\" UNION ALL \">" +
-            "SELECT #{row.orderNo} AS order_no, #{row.userId} AS user_id" +
-            "</foreach>" +
-            ") b JOIN tb_voucher v ON v.id = #{voucherId} JOIN tb_shop s ON s.id = v.shop_id</script>")
-    int insertPendingBatchFromVoucher(@Param("rows") List<SeckillOrderRow> rows,
-                                      @Param("voucherId") long voucherId,
-                                      @Param("payTimeoutSeconds") long payTimeoutSeconds);
+            "merchant_id, amount, status, expire_at) VALUES " +
+            "<foreach collection=\"rows\" item=\"row\" separator=\",\">" +
+            "(#{row.orderNo}, #{row.userId}, #{voucher.voucherId}, #{voucher.shopId}, " +
+            "#{voucher.merchantId}, #{voucher.payValue}, 'PENDING_PAY', " +
+            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND))" +
+            "</foreach></script>")
+    int insertPendingBatch(@Param("rows") List<SeckillOrderRow> rows,
+                           @Param("voucher") VoucherMapper.VoucherSnapshot voucher,
+                           @Param("payTimeoutSeconds") long payTimeoutSeconds);
 
-    /** One order of a batch insert: the pair the derived table needs. */
+    /** One order of a batch insert. user_id is what routes the row to its shard. */
     record SeckillOrderRow(long orderNo, long userId) {
     }
 

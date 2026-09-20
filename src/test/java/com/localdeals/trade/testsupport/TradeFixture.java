@@ -2,6 +2,8 @@ package com.localdeals.trade.testsupport;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.List;
+
 /**
  * One merchant, shop, seckill voucher and stock row with ids derived from {@code base}, so each
  * M2 integration test owns disjoint rows and can delete everything it created.
@@ -50,12 +52,15 @@ public final class TradeFixture {
     }
 
     public void delete() {
-        deleteIfPresent("DELETE l FROM order_state_log l JOIN trade_order o ON o.order_no = l.order_no " +
-                "WHERE o.voucher_id = ?", voucherId);
-        deleteIfPresent("DELETE FROM refund_record WHERE order_no IN " +
-                "(SELECT order_no FROM trade_order WHERE voucher_id = ?)", voucherId);
-        deleteIfPresent("DELETE FROM payment_record WHERE order_no IN " +
-                "(SELECT order_no FROM trade_order WHERE voucher_id = ?)", voucherId);
+        // The attached rows used to be deleted through a join and a subquery on trade_order.
+        // A sharded table supports neither: the rows of one statement live in different
+        // databases. Read the order numbers first, then delete each attached row by the key that
+        // routes it.
+        for (Long orderNo : orderNos()) {
+            deleteIfPresent("DELETE FROM order_state_log WHERE order_no = ?", orderNo);
+            deleteIfPresent("DELETE FROM refund_record WHERE order_no = ?", orderNo);
+            deleteIfPresent("DELETE FROM payment_record WHERE order_no = ?", orderNo);
+        }
         deleteIfPresent("DELETE FROM user_coupon WHERE voucher_id = ?", voucherId);
         deleteIfPresent("DELETE FROM admin_audit_log WHERE merchant_id = ?", merchantId);
         deleteIfPresent("DELETE FROM trade_order WHERE voucher_id = ?", voucherId);
@@ -63,6 +68,16 @@ public final class TradeFixture {
         jdbc.update("DELETE FROM tb_voucher WHERE id = ?", voucherId);
         jdbc.update("DELETE FROM tb_shop WHERE id = ?", shopId);
         jdbc.update("DELETE FROM tb_merchant WHERE id = ?", merchantId);
+    }
+
+    /** Every order of this fixture's voucher; empty before the M2 tables exist. */
+    private List<Long> orderNos() {
+        try {
+            return jdbc.queryForList("SELECT order_no FROM trade_order WHERE voucher_id = ?",
+                    Long.class, voucherId);
+        } catch (org.springframework.jdbc.BadSqlGrammarException tableNotMigratedYet) {
+            return List.of();
+        }
     }
 
     private void deleteIfPresent(String sql, Object... args) {

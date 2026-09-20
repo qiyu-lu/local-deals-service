@@ -47,13 +47,13 @@ public class CouponService {
         long adminId = principal.getAccountId();
         if (coupon.getSource() == CouponSource.PURCHASE &&
                 !stateMachine.fire(Long.parseLong(coupon.getSourceRef()), OrderEvent.VERIFY, "ADMIN:" + adminId)) {
-            throw rejection(couponMapper.selectForUpdate(coupon.getId()));
+            throw rejection(couponMapper.selectForUpdate(coupon.getId(), coupon.getUserId()));
         }
-        if (couponMapper.markUsed(coupon.getId(), adminId) != 1) {
+        if (couponMapper.markUsed(coupon.getId(), coupon.getUserId(), adminId) != 1) {
             // Rolls back the order transition above.
-            throw rejection(couponMapper.selectForUpdate(coupon.getId()));
+            throw rejection(couponMapper.selectForUpdate(coupon.getId(), coupon.getUserId()));
         }
-        return couponMapper.selectById(coupon.getId());
+        return couponMapper.selectOwned(coupon.getId(), coupon.getUserId());
     }
 
     /** Marks up to {@code limit} lapsed AVAILABLE coupons EXPIRED; returns how many. */

@@ -5,6 +5,8 @@ import com.localdeals.trade.entity.CouponSource;
 import com.localdeals.trade.entity.TradeOrder;
 import com.localdeals.trade.entity.UserCoupon;
 import com.localdeals.trade.mapper.UserCouponMapper;
+import com.localdeals.trade.mapper.VoucherMapper;
+import com.localdeals.trade.mapper.VoucherMapper.VoucherSnapshot;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
@@ -20,10 +22,13 @@ public class CouponIssuer {
     private static final int MAX_CODE_ATTEMPTS = 3;
 
     private final UserCouponMapper couponMapper;
+    private final VoucherMapper voucherMapper;
     private final VerifyCodeGenerator codeGenerator;
 
-    public CouponIssuer(UserCouponMapper couponMapper, VerifyCodeGenerator codeGenerator) {
+    public CouponIssuer(UserCouponMapper couponMapper, VoucherMapper voucherMapper,
+                        VerifyCodeGenerator codeGenerator) {
         this.couponMapper = couponMapper;
+        this.voucherMapper = voucherMapper;
         this.codeGenerator = codeGenerator;
     }
 
@@ -39,9 +44,15 @@ public class CouponIssuer {
 
     private UserCoupon issue(String couponNo, long userId, long voucherId, long merchantId,
                              CouponSource source, String sourceRef) {
+        // user_coupon is sharded and tb_voucher is not, so the validity window is read here
+        // instead of joined inside the insert.
+        VoucherSnapshot voucher = voucherMapper.selectSnapshot(voucherId);
+        if (voucher == null) {
+            throw new IllegalStateException("Voucher is missing; cannot issue coupon " + couponNo);
+        }
         for (int attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
             try {
-                if (couponMapper.insertFromVoucher(couponNo, userId, voucherId, merchantId, source.name(),
+                if (couponMapper.insertFromVoucher(couponNo, userId, voucher, merchantId, source.name(),
                         sourceRef, codeGenerator.next()) != 1) {
                     throw new IllegalStateException("Voucher is missing; cannot issue coupon " + couponNo);
                 }
