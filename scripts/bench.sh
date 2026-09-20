@@ -537,14 +537,20 @@ load_scenario() {
       S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
       S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      # The shape matters more than the size. The replica is blocked at KILL_AFTER + 0.5 s and
+      # the master dies 0.4 x SLEEP later, so the stock must still be selling then (or nothing
+      # is lost) and demand must outlast the promotion at about SLEEP + 8 s (or the stock that
+      # comes back is never asked for). 40000 at 2000/s sells out around 20 s: the window opens
+      # at 5.5 s, the promoted node is serving again by ~16 s, and 9 s of demand remain.
       S_WINDOW_ROUNDS=2; S_WINDOW_SLEEP=8
-      S_KILL_STOCK=40000; S_KILL_RATE=4000; S_KILL_AFTER=5
+      S_KILL_STOCK=40000; S_KILL_RATE=2000; S_KILL_AFTER=5
       S_WARMUP_RATE=500; S_WARMUP_DURATION=20s
       S_USERS=100000; S_EXTRA_ARGS=""
       S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=10s --local-deals.seckill.reconciliation.fixed-delay=5s --local-deals.seckill.reconciliation.stale-after=20s --local-deals.seckill.reconciliation.retry-delay=10s --local-deals.seckill.reconciliation.batch-size=1000"
       if [[ "$1" == *-smoke ]]; then
-        S_WINDOW_ROUNDS=1; S_WINDOW_SLEEP=5
-        S_KILL_STOCK=4000; S_KILL_RATE=1000; S_KILL_AFTER=3
+        # Same shape, a quarter of the size: sells out at 12 s, window at 3.5 s, back by ~10 s.
+        S_WINDOW_ROUNDS=1; S_WINDOW_SLEEP=4
+        S_KILL_STOCK=6000; S_KILL_RATE=500; S_KILL_AFTER=3
         S_WARMUP_RATE=200; S_WARMUP_DURATION=5s; S_BUCKETS=8; S_USERS=20000
       fi ;;
     *) fail "unknown scenario $1" ;;

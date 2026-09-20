@@ -209,6 +209,14 @@ lost="$(( accepted - orders ))"
 stock_gap="$(( redis_stock - db_stock ))"
 oversold="$(( orders > STOCK ? orders - STOCK : 0 ))"
 degraded_after="$(degraded_total)"
+# A replication gap only loses something if the master was still selling when it opened. Sold
+# out first and the drill measured a failover with nothing at stake: say so in the row rather
+# than let a line of zeroes read as "no data was lost".
+window_effective=n/a
+if (( REPLICA_SLEEP_S > 0 )); then
+  window_effective=no
+  (( stock_at_kill > 0 )) && window_effective=yes
+fi
 docker start "$KILL_NODE" >/dev/null || true
 # stock_short degradations are the MySQL backstop refusing a batch Redis had already promised.
-echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},replica_sleep_s=${REPLICA_SLEEP_S},replica=${replica:-none},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},stock_short_degraded=$(( degraded_after - degraded_before )),converge_s=${converge}"
+echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},replica_sleep_s=${REPLICA_SLEEP_S},replica=${replica:-none},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},stock_short_degraded=$(( degraded_after - degraded_before )),window_effective=${window_effective},converge_s=${converge}"

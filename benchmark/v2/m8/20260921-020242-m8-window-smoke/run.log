@@ -1,0 +1,115 @@
+2026-09-21 02:02:42 scenario m8-window-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-020242-m8-window-smoke
+2026-09-21 02:02:42 phase stack-up start (timeout 900s)
+ Network ld-m3bench_local-deals-net  Creating
+ Network ld-m3bench_local-deals-net  Created
+ Volume "ld-m3bench_mysql-data"  Creating
+ Volume "ld-m3bench_mysql-data"  Created
+ Volume "ld-m3bench_redis-data"  Creating
+ Volume "ld-m3bench_redis-data"  Created
+ Container ld-m3bench-namesrv  Creating
+ Container ld-m3bench-es  Creating
+ Container ld-m3bench-mysql  Creating
+ Container ld-m3bench-redis  Creating
+ Container ld-m3bench-namesrv  Created
+ Container ld-m3bench-es  Created
+ Container ld-m3bench-broker  Creating
+ Container ld-m3bench-mysql  Created
+ Container ld-m3bench-redis  Created
+ Container ld-m3bench-broker  Created
+ Container ld-m3bench-namesrv  Starting
+ Container ld-m3bench-es  Starting
+ Container ld-m3bench-redis  Starting
+ Container ld-m3bench-mysql  Starting
+ Container ld-m3bench-redis  Started
+ Container ld-m3bench-namesrv  Started
+ Container ld-m3bench-broker  Starting
+ Container ld-m3bench-es  Started
+ Container ld-m3bench-mysql  Started
+ Container ld-m3bench-broker  Started
+ Container ld-m3bench-redis-c2  Creating
+ Container ld-m3bench-redis-c1  Creating
+ Container ld-m3bench-redis-c6  Creating
+ Container ld-m3bench-redis-c4  Creating
+ Container ld-m3bench-redis-c5  Creating
+ Container ld-m3bench-redis-c3  Creating
+ Container ld-m3bench-redis-c4  Created
+ Container ld-m3bench-redis-c3  Created
+ Container ld-m3bench-redis-c1  Created
+ Container ld-m3bench-redis-c6  Created
+ Container ld-m3bench-redis-c5  Created
+ Container ld-m3bench-redis-c2  Created
+ Container ld-m3bench-redis-c4  Starting
+ Container ld-m3bench-redis-c5  Starting
+ Container ld-m3bench-redis-c2  Starting
+ Container ld-m3bench-redis-c1  Starting
+ Container ld-m3bench-redis-c3  Starting
+ Container ld-m3bench-redis-c6  Starting
+ Container ld-m3bench-redis-c5  Started
+ Container ld-m3bench-redis-c4  Started
+ Container ld-m3bench-redis-c1  Started
+ Container ld-m3bench-redis-c6  Started
+ Container ld-m3bench-redis-c2  Started
+ Container ld-m3bench-redis-c3  Started
+dependency containers pinned to CPUs 4-5,12-13
+stack ld-m3bench ready: mysql=33306 redis-cluster=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 namesrv=39876 broker=30911 es=39200
+2026-09-21 02:03:35 phase stack-up done
+2026-09-21 02:03:35 phase build start (timeout 1200s)
+2026-09-21 02:03:37 phase build done
+2026-09-21 02:03:37 phase redis-window-drill-1 start (timeout 2700s)
+app started instance=1 pid=1772347 port=38083 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=63a521e, kind=step, target_rps=200, stock=1000, voucher=10, achieved_rps=200.0, requests=1001, dropped=0, p50_ms=2.2, p95_ms=11.3, p99_ms=76.1, max_ms=121.1, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=0.1, persist_orders_per_s=193.5, app_cpu_cores=2.27, mysql_cpu_cores=0.15, redis_cpu_cores=0.1, broker_cpu_cores=0.61, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.1, batch_mean=1.78, raw=step-r200-s1000-020402.json
+app stopped (instances: 1)
+2026-09-21 02:04:54 phase redis-window-drill-1 done
+2026-09-21 02:04:54 scenario m8-window-smoke done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-020242-m8-window-smoke
+ Container ld-m3bench-redis  Stopping
+ Container ld-m3bench-broker  Stopping
+ Container ld-m3bench-es  Stopping
+ Container ld-m3bench-mysql  Stopping
+ Container ld-m3bench-redis  Stopped
+ Container ld-m3bench-redis  Removing
+ Container ld-m3bench-redis  Removed
+ Container ld-m3bench-mysql  Stopped
+ Container ld-m3bench-mysql  Removing
+ Container ld-m3bench-mysql  Removed
+ Container ld-m3bench-es  Stopped
+ Container ld-m3bench-es  Removing
+ Container ld-m3bench-es  Removed
+ Container ld-m3bench-broker  Stopped
+ Container ld-m3bench-broker  Removing
+ Container ld-m3bench-broker  Removed
+ Container ld-m3bench-namesrv  Stopping
+ Container ld-m3bench-namesrv  Stopped
+ Container ld-m3bench-namesrv  Removing
+ Container ld-m3bench-namesrv  Removed
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Network ld-m3bench_local-deals-net  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+ Network ld-m3bench_local-deals-net  Removed
+ Container ld-m3bench-redis-c6  Stopping
+ Container ld-m3bench-redis-c1  Stopping
+ Container ld-m3bench-redis-c2  Stopping
+ Container ld-m3bench-redis-c4  Stopping
+ Container ld-m3bench-redis-c3  Stopping
+ Container ld-m3bench-redis-c5  Stopping
+ Container ld-m3bench-redis-c5  Stopped
+ Container ld-m3bench-redis-c5  Removing
+ Container ld-m3bench-redis-c5  Removed
+ Container ld-m3bench-redis-c4  Stopped
+ Container ld-m3bench-redis-c4  Removing
+ Container ld-m3bench-redis-c4  Removed
+ Container ld-m3bench-redis-c1  Stopped
+ Container ld-m3bench-redis-c1  Removing
+ Container ld-m3bench-redis-c6  Stopped
+ Container ld-m3bench-redis-c6  Removing
+ Container ld-m3bench-redis-c1  Removed
+ Container ld-m3bench-redis-c6  Removed
+ Container ld-m3bench-redis-c3  Stopped
+ Container ld-m3bench-redis-c3  Removing
+ Container ld-m3bench-redis-c3  Removed
+ Container ld-m3bench-redis-c2  Stopped
+ Container ld-m3bench-redis-c2  Removing
+ Container ld-m3bench-redis-c2  Removed
+2026-09-21 02:05:21 cleanup done; status: DONE
