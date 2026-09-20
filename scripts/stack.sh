@@ -37,9 +37,7 @@ BROKER_PORT="${BROKER_PORT:-20911}"
 ES_PORT="${ES_PORT:-29200}"
 REDIS_MODE="${REDIS_MODE:-single}"
 REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2700}"
-# Below 32768 like every other port here: the cluster bus binds on the host network, and this
-# host hands out 32768-60999 as ephemeral ports to anything making an outbound connection.
-REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-2800}"
+REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3700}"
 APP_PORT="${APP_PORT:-28083}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 # Which of the instances this invocation is about, and how many nginx balances over. One
@@ -94,7 +92,10 @@ check_isolation() {
   local port forbidden
   local cluster_ports=()
   # Both the client and the bus ports: another stack's bus range is just as fatal a collision.
-  [[ "$REDIS_MODE" != cluster ]] || mapfile -t cluster_ports < <(redis_cluster_ports; redis_cluster_bus_ports)
+  if [[ "$REDIS_MODE" == cluster ]]; then
+    check_cluster_bus_base
+    mapfile -t cluster_ports < <(redis_cluster_ports; redis_cluster_bus_ports)
+  fi
   local instance_ports=() n
   for (( n = 1; n <= APP_INSTANCES; n++ )); do
     instance_ports+=("$(instance_app_port "$n")" "$(instance_management_port "$n")")
@@ -105,6 +106,16 @@ check_isolation() {
       [[ "$port" != "$forbidden" ]] || fail "port ${port} belongs to the dev stack"
     done
   done
+}
+
+# Redis 6.2 has no cluster-port: a node's bus always listens on its client port + 10000, and the
+# compose only *announces* the bus port. Announce anything else and the nodes gossip to a port
+# nobody is listening on — the cluster never forms, and `--cluster create` waits for a handshake
+# that cannot arrive until something times out fifteen minutes later. The ports are concatenated
+# with the node index, so the bases have to differ by exactly 1000.
+check_cluster_bus_base() {
+  (( REDIS_CLUSTER_BUS_BASE == REDIS_CLUSTER_PORT_BASE + 1000 )) ||
+    fail "REDIS_CLUSTER_BUS_BASE must be REDIS_CLUSTER_PORT_BASE + 1000 (Redis 6.2 binds the bus at port+10000); got ${REDIS_CLUSTER_PORT_BASE} and ${REDIS_CLUSTER_BUS_BASE}"
 }
 
 redis_cluster_ports() { # 1..6

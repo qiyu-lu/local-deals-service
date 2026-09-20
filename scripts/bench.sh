@@ -52,12 +52,16 @@ case "${1:-}" in
     # smoke lost two of four scenarios that way, once a cluster node ("timed out waiting for
     # Redis node") and once a second instance (BindException on the API port). Both read as
     # something wrong with multiple instances and were nothing of the kind.
+    #
+    # The cluster pair is 2100x/3100x rather than anything tidier because Redis 6.2 binds the
+    # bus at the client port + 10000 and only the announcement is configurable: the client base
+    # must therefore stay under 22768 for its bus to stay under 32768 as well.
     export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-24306}" REDIS_PORT="${REDIS_PORT:-24379}" \
       NAMESRV_PORT="${NAMESRV_PORT:-24876}" BROKER_PORT="${BROKER_PORT:-20912}" ES_PORT="${ES_PORT:-24200}" \
       APP_PORT="${APP_PORT:-24083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-24184}" \
       STACK_SUBNET="${STACK_SUBNET:-172.30.58.0/24}" \
-      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2500}" \
-      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-2600}" ;;
+      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2100}" \
+      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3100}" ;;
 esac
 MILESTONE="${MILESTONE:-m0}"
 OUT_DIR="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE}}"
