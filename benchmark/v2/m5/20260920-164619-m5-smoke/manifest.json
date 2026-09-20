@@ -59,5 +59,10 @@
   "load_at_start": {
     "loadavg": "7.34 7.17 6.46 6/4481 3297806",
     "other_containers": "ld-v2-broker ld-v2-es ld-v2-mysql ld-v2-namesrv ld-v2-redis ld-v2-redis-c1 ld-v2-redis-c2 ld-v2-redis-c3 ld-v2-redis-c4 ld-v2-redis-c5 ld-v2-redis-c6 local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
-  }
+  },
+  "finished_at": "2026-09-20T16:54:02+0800",
+  "load_at_end": {
+    "loadavg": "8.28 7.86 7.10 6/5306 3366622"
+  },
+  "status": "DONE"
 }

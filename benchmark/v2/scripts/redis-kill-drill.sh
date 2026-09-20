@@ -49,6 +49,29 @@ reservations_of() { sum_over_buckets HLEN "resv:$1"; }
 redis_stock_of() { sum_over_buckets GET "stock:$1"; }
 processing_left_total() { sum_over_buckets ZCARD "processing"; }
 cluster_ok() { redis CLUSTER INFO 2>/dev/null | grep -q '^cluster_state:ok'; }
+cluster_noticed() { # the survivors have flagged the dead master
+  redis CLUSTER NODES 2>/dev/null | grep -q 'fail'
+}
+# Every bucket key is readable again: this is the moment the application stops seeing errors,
+# and it is the number worth quoting, not "the cluster says ok" (the survivors still say ok in
+# the first seconds, before they have noticed anything at all).
+buckets_readable() {
+  local bucket
+  for (( bucket = 0; bucket < BUCKETS; bucket++ )); do
+    redis GET "sk:{sk:b${bucket}}:stock:$1" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+accepted_by_k6() {
+  python3 - "${OUT}/${name}.json" <<'PYJSON'
+import json, sys
+try:
+    metrics = json.load(open(sys.argv[1]))['metrics']
+except Exception:
+    print(0); raise SystemExit
+print(int(metrics.get('outcome_accepted', {}).get('count', 0)))
+PYJSON
+}
 
 voucher="$(SECKILL_BUCKETS="$BUCKETS" python3 "$FIXTURE" voucher "$STOCK")"
 name="redis-kill-drill-v${voucher}-$(date +%H%M%S)"
@@ -65,14 +88,23 @@ reserved_at_kill="$(reservations_of "$voucher")"
 stock_at_kill="$(redis_stock_of "$voucher")"
 docker kill "$KILL_NODE" >/dev/null
 killed="$(date +%s.%N)"
-# The cluster is usable again once the surviving nodes agree on a promoted replica.
-until cluster_ok; do
-  if python3 -c "import sys; sys.exit(0 if $(date +%s.%N) - ${killed} > ${FAILOVER_TIMEOUT:-120} else 1)"; then
-    echo "timeout waiting for failover" >&2; break
+# Two different moments: when the survivors notice the master is gone, and when every bucket is
+# served again. The application feels the second one.
+noticed=""
+recovered=""
+while [[ -z "$recovered" ]]; do
+  [[ -n "$noticed" ]] || ! cluster_noticed || noticed="$(python3 -c "print(round($(date +%s.%N) - ${killed}, 1))")"
+  if [[ -n "$noticed" ]] && cluster_ok && buckets_readable "$voucher"; then
+    recovered="$(python3 -c "print(round($(date +%s.%N) - ${killed}, 1))")"
+    break
   fi
-  sleep 1
+  if python3 -c "import sys; sys.exit(0 if $(date +%s.%N) - ${killed} > ${FAILOVER_TIMEOUT:-120} else 1)"; then
+    echo "timeout waiting for failover" >&2
+    noticed="${noticed:-timeout}"; recovered=timeout
+    break
+  fi
+  sleep 0.5
 done
-failover="$(python3 -c "print(round($(date +%s.%N) - ${killed}, 1))")"
 wait "$k6" || true
 
 # Converge: no reservation is still being processed and the order count has stopped moving.
@@ -100,8 +132,13 @@ converge="$(python3 -c "print(round($(date +%s.%N) - ${killed}, 1))")"
 resv="$(reservations_of "$voucher")"
 redis_stock="$(redis_stock_of "$voucher")"
 db_stock="$($STACK_MYSQL -N -B -e "SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ${voucher}" 2>/dev/null)"
-lost="$(( reserved_at_kill - resv ))"
+accepted="$(accepted_by_k6)"
+# What the buyers lost: everyone k6 was told had won, minus the orders that exist. A reservation
+# that died with its master can never become an order.
+lost="$(( accepted - orders ))"
 (( lost >= 0 )) || lost=0
+# What Redis believes it still has, minus the truth: the stock that came back from the dead.
+stock_gap="$(( redis_stock - db_stock ))"
 oversold="$(( orders > STOCK ? orders - STOCK : 0 ))"
 docker start "$KILL_NODE" >/dev/null || true
-echo "voucher=${voucher},stock=${STOCK},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},killed_node=${KILL_NODE},failover_s=${failover},reservations=${resv},orders=${orders},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_reservations=${lost},oversold=${oversold},converge_s=${converge}"
+echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},converge_s=${converge}"
