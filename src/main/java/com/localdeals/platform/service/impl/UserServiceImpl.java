@@ -89,6 +89,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         this.businessDateProvider = businessDateProvider;
     }
 
+    /** A Cluster hash tag, so every key of one phone lives in one slot. */
+    private static String tag(String phone) {
+        return "{" + phone + "}";
+    }
+
     @Override
     public Result sendCode(String phone, HttpSession session){
         // 1 号码校验
@@ -99,9 +104,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
         // 生成验证码，并通过 Lua 原子完成按手机号限流与验证码写入。
         String code = RandomUtil.randomNumbers(6);
-        String codeKey = LOGIN_CODE_KEY + phone;
-        String rateLimitKey = LOGIN_CODE_RATE_LIMIT_KEY + phone;
-        String failureKey = LOGIN_CODE_FAILURE_KEY + phone;
+        // The three keys go into one Lua call, so they share the phone's hash tag and stay in
+        // one Cluster slot.
+        String codeKey = LOGIN_CODE_KEY + tag(phone);
+        String rateLimitKey = LOGIN_CODE_RATE_LIMIT_KEY + tag(phone);
+        String failureKey = LOGIN_CODE_FAILURE_KEY + tag(phone);
         final Long issued;
         try {
             issued = stringRedisTemplate.execute(
@@ -147,8 +154,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                     LocalDealsMetrics.AuthResult.INVALID_INPUT);
             return Result.fail(INVALID_CODE_MESSAGE);
         }
-        String codeKey = LOGIN_CODE_KEY + phone;
-        String failureKey = LOGIN_CODE_FAILURE_KEY + phone;
+        String codeKey = LOGIN_CODE_KEY + tag(phone);
+        String failureKey = LOGIN_CODE_FAILURE_KEY + tag(phone);
         final Long consumed;
         try {
             consumed = stringRedisTemplate.execute(

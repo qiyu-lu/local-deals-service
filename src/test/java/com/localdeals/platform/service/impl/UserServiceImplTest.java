@@ -43,6 +43,8 @@ import static org.mockito.Mockito.verify;
 
 class UserServiceImplTest {
     private static final String PHONE = "13800138000";
+    /** Every key of one phone shares this Cluster hash tag. */
+    private static final String TAG = "{" + PHONE + "}";
     private static final String CODE = "123456";
 
     private StringRedisTemplate redisTemplate;
@@ -67,9 +69,9 @@ class UserServiceImplTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        LOGIN_CODE_RATE_LIMIT_KEY + PHONE,
-                        LOGIN_CODE_KEY + PHONE,
-                        LOGIN_CODE_FAILURE_KEY + PHONE)),
+                        LOGIN_CODE_RATE_LIMIT_KEY + TAG,
+                        LOGIN_CODE_KEY + TAG,
+                        LOGIN_CODE_FAILURE_KEY + TAG)),
                 any(), eq("120"), eq("60"));
     }
 
@@ -138,7 +140,7 @@ class UserServiceImplTest {
         doReturn(hashOperations).when(redisTemplate).opsForHash();
         doReturn(1L).when(redisTemplate).execute(
                 any(RedisScript.class),
-                eq(Arrays.asList(LOGIN_CODE_KEY + PHONE, LOGIN_CODE_FAILURE_KEY + PHONE)),
+                eq(Arrays.asList(LOGIN_CODE_KEY + TAG, LOGIN_CODE_FAILURE_KEY + TAG)),
                 eq(CODE), eq(String.valueOf(LOGIN_CODE_MAX_FAILURES)));
 
         LoginFormDTO form = new LoginFormDTO();
@@ -152,7 +154,7 @@ class UserServiceImplTest {
         ArgumentCaptor<RedisScript> script = ArgumentCaptor.forClass(RedisScript.class);
         verify(redisTemplate).execute(
                 script.capture(),
-                eq(Arrays.asList(LOGIN_CODE_KEY + PHONE, LOGIN_CODE_FAILURE_KEY + PHONE)),
+                eq(Arrays.asList(LOGIN_CODE_KEY + TAG, LOGIN_CODE_FAILURE_KEY + TAG)),
                 eq(CODE), eq(String.valueOf(LOGIN_CODE_MAX_FAILURES)));
         assertTrue(script.getValue().getScriptAsString().contains("redis.call('del', codeKey, failureKey)"));
     }
@@ -161,7 +163,7 @@ class UserServiceImplTest {
     void invalidOrAlreadyConsumedCodeStopsBeforeDatabaseLookup() {
         doReturn(0L).when(redisTemplate).execute(
                 any(RedisScript.class),
-                eq(Arrays.asList(LOGIN_CODE_KEY + PHONE, LOGIN_CODE_FAILURE_KEY + PHONE)),
+                eq(Arrays.asList(LOGIN_CODE_KEY + TAG, LOGIN_CODE_FAILURE_KEY + TAG)),
                 eq(CODE), eq(String.valueOf(LOGIN_CODE_MAX_FAILURES)));
 
         LoginFormDTO form = new LoginFormDTO();
@@ -195,7 +197,7 @@ class UserServiceImplTest {
     void fifthFailureAndLockedStateExposeTheSameGenericError() {
         doReturn(0L, 0L, 0L, 0L, 2L, 2L).when(redisTemplate).execute(
                 any(RedisScript.class),
-                eq(Arrays.asList(LOGIN_CODE_KEY + PHONE, LOGIN_CODE_FAILURE_KEY + PHONE)),
+                eq(Arrays.asList(LOGIN_CODE_KEY + TAG, LOGIN_CODE_FAILURE_KEY + TAG)),
                 eq("000000"), eq(String.valueOf(LOGIN_CODE_MAX_FAILURES)));
 
         for (int attempt = 1; attempt <= 6; attempt++) {
@@ -210,7 +212,7 @@ class UserServiceImplTest {
 
         verify(redisTemplate, times(6)).execute(
                 any(RedisScript.class),
-                eq(Arrays.asList(LOGIN_CODE_KEY + PHONE, LOGIN_CODE_FAILURE_KEY + PHONE)),
+                eq(Arrays.asList(LOGIN_CODE_KEY + TAG, LOGIN_CODE_FAILURE_KEY + TAG)),
                 eq("000000"), eq(String.valueOf(LOGIN_CODE_MAX_FAILURES)));
     }
 

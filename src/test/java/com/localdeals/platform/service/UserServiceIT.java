@@ -37,23 +37,25 @@ class UserServiceIT {
     private JdbcTemplate jdbcTemplate;
 
     private static final String TEST_PHONE = "13899991001";
+    /** Every key of one phone shares this Cluster hash tag. */
+    private static final String TAG = "{" + TEST_PHONE + "}";
     private static final String TEST_CODE  = "654321";
     private String issuedToken;
 
     @BeforeEach
     void seedVerificationCode() {
         jdbcTemplate.update("DELETE FROM tb_user WHERE phone = ?", TEST_PHONE);
-        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TEST_PHONE);
+        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TAG);
         stringRedisTemplate.opsForValue().set(
-                LOGIN_CODE_KEY + TEST_PHONE, TEST_CODE, 5, TimeUnit.MINUTES);
+                LOGIN_CODE_KEY + TAG, TEST_CODE, 5, TimeUnit.MINUTES);
     }
 
     @AfterEach
     void cleanup() {
         jdbcTemplate.update("DELETE FROM tb_user WHERE phone = ?", TEST_PHONE);
-        stringRedisTemplate.delete(LOGIN_CODE_KEY + TEST_PHONE);
-        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TEST_PHONE);
-        stringRedisTemplate.delete(LOGIN_CODE_RATE_LIMIT_KEY + TEST_PHONE);
+        stringRedisTemplate.delete(LOGIN_CODE_KEY + TAG);
+        stringRedisTemplate.delete(LOGIN_CODE_FAILURE_KEY + TAG);
+        stringRedisTemplate.delete(LOGIN_CODE_RATE_LIMIT_KEY + TAG);
         if (issuedToken != null) {
             stringRedisTemplate.delete(LOGIN_USER_KEY + issuedToken);
             issuedToken = null;
@@ -76,8 +78,8 @@ class UserServiceIT {
         assertTrue(result.getSuccess(), "Login must succeed for a new user: " + result.getErrorMsg());
         assertNotNull(result.getData(), "Login must return a token");
         issuedToken = (String) result.getData();
-        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
-        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TAG));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TAG));
     }
 
     @Test
@@ -92,13 +94,13 @@ class UserServiceIT {
             assertEquals("验证码不正确", result.getErrorMsg());
         }
 
-        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
-        assertEquals("5", stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TAG));
+        assertEquals("5", stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TAG));
 
         Result issueResult = userService.sendCode(TEST_PHONE, null);
         assertTrue(issueResult.getSuccess());
-        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
-        assertNotNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TEST_PHONE));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TAG));
+        assertNotNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + TAG));
     }
 
     @Test
@@ -110,6 +112,6 @@ class UserServiceIT {
         Result result = userService.login(form, null);
 
         assertFalse(result.getSuccess());
-        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TEST_PHONE));
+        assertNull(stringRedisTemplate.opsForValue().get(LOGIN_CODE_FAILURE_KEY + TAG));
     }
 }
