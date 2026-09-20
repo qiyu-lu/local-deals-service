@@ -208,7 +208,8 @@ def orders(voucher_id):
         sys.exit(f"no table named {table} (or {table}_N) in {schema} or {schema}_1")
     union = " UNION ALL ".join(
         f"SELECT COUNT(*) AS c FROM {name} WHERE voucher_id = {voucher_id}" for name in names)
-    print(mysql(f"SELECT SUM(c) FROM ({union}) counted;").strip())
+    # COALESCE: SUM over no matching rows is NULL, and the caller wants a number.
+    print(mysql(f"SELECT COALESCE(SUM(c), 0) FROM ({union}) counted;").strip())
 
 
 if __name__ == '__main__':
