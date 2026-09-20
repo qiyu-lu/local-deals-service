@@ -43,6 +43,11 @@ spring:
 mybatis-plus:
   type-aliases-package: com.localdeals.*.entity # 别名扫描包
 logging:
+  # Every line carries the trace of the request it belongs to, so one buyer can be followed
+  # across instances: nginx sets X-Trace-Id, TraceIdFilter puts it here, the seckill message
+  # carries it to whichever instance persists the order, and trade_order.trace_id keeps it.
+  pattern:
+    level: "%5p [%X{traceId:-}]"
   level:
     # Keep mapper parameters (including password hashes and user data) out of production logs.
     com.localdeals: info
