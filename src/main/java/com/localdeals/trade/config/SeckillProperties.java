@@ -78,6 +78,17 @@ public class SeckillProperties {
         /** Consumer threads; keep at or below the DB pool so a thread never waits for a connection. */
         private int threadCount = 16;
         /**
+         * Messages one pull brings back. A consume batch can never be larger than this, so it is
+         * raised to {@link #batchSize} when it is set below it.
+         */
+        private int pullBatchSize = 32;
+        /**
+         * How long a queue waits before the next pull. Zero pulls continuously, which is why a
+         * consumer that keeps up with the arrivals only ever sees one message at a time; a few
+         * milliseconds let a queue accumulate so a consume batch has something to be a batch of.
+         */
+        private Duration pullInterval = Duration.ZERO;
+        /**
          * How long a claimed batch is leased away from the reconciler. It must outlast one
          * persist round trip and is released as soon as the batch is finalized.
          */
@@ -91,6 +102,15 @@ public class SeckillProperties {
             if (threadCount < 1 || threadCount > 256) {
                 throw new IllegalStateException(
                         "local-deals.seckill.consume.thread-count must be between 1 and 256");
+            }
+            if (pullBatchSize < 1 || pullBatchSize > MAX_BATCH_SIZE) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.consume.pull-batch-size must be between 1 and " + MAX_BATCH_SIZE);
+            }
+            if (pullInterval == null || pullInterval.isNegative()
+                    || pullInterval.toMillis() > 1000) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.consume.pull-interval must be between 0 and 1000 ms");
             }
             if (claimLease == null || claimLease.getSeconds() < 5) {
                 throw new IllegalStateException(

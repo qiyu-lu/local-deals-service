@@ -177,6 +177,11 @@ local-deals:
       # One consume call takes this many messages: one INSERT and one stock UPDATE per voucher.
       batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:64}"
       thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:16}"
+      # Messages one pull brings back; a consume batch can never exceed it.
+      pull-batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_BATCH_SIZE:32}"
+      # How long a queue waits between pulls. Zero pulls continuously, and a consumer that keeps
+      # up with the arrivals then only ever finds one message waiting (measured: mean batch 1.03).
+      pull-interval: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_INTERVAL:0ms}"
       # How long a claimed batch is leased away from the reconciler.
       claim-lease: "${LOCAL_DEALS_SECKILL_CONSUME_CLAIM_LEASE:30s}"
     funnel:

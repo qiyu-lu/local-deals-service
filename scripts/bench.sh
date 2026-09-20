@@ -26,7 +26,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke)
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6-consume|m6-consume-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
     export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
       NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
@@ -148,6 +148,16 @@ sample_orders() { # voucher file -> "epoch_seconds,count" once per second while 
   done
 }
 
+# "count sum" of the delivered consume batches, straight from the live app. Taken before and
+# after a measured run so the row can carry the mean batch size of that run alone: the number
+# that decides whether a batch consumer is batching anything at all.
+batch_counters() {
+  curl -fsS --max-time 10 "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/prometheus" 2>/dev/null |
+    awk '/^local_deals_seckill_consume_batch_size_orders_(count|sum)\{stage="delivered"\}/ {
+           if ($1 ~ /_count/) c = $2; else s = $2
+         } END { printf "%d %d", c + 0, s + 0 }' || echo "0 0"
+}
+
 one_run() { # kind rate stock duration
   local kind="$1" rate="$2" stock="$3" duration="$4"
   local voucher name pid t0 t1 ticks0 ticks1 hz ns0 ns1 svc started ended
@@ -162,6 +172,8 @@ one_run() { # kind rate stock duration
   dep0[redis]="$(redis_ns)"
   sample_orders "$voucher" "${RAW_DIR}/${name}-orders.csv" &
   local sampler=$!
+  local batch0 batch1
+  batch0="$(batch_counters)"
   ticks0="$(proc_ticks "$pid")"; started="$(date +%s.%N)"
   run_k6 "$name" "$voucher" "$rate" "$duration"
   ticks1="$(proc_ticks "$pid")"; ended="$(date +%s.%N)"
@@ -180,15 +192,16 @@ PY
   drain="$(wait_drain "$voucher" "$accepted")"
   sleep 1; kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
   half1="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg1="$(topic_offset seckill-order-topic)"
+  batch1="$(batch_counters)"
   python3 - "$SUMMARY" "${RAW_DIR}/${name}.json" "$kind" "$rate" "$stock" "$voucher" "$drain" \
     "$(python3 -c "print(round(($ticks1-$ticks0)/$hz/($ended-$started),2))")" \
     "$(python3 -c "print(round(($ended-$started),1))")" \
     "${dep0[mysql]}:${dep1[mysql]}" "${dep0[redis]}:${dep1[redis]}" "${dep0[broker]}:${dep1[broker]}" \
     "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" \
-    "$(( half1 - half0 ))" "$(( msg1 - msg0 ))" <<'PY'
+    "$(( half1 - half0 ))" "$(( msg1 - msg0 ))" "$batch0" "$batch1" <<'PY'
 import csv, json, os, sys
 summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit, \
-    half_msgs, order_msgs = sys.argv[1:]
+    half_msgs, order_msgs, batch0, batch1 = sys.argv[1:]
 samples = [tuple(float(x) for x in line.split(',')) for line in open(raw[:-5] + '-orders.csv') if ',' in line]
 m = json.load(open(raw))['metrics']
 wall = float(wall)
@@ -213,6 +226,13 @@ def persist_rate():
     if not lo or not hi or hi[0] <= lo[0]:
         return ''
     return round((hi[1] - lo[1]) / (hi[0] - lo[0]), 1)
+def batch_mean():
+    try:
+        c0, s0 = (int(x) for x in batch0.split())
+        c1, s1 = (int(x) for x in batch1.split())
+    except ValueError:
+        return ''
+    return round((s1 - s0) / (c1 - c0), 2) if c1 > c0 else ''
 drain_s = drain if drain.startswith('timeout') else float(drain)
 row = {
     'commit': commit, 'kind': kind, 'target_rps': int(rate), 'stock': int(stock), 'voucher': voucher,
@@ -233,6 +253,9 @@ row = {
     # messages written during the run, drain included: half messages and order messages
     'half_msgs': int(half_msgs), 'order_msgs': int(order_msgs),
     'k6_cpu_cores': k6_cores(),
+    # Orders per consume batch during this run alone. Anything near 1 means the batch consumer
+    # committed one order at a time, whatever consumeMessageBatchMaxSize was set to.
+    'batch_mean': batch_mean(),
     'raw': os.path.basename(raw),
 }
 new = not os.path.exists(summary)
@@ -326,6 +349,33 @@ load_scenario() {
       S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
       S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
+    m6-consume)
+      # Not a milestone comparison: a sweep of the consumer's pull settings. The M5 smoke measured
+      # a mean batch of 1.03 against batchSize=64 with persisted == delivered, so the batch
+      # consumer has been committing one order at a time. The knob is the pull interval, and
+      # summary.csv now carries batch_mean so the sweep can be read directly.
+      S_MILESTONE=m6; S_BASELINE_TAG=v2.0-m5; S_BASELINE_FLAVOUR=funnel
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
+      # Nothing on the admission path changes, so no ladder.
+      S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      # One reference round of v2.0-m5 as it stands, then the sweep.
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_BUCKETS=16
+      # batch:threads:pullIntervalMs:pullBatchSize
+      S_SWEEP="64:16:0:32 64:16:10:64 64:16:20:128 64:4:20:128 64:2:20:128 256:4:50:256"
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
+      S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m6-consume-smoke)
+      S_MILESTONE=m6; S_BASELINE_TAG=v2.0-m5; S_BASELINE_FLAVOUR=funnel
+      S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+      S_RATES=""; S_STEP_DURATION=10s; S_STEP_STOCK=200
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
+      S_BUCKETS=8
+      S_SWEEP="64:16:0:32 64:4:20:128"
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
+      S_EXTRA_ARGS=""; S_USERS=20000 ;;
     m4-smoke)
       S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3; S_BASELINE_FLAVOUR=funnel
       S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
@@ -517,20 +567,26 @@ drain_round() { # which
 
 # One drain with an explicit consume batch size and thread count. The commit column carries the
 # combination (e.g. 1aad214:b64t16) so the sweep rows stay in the same summary.csv schema.
-sweep_round() { # batch:threads
-  local batch="${1%%:*}" threads="${1##*:}"
+# batch:threads[:pullIntervalMs[:pullBatch]] — the last two decide whether a batch ever fills.
+# The M5 smoke measured a mean batch of 1.03 at 64:16 with no pull interval, so a sweep that only
+# turns batch size and thread count is sweeping a bound nobody reaches.
+sweep_round() { # batch:threads[:pullMs[:pullBatch]]
+  local parts; IFS=: read -ra parts <<<"$1"
+  local batch="${parts[0]}" threads="${parts[1]}"
+  local pull_ms="${parts[2]:-0}" pull_batch="${parts[3]:-32}"
   local pool=$(( threads + 8 ))
+  local tag="b${batch}t${threads}i${pull_ms}p${pull_batch}"
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
   APP_JAR="${RUN_DIR}/current.jar" \
-    APP_ARGS="${ARGS_CURRENT} --local-deals.seckill.consume.batch-size=${batch} --local-deals.seckill.consume.thread-count=${threads} --spring.datasource.hikari.maximum-pool-size=${pool}" \
+    APP_ARGS="${ARGS_CURRENT} --local-deals.seckill.consume.batch-size=${batch} --local-deals.seckill.consume.thread-count=${threads} --local-deals.seckill.consume.pull-interval=${pull_ms}ms --local-deals.seckill.consume.pull-batch-size=${pull_batch} --spring.datasource.hikari.maximum-pool-size=${pool}" \
     "${PROJECT_DIR}/scripts/stack.sh" app-start
   "$0" users "$S_USERS"
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="sweep" DURATION="$S_WARMUP_DURATION" \
     STOCK=1000 env "$(build_env current)" "$0" step "$S_WARMUP_RATE"
   env "$(build_env current)" BENCH_OUT="$S_RESULT" \
-    BENCH_COMMIT="${S_CURRENT_COMMIT}:b${batch}t${threads}" \
+    BENCH_COMMIT="${S_CURRENT_COMMIT}:${tag}" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
-  stop_app "sweep-b${batch}t${threads}"
+  stop_app "sweep-${tag}"
 }
 
 # One drain of the current build with an explicit bucket count. The commit column carries it
@@ -657,15 +713,17 @@ run_scenario() { # name
   phase stack-up 900 stack_up
   phase build 1200 build_jars
   local rounds_timeout=$(( 600 + $(wc -w <<<"$S_RATES") * 180 ))
-  phase ladder-baseline "$rounds_timeout" ladder baseline
-  phase ladder-current "$rounds_timeout" ladder current
+  if [[ -n "${S_RATES// /}" ]]; then
+    phase ladder-baseline "$rounds_timeout" ladder baseline
+    phase ladder-current "$rounds_timeout" ladder current
+  fi
   local i
   for (( i = 1; i <= S_DRAIN_ROUNDS; i++ )); do
     phase "drain-baseline-${i}" 1500 drain_round baseline
     phase "drain-current-${i}" 1500 drain_round current
   done
   local combo
-  for combo in $S_SWEEP; do phase "sweep-${combo/:/x}" 1500 sweep_round "$combo"; done
+  for combo in $S_SWEEP; do phase "sweep-${combo//:/x}" 1500 sweep_round "$combo"; done
   local buckets
   for buckets in ${S_BUCKET_SWEEP:-}; do phase "bucket-sweep-k${buckets}" 1500 bucket_sweep_round "$buckets"; done
   for (( i = 1; i <= S_KILL_ROUNDS; i++ )); do phase "kill-drill-${i}" 2400 kill_round kill; done
@@ -682,7 +740,7 @@ case "${1:-}" in
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke) run_scenario "$1" ;;
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6-consume|m6-consume-smoke) run_scenario "$1" ;;
   _phase) shift; "$@" ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
