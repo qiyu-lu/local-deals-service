@@ -61,6 +61,7 @@ stateDiagram-v2
 | 秒杀准入漏斗 | nginx 限流 → 本地售罄标记（0 次网络 IO）→ 按剩余库存定速的本地令牌桶 → 单次 Redis Lua（限频 + 判重 + 扣减 + 预占）；本地 Snowflake 发号；只有成功者发一条普通消息，预占即 outbox |
 | 秒杀落库 | 自建批量消费者：一次 Redis 往返认领整批 → 每券一条 `INSERT IGNORE` + 一次 `stock - n` → 一次 Redis 往返收尾；异常整组回滚并退化为逐条处理 |
 | 订单闭环 | 状态机 CAS、RocketMQ 5 定时消息关单 + 兜底扫描、签名回调幂等、自动退款、统一券资产与核销、后台操作审计 |
+| 订单分片 | `trade_order` 与附属表按 `user_id` 分 2 库 × 4 表；订单号低位重复 `user_id % 1024`，所以按用户查和按订单号查落在同一片，限购唯一键因此在片内即全局；券、店铺、库存等留作单库单表 |
 | 恢复与对账 | `PROCESSING` 预占、对账器重投丢失的消息、超时精确补偿、`SUSPENDED`；消费者与对账器用 Redis 内认领（owner + 租约）互斥，不再有分布式锁；MySQL 唯一约束与幂等落库兜底 |
 | 点赞与热榜 | MySQL 点赞事实 + Transactional Outbox + generation-fenced 可重建 Redis 热榜 |
 | 营销闭环 | 标签、签到、统一 Grant、有限批量 Job 与通知 Outbox |
@@ -174,10 +175,12 @@ mvn -o test
 
 ## 已知边界
 
-- 当前没有 Redis Sentinel/Cluster 高可用部署。
-- Redis 全量数据丢失后的 RPO 尚未验证。
+- 商户后台按商户分页查订单是**跨 8 张分片表的广播归并**：结果正确，但不随分片数扩展，
+  分页越深越贵。独立的订单读模型（Canal → MQ → ES）没有做。
+- 一个消费批次可能横跨两个订单库，用的是 ShardingSphere 的 LOCAL 事务，不是 XA：
+  进程崩在两次提交之间会**少卖**（不会超卖），这个窗口尚未用故障注入验证过。
 - 完整 Canal Server → RocketMQ → Elasticsearch E2E 尚未验证；现有同步证据保持
   consumer-level 边界。
 - WebSocket 不保证离线必达，最终结果依赖持久查询接口。
-- 当前没有核销、支付和退款能力。
-- Java 17 / Spring Boot 3 升级尚未开始。
+- 单机压测得到的是单机拐点与扩展趋势，不是生产容量；多机房、RocketMQ 多副本切换、
+  MySQL 主从切换都没有做。
