@@ -22,8 +22,10 @@ STACK_ID="${STACK_ID:-v2}"
 RUN_DIR="${PROJECT_DIR}/benchmark/v2/run/${STACK_ID}"
 OUT="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE:-m5}}/raw"
 FIXTURE="${PROJECT_DIR}/benchmark/v2/scripts/fixture.py"
-# The node to kill; it owns the first third of the slots, so most buckets live on it.
-KILL_NODE="${REDIS_KILL_NODE:-ld-${STACK_ID}-redis-c1}"
+# The node to kill is discovered at run time: whichever master currently serves bucket 0. A
+# fixed name would be wrong on the second round, because the node killed in the first one comes
+# back as a replica of its own promoted replica, and killing a replica proves nothing.
+KILL_NODE="${REDIS_KILL_NODE:-}"
 BUCKETS="${SECKILL_BUCKETS:?set SECKILL_BUCKETS to the bucket count of the application under test}"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
 mkdir -p "$OUT"
@@ -72,6 +74,24 @@ except Exception:
 print(int(metrics.get('outcome_accepted', {}).get('count', 0)))
 PYJSON
 }
+
+# The master that serves bucket 0 right now, as a container name.
+master_of_bucket0() {
+  local slot port index
+  slot="$(redis CLUSTER KEYSLOT "sk:{sk:b0}:stock:0" | tr -d '[:space:]')"
+  port="$(redis CLUSTER NODES | awk -v slot="$slot" '
+    $3 ~ /master/ {
+      addr = $2; sub(/@.*/, "", addr)
+      for (i = 9; i <= NF; i++) {
+        if ($i ~ /^[0-9]+-[0-9]+$/) { split($i, r, "-"); if (slot >= r[1] && slot <= r[2]) { print addr; exit } }
+        else if ($i ~ /^[0-9]+$/ && $i + 0 == slot) { print addr; exit }
+      }
+    }' | cut -d: -f2)"
+  [[ -n "$port" ]] || { echo "could not find the master of bucket 0" >&2; return 1; }
+  index="${port: -1}"
+  echo "ld-${STACK_ID}-redis-c${index}"
+}
+[[ -n "$KILL_NODE" ]] || KILL_NODE="$(master_of_bucket0)"
 
 voucher="$(SECKILL_BUCKETS="$BUCKETS" python3 "$FIXTURE" voucher "$STOCK")"
 name="redis-kill-drill-v${voucher}-$(date +%H%M%S)"

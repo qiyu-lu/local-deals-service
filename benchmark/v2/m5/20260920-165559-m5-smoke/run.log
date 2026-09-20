@@ -68,3 +68,10 @@ app stopped
 app started pid=3380448 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
 users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
 commit=ee1aff4, kind=step, target_rps=200, stock=1000, voucher=12, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.9, p95_ms=6.6, p99_ms=23.6, max_ms=67.0, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=0.0, persist_orders_per_s=198.3, app_cpu_cores=1.87, mysql_cpu_cores=0.16, redis_cpu_cores=0.11, broker_cpu_cores=0.3, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.09, raw=step-r200-s1000-165818.json
+commit=ee1aff4, kind=step, target_rps=2000, stock=200, voucher=13, achieved_rps=1999.9, requests=20002, dropped=0, p50_ms=0.1, p95_ms=0.2, p99_ms=7.1, max_ms=49.7, http_fail_rate=0.0001, accepted=200, outcomes=accepted=200;http_429=2;out_of_stock=19800, drain_s_after_load=0.0, persist_orders_per_s=73.8, app_cpu_cores=0.49, mysql_cpu_cores=0.03, redis_cpu_cores=0.02, broker_cpu_cores=0.09, half_msgs=0, order_msgs=200, k6_cpu_cores=0.35, raw=step-r2000-s200-165842.json
+app stopped
+2026-09-20 16:59:11 phase ladder-current done
+2026-09-20 16:59:11 phase drain-baseline-1 start (timeout 1500s)
+app started pid=3387098 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=7c4ee52, kind=step, target_rps=200, stock=1000, voucher=14, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.6, p95_ms=5.8, p99_ms=29.0, max_ms=71.7, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=8.4, persist_orders_per_s=67.3, app_cpu_cores=1.21, mysql_cpu_cores=0.09, redis_cpu_cores=0.03, broker_cpu_cores=0.28, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.08, raw=step-r200-s1000-165918.json
