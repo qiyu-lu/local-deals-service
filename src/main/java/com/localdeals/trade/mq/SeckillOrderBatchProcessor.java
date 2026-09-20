@@ -184,6 +184,7 @@ public class SeckillOrderBatchProcessor {
         }
 
         boolean complete = true;
+        List<SeckillOrderMessage> announced = new ArrayList<>(persisted.size());
         for (int i = 0; i < persisted.size(); i++) {
             SeckillOrderMessage message = persisted.get(i);
             if (!Boolean.TRUE.equals(finalized.get(i))) {
@@ -193,9 +194,12 @@ public class SeckillOrderBatchProcessor {
                 continue;
             }
             localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.PERSISTED);
-            scheduleCloseBestEffort(message);
-            notifyBestEffort(message);
+            // Neither the timer message nor the announcement may cost a round trip per order on
+            // the consume thread: that is what is left once the DB work is batched.
+            orderTimeoutScheduler.scheduleCloseAsync(message.getOrderId());
+            announced.add(message);
         }
+        webSocketNotifier.notifySeckillBatch(announced);
         return complete;
     }
 
@@ -207,21 +211,5 @@ public class SeckillOrderBatchProcessor {
         return groups;
     }
 
-    private void scheduleCloseBestEffort(SeckillOrderMessage message) {
-        try {
-            orderTimeoutScheduler.scheduleClose(message.getOrderId());
-        } catch (RuntimeException e) {
-            // The order is committed; OrderTimeoutScanner closes it if no timer message exists.
-            log.warn("Order timeout scheduling failed. orderId={}", message.getOrderId(), e);
-        }
-    }
 
-    private void notifyBestEffort(SeckillOrderMessage message) {
-        try {
-            webSocketNotifier.notify(message.getUserId(), true, message.getOrderId(),
-                    message.getVoucherId());
-        } catch (RuntimeException e) {
-            log.warn("Seckill WebSocket notification failed. orderId={}", message.getOrderId(), e);
-        }
-    }
 }

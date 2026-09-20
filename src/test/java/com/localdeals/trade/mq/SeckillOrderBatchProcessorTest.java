@@ -63,8 +63,11 @@ class SeckillOrderBatchProcessorTest {
         verify(batchPersister).persistGroup(eq(7L), eq(Arrays.asList(first, second)));
         verify(batchPersister).persistGroup(eq(8L), eq(List.of(otherVoucher)));
         verifyNoInteractions(singleMessageConsumer);
-        verify(webSocketNotifier).notify(101L, true, 9001L, 7L);
-        verify(orderTimeoutScheduler).scheduleClose(9001L);
+        // One announcement for the whole batch, and no broker round trip on the consume thread.
+        // grouped by voucher, so the announcement follows the persistence order
+        verify(webSocketNotifier).notifySeckillBatch(Arrays.asList(first, second, otherVoucher));
+        verify(orderTimeoutScheduler).scheduleCloseAsync(9001L);
+        verify(orderTimeoutScheduler, never()).scheduleClose(anyLong());
     }
 
     @Test

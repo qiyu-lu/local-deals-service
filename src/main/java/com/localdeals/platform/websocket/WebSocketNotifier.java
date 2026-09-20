@@ -1,15 +1,20 @@
 package com.localdeals.platform.websocket;
 
 import cn.hutool.json.JSONUtil;
+import com.localdeals.trade.mq.SeckillOrderMessage;
 import lombok.extern.slf4j.Slf4j;
 import com.localdeals.marketing.entity.VoucherGrantNotificationOutbox;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.Resource;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -45,14 +50,7 @@ public class WebSocketNotifier {
     private JdbcTemplate jdbcTemplate;
 
     public void notify(Long userId, boolean success, Long orderId, Long voucherId) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("type", "SECKILL_RESULT");
-        payload.put("success", success);
-        // Redis-generated ids exceed JavaScript's safe integer range; keep the wire contract exact.
-        payload.put("orderId", orderId.toString());
-        payload.put("voucherId", voucherId);
-        payload.put("message", success ? "秒杀成功，订单已生成" : "下单失败，预占已释放");
-        String json = JSONUtil.toJsonStr(payload);
+        String json = seckillPayload(userId, success, orderId, voucherId);
         // 推送给下单用户
         stringRedisTemplate.convertAndSend(CHANNEL_PREFIX + userId, json);
         // 平台账号拥有全局数据范围，但 handler 仍会在发送前复核实时订单权限。
@@ -63,6 +61,43 @@ public class WebSocketNotifier {
         Long merchantId = resolveMerchantId(voucherId);
         if (merchantId != null) {
             stringRedisTemplate.convertAndSend(ADMIN_MERCHANT_CHANNEL_PREFIX + merchantId, json);
+        }
+    }
+
+    /**
+     * Announces a whole batch of persisted seckill orders in one Redis round trip.
+     *
+     * <p>Three publishes per order on the consume thread is the kind of per-order work M4 removes;
+     * the payloads and channels are exactly the ones {@link #notify} uses. Failure never
+     * propagates: the durable status endpoint is authoritative, and a pub/sub notification must
+     * never cause an already-finalized DB/Redis transition to be redelivered.</p>
+     */
+    public void notifySeckillBatch(List<SeckillOrderMessage> orders) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        List<String[]> messages = new ArrayList<>(orders.size() * 3);
+        for (SeckillOrderMessage order : orders) {
+            String json = seckillPayload(order.getUserId(), true, order.getOrderId(), order.getVoucherId());
+            messages.add(new String[]{CHANNEL_PREFIX + order.getUserId(), json});
+            messages.add(new String[]{ADMIN_PLATFORM_CHANNEL, json});
+            Long merchantId = resolveMerchantId(order.getVoucherId());
+            if (merchantId != null) {
+                messages.add(new String[]{ADMIN_MERCHANT_CHANNEL_PREFIX + merchantId, json});
+            }
+        }
+        try {
+            stringRedisTemplate.executePipelined(new SessionCallback<Object>() {
+                @Override
+                public Object execute(RedisOperations operations) {
+                    for (String[] message : messages) {
+                        operations.convertAndSend(message[0], message[1]);
+                    }
+                    return null;
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("Seckill WebSocket batch notification failed. orders={}", orders.size(), e);
         }
     }
 
@@ -81,6 +116,17 @@ public class WebSocketNotifier {
         payload.put("message", "优惠券已发放，已加入我的券包");
         stringRedisTemplate.convertAndSend(VOUCHER_GRANT_CHANNEL_PREFIX + outbox.getUserId(),
                 JSONUtil.toJsonStr(payload));
+    }
+
+    private static String seckillPayload(Long userId, boolean success, Long orderId, Long voucherId) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "SECKILL_RESULT");
+        payload.put("success", success);
+        // Redis-generated ids exceed JavaScript's safe integer range; keep the wire contract exact.
+        payload.put("orderId", orderId.toString());
+        payload.put("voucherId", voucherId);
+        payload.put("message", success ? "秒杀成功，订单已生成" : "下单失败，预占已释放");
+        return JSONUtil.toJsonStr(payload);
     }
 
     private Long resolveMerchantId(Long voucherId) {
