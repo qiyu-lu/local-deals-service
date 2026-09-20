@@ -104,6 +104,8 @@ split_delta() { # before after -> "a|b|c"
 }
 
 ACCEPTED_METRIC='local_deals_seckill_requests_total{result="accepted"}'
+# The count of this summary is batches, not orders: two instances at 14 and 13 means both
+# consumed, not that they persisted 27 orders.
 PERSISTED_METRIC='local_deals_seckill_consume_batch_size_orders_count{stage="persisted"}' 
 
 wait_until_orders_stop() { # voucher expected -> seconds waited
@@ -209,5 +211,5 @@ echo "voucher=${voucher},stock=${STOCK},users=${USERS},rate=${RATE},pay_ratio=${
      ",orders_closed=${closed},orders_paid=${paid},live_buyers=${live_buyers}" \
      ",duplicate_buyers=${duplicate_buyers},oversold=${oversold},redis_stock=${redis_stock}" \
      ",db_stock=${db_stock},reservations=${reservations},processing_left=${processing_left}" \
-     ",admitted_by_instance=${accepted_split},persisted_by_instance=${persisted_split}" \
+     ",admitted_by_instance=${accepted_split},persist_batches_by_instance=${persisted_split}" \
      ",trace_id=${trace_id:-none},trace_in_log=${trace_found}" | tr -d ' '
