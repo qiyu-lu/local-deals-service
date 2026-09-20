@@ -130,9 +130,10 @@ datasource_url() {
 
 print_env() {
   if [[ "$REDIS_MODE" == cluster ]]; then
+    # A neutral name: whether a given process should talk to the cluster is decided by its
+    # caller (tests do, a pre-bucket build under benchmark does not).
     cat <<EOF
-export SPRING_DATA_REDIS_CLUSTER_NODES='$(redis_cluster_nodes)'
-export SPRING_DATA_REDIS_CLUSTER_MAX_REDIRECTS=5
+export STACK_REDIS_CLUSTER_NODES='$(redis_cluster_nodes)'
 export STACK_REDIS="redis-cli -c -h 127.0.0.1 -p ${REDIS_CLUSTER_PORT_BASE}1 -a ${REDIS_PASSWORD} --no-auth-warning"
 EOF
   fi
@@ -185,13 +186,11 @@ up() {
   check_isolation
   prepare_broker_store
   prepare_es_data
-  if [[ "$REDIS_MODE" == cluster ]]; then
-    compose up -d mysql namesrv broker elasticsearch
-    start_redis_cluster
-  else
-    compose up -d mysql redis namesrv broker elasticsearch
-    wait_for Redis redis_ready
-  fi
+  # Cluster mode keeps the single node running as well: a benchmark compares a build that
+  # predates the buckets, which cannot run on a cluster, against one that does.
+  compose up -d mysql redis namesrv broker elasticsearch
+  wait_for Redis redis_ready
+  [[ "$REDIS_MODE" != cluster ]] || start_redis_cluster
   wait_for MySQL mysql_ready
   wait_for Elasticsearch es_ready
   wait_for RocketMQ rmq_ready
@@ -246,6 +245,11 @@ run_tests() {
   check_isolation
   local pattern="${2:?usage: stack.sh it <surefire -Dtest pattern>}"
   eval "$(print_env)"
+  # Tests always follow the mode the stack was started in.
+  if [[ "$REDIS_MODE" == cluster ]]; then
+    export SPRING_DATA_REDIS_CLUSTER_NODES="$STACK_REDIS_CLUSTER_NODES"
+    export SPRING_DATA_REDIS_CLUSTER_MAX_REDIRECTS=5
+  fi
   (cd "$PROJECT_DIR" && JAVA_HOME="$APP_JAVA_HOME" mvn -o -q test -Dtest="$pattern" -DfailIfNoTests=false)
 }
 
