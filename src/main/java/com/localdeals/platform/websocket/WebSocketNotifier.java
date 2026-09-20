@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.Resource;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Publishes seckill order results to Redis pub/sub so that any application instance holding
@@ -30,6 +31,13 @@ public class WebSocketNotifier {
     private static final String MERCHANT_BY_VOUCHER_SQL =
             "SELECT s.merchant_id FROM tb_voucher v " +
                     "JOIN tb_shop s ON s.id = v.shop_id WHERE v.id = ?";
+
+    /**
+     * A voucher's merchant never changes, and in M0 this lookup was 25% of the consumer's wall
+     * clock because every order ran it again while holding a pooled connection. The set of live
+     * vouchers is small, so the mapping is memoised per instance.
+     */
+    private final Map<Long, Long> merchantByVoucher = new ConcurrentHashMap<>();
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -79,6 +87,18 @@ public class WebSocketNotifier {
         if (voucherId == null) {
             return null;
         }
+        Long cached = merchantByVoucher.get(voucherId);
+        if (cached != null) {
+            return cached;
+        }
+        Long resolved = queryMerchantId(voucherId);
+        if (resolved != null) {
+            merchantByVoucher.put(voucherId, resolved);
+        }
+        return resolved;
+    }
+
+    private Long queryMerchantId(Long voucherId) {
         try {
             return jdbcTemplate.queryForObject(MERCHANT_BY_VOUCHER_SQL, Long.class, voucherId);
         } catch (DataAccessException e) {

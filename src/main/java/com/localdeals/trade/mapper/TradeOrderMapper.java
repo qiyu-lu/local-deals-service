@@ -26,6 +26,29 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
                                  @Param("payTimeoutSeconds") long payTimeoutSeconds);
 
     /**
+     * The batch form of {@link #insertPendingFromVoucher}: one statement inserts the whole
+     * slice of a consumer batch that belongs to one voucher, snapshotting price, shop and
+     * merchant exactly as the single-row statement does. {@code IGNORE} makes a redelivered
+     * message a no-op instead of failing the whole batch; the caller compares the affected-row
+     * count with the slice size and falls back to the single-message path when they differ.
+     */
+    @Insert("<script>INSERT IGNORE INTO trade_order (order_no, user_id, voucher_id, shop_id, " +
+            "merchant_id, amount, status, expire_at) " +
+            "SELECT b.order_no, b.user_id, v.id, v.shop_id, s.merchant_id, v.pay_value, " +
+            "'PENDING_PAY', DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND) FROM (" +
+            "<foreach collection=\"rows\" item=\"row\" separator=\" UNION ALL \">" +
+            "SELECT #{row.orderNo} AS order_no, #{row.userId} AS user_id" +
+            "</foreach>" +
+            ") b JOIN tb_voucher v ON v.id = #{voucherId} JOIN tb_shop s ON s.id = v.shop_id</script>")
+    int insertPendingBatchFromVoucher(@Param("rows") List<SeckillOrderRow> rows,
+                                      @Param("voucherId") long voucherId,
+                                      @Param("payTimeoutSeconds") long payTimeoutSeconds);
+
+    /** One order of a batch insert: the pair the derived table needs. */
+    record SeckillOrderRow(long orderNo, long userId) {
+    }
+
+    /**
      * The single status-changing statement. Only {@code OrderStateMachine} may call it.
      * Zero affected rows means the order is not in {@code from} (or not expired yet).
      */

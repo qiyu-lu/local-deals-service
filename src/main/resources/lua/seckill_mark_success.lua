@@ -22,6 +22,7 @@ end
 
 if state[1] == 'SUCCESS' then
     redis.call('ZREM', processingIndexKey, orderId)
+    redis.call('HDEL', statusKey, 'claimOwner', 'claimExpireAt')
     if statusTtlSeconds and statusTtlSeconds > 0 then
         redis.call('EXPIRE', statusKey, statusTtlSeconds)
     end
@@ -35,7 +36,7 @@ local redisTime = redis.call('TIME')
 redis.call('HSET', statusKey,
         'status', 'SUCCESS',
         'updatedAt', tostring(redisTime[1]))
-redis.call('HDEL', statusKey, 'reason')
+redis.call('HDEL', statusKey, 'reason', 'claimOwner', 'claimExpireAt')
 redis.call('ZREM', processingIndexKey, orderId)
 if statusTtlSeconds and statusTtlSeconds > 0 then
     redis.call('EXPIRE', statusKey, statusTtlSeconds)

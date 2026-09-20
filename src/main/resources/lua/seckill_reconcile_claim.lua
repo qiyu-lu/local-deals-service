@@ -9,10 +9,12 @@
 -- ARGV[2] voucherId
 -- ARGV[3] orderId (string)
 -- ARGV[4] retry-delay seconds
+-- ARGV[5] claim owner token
 --
 -- Return tuple: {decision, redisNow, createdAt, reconcileAttempts}
--- 1 claimed; 2 not due; 3 terminal; 4 ownership mismatch; 5 invalid/missing state;
--- 6 reservation mismatch; 7 index member missing.
+-- 1 claimed; 2 not due (including: a consumer batch is persisting it right now);
+-- 3 terminal; 4 ownership mismatch; 5 invalid/missing state; 6 reservation mismatch;
+-- 7 index member missing.
 
 local statusKey = KEYS[1]
 local reservationKey = KEYS[2]
@@ -21,6 +23,7 @@ local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
 local retryDelaySeconds = tonumber(ARGV[4])
+local owner = ARGV[5]
 
 -- HINCRBY accepts only base-10 integers and its result must remain exactly representable by
 -- this Lua runtime. Reconciliation attempts are operational counters, so a signed 32-bit upper
@@ -51,12 +54,13 @@ end
 
 local redisTime = redis.call('TIME')
 local now = tonumber(redisTime[1])
-if not retryDelaySeconds or retryDelaySeconds <= 0 then
+if not retryDelaySeconds or retryDelaySeconds <= 0 or not owner or owner == '' then
     return {5, tostring(now), '', '0'}
 end
 
 local state = redis.call('HMGET', statusKey,
-        'status', 'orderId', 'userId', 'voucherId', 'createdAt', 'reconcileAttempts')
+        'status', 'orderId', 'userId', 'voucherId', 'createdAt', 'reconcileAttempts',
+        'claimOwner', 'claimExpireAt')
 if not state[1] then
     return {5, tostring(now), '', '0'}
 end
@@ -81,6 +85,14 @@ if redis.call('HGET', reservationKey, userId) ~= orderId then
     return {6, tostring(now), tostring(createdAt), tostring(attempts)}
 end
 
+-- A consumer batch that is persisting this order holds a lease. Reconciling it now could
+-- compensate an order which is about to commit, so yield until the lease expires.
+local claimOwner = state[7]
+local claimExpireAt = tonumber(state[8] or '0') or 0
+if claimOwner and claimOwner ~= '' and claimOwner ~= owner and claimExpireAt > now then
+    return {2, tostring(now), tostring(createdAt), tostring(attempts)}
+end
+
 local dueScore = tonumber(redis.call('ZSCORE', processingIndexKey, orderId))
 if not dueScore then
     return {7, tostring(now), tostring(createdAt), tostring(attempts)}
@@ -92,7 +104,9 @@ end
 attempts = redis.call('HINCRBY', statusKey, 'reconcileAttempts', 1)
 redis.call('HSET', statusKey,
         'lastReconcileAt', tostring(now),
-        'updatedAt', tostring(now))
+        'updatedAt', tostring(now),
+        'claimOwner', owner,
+        'claimExpireAt', tostring(now + retryDelaySeconds))
 redis.call('PERSIST', statusKey)
 redis.call('ZADD', processingIndexKey, now + retryDelaySeconds, orderId)
 return {1, tostring(now), tostring(createdAt), tostring(attempts)}

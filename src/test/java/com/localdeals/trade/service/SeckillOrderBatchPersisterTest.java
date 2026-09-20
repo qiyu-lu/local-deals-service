@@ -6,6 +6,7 @@ import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.mapper.OrderStateLogMapper;
 import com.localdeals.trade.mapper.SeckillVoucherMapper;
 import com.localdeals.trade.mapper.TradeOrderMapper;
+import com.localdeals.trade.mapper.TradeOrderMapper.SeckillOrderRow;
 import com.localdeals.trade.mq.SeckillOrderMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,7 +61,11 @@ class SeckillOrderBatchPersisterTest {
 
         verify(seckillVoucherMapper).decrementStock(eq(7L), eq(3));
         verify(tradeOrderMapper).insertPendingBatchFromVoucher(
-                eq(Arrays.asList(9001L, 9002L, 9003L)), anyLong(), anyLong());
+                eq(Arrays.asList(
+                        new SeckillOrderRow(9001L, 101L),
+                        new SeckillOrderRow(9002L, 102L),
+                        new SeckillOrderRow(9003L, 103L))),
+                eq(7L), anyLong());
     }
 
     @Test
