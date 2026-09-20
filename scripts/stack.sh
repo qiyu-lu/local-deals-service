@@ -306,17 +306,33 @@ app_start() {
   echo "app started pid=$(<"${RUN_DIR}/app.pid") cpus=${APP_CPUS:-all} log=${RUN_DIR}/app.log"
 }
 
+# A port nobody is listening on any more. A dead PID is not the same thing: a benchmark that
+# restarts the app a dozen times hit "address already in use" six seconds after "app stopped".
+port_free() { # port
+  ! ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN
+}
+
 app_stop() {
-  [[ -f "${RUN_DIR}/app.pid" ]] || return 0
-  local pid
-  pid="$(<"${RUN_DIR}/app.pid")"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid"
-    for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
+  local had_pid=0
+  if [[ -f "${RUN_DIR}/app.pid" ]]; then
+    had_pid=1
+    local pid
+    pid="$(<"${RUN_DIR}/app.pid")"
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid"
+      for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
+    fi
+    rm -f "${RUN_DIR}/app.pid"
   fi
-  rm -f "${RUN_DIR}/app.pid"
-  echo "app stopped"
+  # Whether or not we had a PID to kill: the next start needs these two ports, so wait for them
+  # rather than letting Tomcat discover the problem and take the whole phase down with it.
+  local port
+  for port in "$APP_PORT" "$MANAGEMENT_PORT"; do
+    for _ in $(seq 1 60); do port_free "$port" && break; sleep 1; done
+    port_free "$port" || fail "port ${port} is still in use after stopping the app"
+  done
+  (( had_pid == 0 )) || echo "app stopped"
 }
 
 case "$ACTION" in
