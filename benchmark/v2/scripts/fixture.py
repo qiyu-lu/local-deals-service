@@ -8,6 +8,9 @@
                            (M5 and later); unset or 0 writes the single pre-M5 keys
   fixture.py orders  ID    print persisted order count for a voucher (table: ORDERS_TABLE,
                            default trade_order)
+  fixture.py order-stats ID  one line of key=value for a voucher, summed over every shard:
+                           total, live (neither CLOSED nor REFUNDED), closed, paid, buyers
+  fixture.py one-trace ID  print "order_no,trace_id" of one persisted order that has a trace
   fixture.py voucher-base N  start this schema's voucher ids at N, so an A/B whose builds use
                            different schemas cannot mint the same id into a shared Redis
 
@@ -194,13 +197,22 @@ def voucher(stock):
 
 def orders(voucher_id):
     # ORDERS_TABLE=tb_voucher_order measures a build from before M2 (e.g. the v2.0-m1 jar).
-    table = os.environ.get('ORDERS_TABLE', 'trade_order')
     voucher_id = int(voucher_id)
-    schema = schema_of(env('LOCAL_DEALS_DATASOURCE_URL'))
     # From M6 the orders live in <table>_0..3 in this build's schema and the same in <schema>_1,
     # and this counts them with a plain mysql client that knows nothing about the routing layer.
     # A build from before M6 still has the one logical table. Ask the server which it is instead
     # of configuring it per build, so the same command measures both sides of an A/B.
+    names = order_tables()
+    union = " UNION ALL ".join(
+        f"SELECT COUNT(*) AS c FROM {name} WHERE voucher_id = {voucher_id}" for name in names)
+    # COALESCE: SUM over no matching rows is NULL, and the caller wants a number.
+    print(mysql(f"SELECT COALESCE(SUM(c), 0) FROM ({union}) counted;").strip())
+
+
+def order_tables():
+    """Every physical trade_order table of both shard databases, fully qualified."""
+    table = os.environ.get('ORDERS_TABLE', 'trade_order')
+    schema = schema_of(env('LOCAL_DEALS_DATASOURCE_URL'))
     names = [line for line in mysql(
         "SELECT CONCAT('`', table_schema, '`.`', table_name, '`') FROM information_schema.tables "
         f"WHERE table_schema IN ('{schema}', '{schema}_1') "
@@ -208,10 +220,37 @@ def orders(voucher_id):
         if line]
     if not names:
         sys.exit(f"no table named {table} (or {table}_N) in {schema} or {schema}_1")
+    return names
+
+
+def order_stats(voucher_id):
+    """
+    The reconciliation the full-chain scenario checks: live orders must equal the stock that was
+    on sale, and every closed one must have given its unit back.
+    """
+    voucher_id = int(voucher_id)
     union = " UNION ALL ".join(
-        f"SELECT COUNT(*) AS c FROM {name} WHERE voucher_id = {voucher_id}" for name in names)
-    # COALESCE: SUM over no matching rows is NULL, and the caller wants a number.
-    print(mysql(f"SELECT COALESCE(SUM(c), 0) FROM ({union}) counted;").strip())
+        "SELECT status, user_id FROM {} WHERE voucher_id = {}".format(name, voucher_id)
+        for name in order_tables())
+    row = mysql(
+        "SELECT COUNT(*), "
+        "SUM(status NOT IN ('CLOSED', 'REFUNDED')), "
+        "SUM(status = 'CLOSED'), "
+        "SUM(status = 'PAID'), "
+        "COUNT(DISTINCT IF(status NOT IN ('CLOSED', 'REFUNDED'), user_id, NULL)) "
+        f"FROM ({union}) o;").split()
+    total, live, closed, paid, buyers = ((int(v) if v not in ('NULL', '') else 0) for v in row)
+    print(f"total={total},live={live},closed={closed},paid={paid},live_buyers={buyers}")
+
+
+def one_trace(voucher_id):
+    """One persisted order and the request that created it, for the end-to-end trace check."""
+    voucher_id = int(voucher_id)
+    union = " UNION ALL ".join(
+        "SELECT order_no, trace_id FROM {} WHERE voucher_id = {} AND trace_id IS NOT NULL LIMIT 1"
+        .format(name, voucher_id) for name in order_tables())
+    row = mysql(f"SELECT order_no, trace_id FROM ({union}) o LIMIT 1;").split()
+    print(','.join(row) if len(row) == 2 else '')
 
 
 def voucher_base(first_id):
@@ -228,7 +267,8 @@ def voucher_base(first_id):
 
 
 if __name__ == '__main__':
-    commands = {'users': users, 'voucher': voucher, 'orders': orders, 'voucher-base': voucher_base}
+    commands = {'users': users, 'voucher': voucher, 'orders': orders,
+                'order-stats': order_stats, 'one-trace': one_trace, 'voucher-base': voucher_base}
     if len(sys.argv) != 3 or sys.argv[1] not in commands:
         sys.exit(__doc__)
     commands[sys.argv[1]](int(sys.argv[2]))

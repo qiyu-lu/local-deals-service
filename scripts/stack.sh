@@ -430,6 +430,8 @@ lb_start() {
   lb_stop
   local conf
   conf="$(write_lb_config)"
+  # A previous round's access log would answer the next round's questions.
+  : >"${RUN_DIR}/access.log"
   port_free "$LB_PORT" || fail "port ${LB_PORT} is already in use"
   # Host networking: the upstreams are host processes on 127.0.0.1, and a bridge hop would add
   # a NAT layer to every request of the measurement.

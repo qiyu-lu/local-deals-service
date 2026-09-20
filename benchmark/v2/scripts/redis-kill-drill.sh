@@ -3,6 +3,14 @@
 #
 #   benchmark/v2/scripts/redis-kill-drill.sh [STOCK] [RATE] [KILL_AFTER_S]
 #
+# REPLICA_SLEEP_S=n first blocks the replica with DEBUG SLEEP, so it stops applying the
+# replication stream, and only then kills the master. M5 measured an RPO of 0 because the slots
+# of a dying master simply stop accepting writes — the buyer gets a 503 instead of a false yes,
+# and the replica was at most a millisecond behind. A blocked replica is promoted n seconds
+# stale instead, so it comes back believing in stock that was already sold: Redis over-admits,
+# and MySQL's conditional `stock = stock - n WHERE stock >= n` is the only thing left. That is
+# the defence the whole design rests on and it has never once been triggered.
+#
 # Redis replication is asynchronous, so a master that dies takes its unreplicated writes with
 # it: reservations and stock decrements that the buyer was already told about. The promoted
 # replica therefore comes back with *more* stock than the truth. This drill quantifies that
@@ -26,6 +34,8 @@ FIXTURE="${PROJECT_DIR}/benchmark/v2/scripts/fixture.py"
 # fixed name would be wrong on the second round, because the node killed in the first one comes
 # back as a replica of its own promoted replica, and killing a replica proves nothing.
 KILL_NODE="${REDIS_KILL_NODE:-}"
+REPLICA_SLEEP_S="${REPLICA_SLEEP_S:-0}"
+MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 BUCKETS="${SECKILL_BUCKETS:?set SECKILL_BUCKETS to the bucket count of the application under test}"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
 mkdir -p "$OUT"
@@ -51,6 +61,25 @@ reservations_of() { sum_over_buckets HLEN "resv:$1"; }
 redis_stock_of() { sum_over_buckets GET "stock:$1"; }
 processing_left_total() { sum_over_buckets ZCARD "processing"; }
 cluster_ok() { redis CLUSTER INFO 2>/dev/null | grep -q '^cluster_state:ok'; }
+# One named node, no -c: a redirect would send DEBUG SLEEP somewhere else entirely.
+redis_at() { # host:port, then arguments
+  local addr="$1"; shift
+  redis-cli -h "${addr%%:*}" -p "${addr##*:}" -a "$LOCAL_DEALS_REDIS_PASSWORD" --no-auth-warning "$@"
+}
+# The replica of the master this drill is about to kill, as host:port.
+replica_of() { # master host:port
+  local master="$1" master_id
+  master_id="$(redis CLUSTER NODES | awk -v m="${master}@" '$2 ~ "^" m { print $1; exit }')"
+  [[ -n "$master_id" ]] || { echo "no cluster node is ${master}" >&2; return 1; }
+  redis CLUSTER NODES | awk -v id="$master_id" '$4 == id && $3 ~ /slave/ { addr = $2; sub(/@.*/, "", addr); print addr; exit }'
+}
+# How often the batch consumer had to fall back because MySQL would not cover a batch. Non-zero
+# means the last line of defence actually fired.
+degraded_total() {
+  curl -fsS --max-time 10 "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/prometheus" 2>/dev/null |
+    awk '/^local_deals_seckill_consume_degraded_total\{reason="stock_short"\}/ { print $2 }' |
+    awk 'NR == 1 { printf "%d", $1 } END { if (NR == 0) print 0 }'
+}
 cluster_noticed() { # the survivors have flagged the dead master
   redis CLUSTER NODES 2>/dev/null | grep -q 'fail'
 }
@@ -75,23 +104,26 @@ print(int(metrics.get('outcome_accepted', {}).get('count', 0)))
 PYJSON
 }
 
-# The master that serves bucket 0 right now, as a container name.
-master_of_bucket0() {
-  local slot port index
+# The master that serves bucket 0 right now, as host:port.
+master_addr_of_bucket0() {
+  local slot addr
   slot="$(redis CLUSTER KEYSLOT "sk:{sk:b0}:stock:0" | tr -d '[:space:]')"
-  port="$(redis CLUSTER NODES | awk -v slot="$slot" '
+  addr="$(redis CLUSTER NODES | awk -v slot="$slot" '
     $3 ~ /master/ {
       addr = $2; sub(/@.*/, "", addr)
       for (i = 9; i <= NF; i++) {
         if ($i ~ /^[0-9]+-[0-9]+$/) { split($i, r, "-"); if (slot >= r[1] && slot <= r[2]) { print addr; exit } }
         else if ($i ~ /^[0-9]+$/ && $i + 0 == slot) { print addr; exit }
       }
-    }' | cut -d: -f2)"
-  [[ -n "$port" ]] || { echo "could not find the master of bucket 0" >&2; return 1; }
-  index="${port: -1}"
-  echo "ld-${STACK_ID}-redis-c${index}"
+    }')"
+  [[ -n "$addr" ]] || { echo "could not find the master of bucket 0" >&2; return 1; }
+  echo "$addr"
 }
-[[ -n "$KILL_NODE" ]] || KILL_NODE="$(master_of_bucket0)"
+# The compose file names the nodes after the last digit of their published port.
+container_of() { local addr="$1"; echo "ld-${STACK_ID}-redis-c${addr: -1}"; }
+
+MASTER_ADDR="$(master_addr_of_bucket0)"
+[[ -n "$KILL_NODE" ]] || KILL_NODE="$(container_of "$MASTER_ADDR")"
 
 voucher="$(SECKILL_BUCKETS="$BUCKETS" python3 "$FIXTURE" voucher "$STOCK")"
 name="redis-kill-drill-v${voucher}-$(date +%H%M%S)"
@@ -103,7 +135,23 @@ docker run --rm --network host --cpuset-cpus "${K6_CPUS:-6-7,14-15}" --user "$(i
   --summary-export "/out/${name}.json" /scripts/seckill.js >"${OUT}/${name}.log" 2>&1 &
 k6=$!
 
+degraded_before="$(degraded_total)"
 sleep "$KILL_AFTER"
+replica=""
+if (( REPLICA_SLEEP_S > 0 )); then
+  replica="$(replica_of "$MASTER_ADDR" || true)"
+  if [[ -n "$replica" ]]; then
+    # Blocks the replica for the whole window: it keeps the connection but applies nothing, so
+    # every decrement the master takes in the meantime dies with the master.
+    redis_at "$replica" DEBUG SLEEP "$REPLICA_SLEEP_S" >/dev/null 2>&1 &
+    # Let the block take hold before the writes that must be lost.
+    sleep 0.5
+    # Let the master take decrements the replica will never see, then kill it mid-window.
+    sleep "$(python3 -c "print(max(0.5, ${REPLICA_SLEEP_S} * 0.4))")"
+  else
+    echo "no replica found for ${KILL_NODE}; killing without a replication window" >&2
+  fi
+fi
 reserved_at_kill="$(reservations_of "$voucher")"
 stock_at_kill="$(redis_stock_of "$voucher")"
 docker kill "$KILL_NODE" >/dev/null
@@ -160,5 +208,7 @@ lost="$(( accepted - orders ))"
 # What Redis believes it still has, minus the truth: the stock that came back from the dead.
 stock_gap="$(( redis_stock - db_stock ))"
 oversold="$(( orders > STOCK ? orders - STOCK : 0 ))"
+degraded_after="$(degraded_total)"
 docker start "$KILL_NODE" >/dev/null || true
-echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},converge_s=${converge}"
+# stock_short degradations are the MySQL backstop refusing a batch Redis had already promised.
+echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},replica_sleep_s=${REPLICA_SLEEP_S},replica=${replica:-none},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},stock_short_degraded=$(( degraded_after - degraded_before )),converge_s=${converge}"
