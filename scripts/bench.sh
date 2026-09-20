@@ -10,6 +10,8 @@
 #
 #   scripts/bench.sh m3 | m3-smoke              unattended scenario (see "Scenarios" below): own stack,
 #   scripts/bench.sh m4 | m4-smoke              M4 scenario: drains A/B, consume-parameter sweep, drills
+#   scripts/bench.sh m6 | m6-smoke              M6 scenario: sharded orders vs v2.0-m5, which runs on
+#                                               its own schema because it predates V16
 #   scripts/bench.sh m5 | m5-smoke              M5 scenario: buckets + Redis Cluster A/B, bucket sweep,
 #                                               app kill drill and the Redis master kill drill
 #                                               builds, warm-up, ladder, drains, crash drills, cleanup;
@@ -26,7 +28,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6-consume|m6-consume-smoke)
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
     export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
       NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
@@ -53,6 +55,10 @@ USER_CURSOR_FILE="${RUN_DIR}/user-cursor"
 
 fail() { echo "bench: $*" >&2; exit 1; }
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
+# stack.sh env always prints the stack's own schema, and this script re-runs itself for every
+# fixture and measurement, so a per-build schema has to survive that. It travels in a variable
+# stack.sh does not set, and is applied after the load.
+[[ -z "${BENCH_DATASOURCE_URL:-}" ]] || export LOCAL_DEALS_DATASOURCE_URL="$BENCH_DATASOURCE_URL"
 FIXTURE="${PROJECT_DIR}/benchmark/v2/scripts/fixture.py"
 mkdir -p "$RAW_DIR" "$RUN_DIR"
 
@@ -349,6 +355,28 @@ load_scenario() {
       S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
       S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
+    m6)
+      S_MILESTONE=m6; S_BASELINE_TAG=v2.0-m5; S_BASELINE_FLAVOUR=funnel
+      # v2.0-m5 predates V16, so it cannot migrate the schema this build uses.
+      S_BASELINE_SCHEMA=local_deals_pre_m6
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
+      # M6 moves the orders into eight tables; the ladder only has to show the funnel did not.
+      S_RATES="10000 20000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=3; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_BUCKETS=16; S_BASELINE_BUCKETS=16
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
+      S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m6-smoke)
+      S_MILESTONE=m6; S_BASELINE_TAG=v2.0-m5; S_BASELINE_FLAVOUR=funnel
+      S_BASELINE_SCHEMA=local_deals_pre_m6
+      S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+      S_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
+      S_BUCKETS=8; S_BASELINE_BUCKETS=8
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
+      S_EXTRA_ARGS=""; S_USERS=20000 ;;
     m6-consume)
       # Not a milestone comparison: a sweep of the consumer's pull settings. The M5 smoke measured
       # a mean batch of 1.03 against batchSize=64 with persisted == delivered, so the batch
@@ -527,12 +555,29 @@ start_build() { # which
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
   # the app first: on a fresh stack its Flyway migrations create the tables the fixture fills
   APP_JAR="${RUN_DIR}/${which}.jar" APP_ARGS="$(build_args "$which")" "${PROJECT_DIR}/scripts/stack.sh" app-start
-  env $(build_redis_env "$which") "$0" users "$S_USERS"
+  env $(build_redis_env "$which") $(build_db_env "$which") "$0" users "$S_USERS"
   # the warm-up needs the same k6 environment as the measured runs, or it only measures 403s
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="$(build_commit "$which")" DURATION="$S_WARMUP_DURATION" \
-    STOCK=1000 env "$(build_env "$which")" $(build_redis_env "$which") "$0" step "$S_WARMUP_RATE"
+    STOCK=1000 env "$(build_env "$which")" $(build_redis_env "$which") $(build_db_env "$which") \
+    "$0" step "$S_WARMUP_RATE"
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
+# The stack's datasource URL pointed at another schema.
+datasource_url_for() { # schema
+  local url="${LOCAL_DEALS_DATASOURCE_URL:?stack environment not loaded}"
+  local head="${url%%\?*}" query=""
+  [[ "$url" != *\?* ]] || query="?${url#*\?}"
+  echo "${head%/*}/${1}${query}"
+}
+
+# Which schema a build's fixture seeds. Empty for every scenario before M6, where both builds
+# share one; see S_BASELINE_SCHEMA above for why M6 cannot.
+build_db_env() { # which
+  if [[ "$1" == baseline && -n "${S_BASELINE_SCHEMA:-}" ]]; then
+    echo "BENCH_DATASOURCE_URL=$(datasource_url_for "$S_BASELINE_SCHEMA")"
+  fi
+}
+
 # Which Redis a build talks to, as environment for the fixture, the drills and the CPU column.
 # A build from before M5 has untagged keys, so it can only run on the single node.
 build_redis_env() { # which
@@ -560,14 +605,16 @@ build_env() { # which
 
 ladder() { # which
   start_build "$1"
-  env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+  env "$(build_env "$1")" $(build_redis_env "$1") $(build_db_env "$1") BENCH_OUT="$S_RESULT" \
+    BENCH_COMMIT="$(build_commit "$1")" \
     DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_RATES
   stop_app "ladder-$1"
 }
 
 drain_round() { # which
   start_build "$1"
-  env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+  env "$(build_env "$1")" $(build_redis_env "$1") $(build_db_env "$1") BENCH_OUT="$S_RESULT" \
+    BENCH_COMMIT="$(build_commit "$1")" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
   stop_app "drain-$1"
 }
@@ -683,6 +730,7 @@ run_scenario() { # name
   S_BUCKET_SWEEP="${S_BUCKET_SWEEP:-}"; export S_BUCKET_SWEEP
   S_REDIS_KILL_ROUNDS="${S_REDIS_KILL_ROUNDS:-0}"; export S_REDIS_KILL_ROUNDS
   S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
+  S_BASELINE_SCHEMA="${S_BASELINE_SCHEMA:-}"; export S_BASELINE_SCHEMA
   export S_CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
   export S_BASELINE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}")"
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
@@ -695,6 +743,12 @@ run_scenario() { # name
     export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
   fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
+  # A baseline from before M6 has no V16 and cannot share a schema with a build that has it:
+  # Flyway finds an applied migration it cannot resolve and refuses to start. Give it its own.
+  # An argument, not the environment variable, because stack.sh app-start re-exports that one.
+  if [[ -n "${S_BASELINE_SCHEMA:-}" ]]; then
+    ARGS_BASELINE="${ARGS_BASELINE} --spring.datasource.url=$(datasource_url_for "$S_BASELINE_SCHEMA")"
+  fi
   if [[ -n "${S_BUCKETS:-}" ]]; then
     # The current build runs on the cluster with its buckets. Whether the baseline joins it
     # depends on the tag: v2.0-m4 and earlier have untagged keys and can only run on the single
@@ -704,6 +758,7 @@ run_scenario() { # name
     # cluster node list.
     export REDIS_MODE=cluster
     eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
+    [[ -z "${BENCH_DATASOURCE_URL:-}" ]] || export LOCAL_DEALS_DATASOURCE_URL="$BENCH_DATASOURCE_URL"
     [[ -n "${STACK_REDIS_CLUSTER_NODES:-}" ]] || fail "cluster mode did not print node addresses"
     local cluster_args="--spring.data.redis.cluster.nodes=${STACK_REDIS_CLUSTER_NODES} --spring.data.redis.cluster.max-redirects=5"
     ARGS_CURRENT="${ARGS_CURRENT} --local-deals.seckill.bucket.count=${S_BUCKETS} ${cluster_args}"
@@ -756,7 +811,7 @@ case "${1:-}" in
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6-consume|m6-consume-smoke) run_scenario "$1" ;;
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke) run_scenario "$1" ;;
   _phase) shift; "$@" ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
