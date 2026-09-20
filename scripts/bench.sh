@@ -414,7 +414,7 @@ start_build() { # which
     STOCK=1000 env "$(build_env "$which")" "$0" step "$S_WARMUP_RATE"
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
-build_commit() { [[ "$1" == baseline ]] && git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}" || git -C "$PROJECT_DIR" rev-parse --short HEAD; }
+build_commit() { [[ "$1" == baseline ]] && echo "$S_BASELINE_COMMIT" || echo "$S_CURRENT_COMMIT"; }
 # k6 signs a seckill token itself; only a build that predates the funnel does not want one.
 build_env() { # which
   if [[ "$1" == current || "$S_BASELINE_FLAVOUR" == funnel ]]; then
@@ -451,7 +451,7 @@ sweep_round() { # batch:threads
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="sweep" DURATION="$S_WARMUP_DURATION" \
     STOCK=1000 env "$(build_env current)" "$0" step "$S_WARMUP_RATE"
   env "$(build_env current)" BENCH_OUT="$S_RESULT" \
-    BENCH_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD):b${batch}t${threads}" \
+    BENCH_COMMIT="${S_CURRENT_COMMIT}:b${batch}t${threads}" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
 }
@@ -464,7 +464,7 @@ kill_round() { # mode: kill | broker
     APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" BROKER_DOWN="$broker_down" DRILL_TIMEOUT=1800 \
     "${PROJECT_DIR}/benchmark/v2/scripts/kill-drill.sh" "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
   [[ "$line" == voucher=* ]] || { echo "kill drill printed no result: ${line}"; return 1; }
-  python3 - "${S_RESULT}/kill-drill.csv" "$(git -C "$PROJECT_DIR" rev-parse --short HEAD)" "$1" "$line" <<'PY'
+  python3 - "${S_RESULT}/kill-drill.csv" "$S_CURRENT_COMMIT" "$1" "$line" <<'PY'
 import csv, os, sys
 path, commit, mode, line = sys.argv[1:]
 row = {'commit': commit, 'mode': mode, **dict(kv.split('=', 1) for kv in line.split(','))}
@@ -487,6 +487,8 @@ run_scenario() { # name
     S_KILL_AFTER S_EXTRA_ARGS S_USERS S_BASELINE_FLAVOUR STACK_NAME K6_IMAGE
   S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
   S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
+  export S_CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
+  export S_BASELINE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}")"
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
   export APP_CPUS="${APP_CPUS:-0-3,8-11}" DEPS_CPUS="${DEPS_CPUS:-4-5,12-13}" K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
   K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
