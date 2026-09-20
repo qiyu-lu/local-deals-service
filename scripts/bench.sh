@@ -343,6 +343,30 @@ S_RESULT="${S_RESULT:-}"
 s_log() { echo "$(date '+%F %T') $*" | tee -a "${S_RESULT}/run.log" >&2; }
 s_fail() { echo "FAILED: $*" >"${S_RESULT}/status"; s_log "FAILED: $*"; exit 1; }
 
+# One actuator scrape per measured round, taken while the app is still up. M4 and M5 both ended
+# with "the batches were probably not full" and no way to check: the batch-size distribution and
+# the degradation counters live in this scrape.
+snapshot_app() { # label
+  local out="${S_RESULT}/raw/${1}-$(date +%H%M%S).prom"
+  curl -fsS --max-time 20 "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/prometheus" -o "$out" ||
+    echo "actuator snapshot failed for ${1}" >&2
+}
+
+# Stop the app, but keep what it can still tell us. Every measured round ends here.
+stop_app() { # label
+  snapshot_app "$1"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+# app.log is rotated by stack.sh app-start, so every run of the scenario left one behind.
+archive_app_logs() {
+  local log
+  for log in "${RUN_DIR}"/app.log "${RUN_DIR}"/app-*.log; do
+    [[ -f "$log" ]] || continue
+    cp "$log" "${S_RESULT}/raw/$(basename "$log")" 2>/dev/null || true
+  done
+}
+
 # phase NAME TIMEOUT_SECONDS function args... ; the function runs in a re-executed bench.sh
 # (timeout cannot run a shell function), output goes to run.log
 phase() {
@@ -358,6 +382,7 @@ phase() {
 scenario_cleanup() {
   local rc=$?
   [[ -n "$S_RESULT" ]] || return
+  archive_app_logs >>"${S_RESULT}/run.log" 2>&1 || true
   "${PROJECT_DIR}/scripts/stack.sh" app-stop >>"${S_RESULT}/run.log" 2>&1 || true
   docker unpause "${STACK_NAME}-broker" >/dev/null 2>&1 || true
   if [[ -z "${KEEP_STACK:-}" ]]; then
@@ -480,14 +505,14 @@ ladder() { # which
   start_build "$1"
   env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
     DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_RATES
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "ladder-$1"
 }
 
 drain_round() { # which
   start_build "$1"
   env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "drain-$1"
 }
 
 # One drain with an explicit consume batch size and thread count. The commit column carries the
@@ -505,7 +530,7 @@ sweep_round() { # batch:threads
   env "$(build_env current)" BENCH_OUT="$S_RESULT" \
     BENCH_COMMIT="${S_CURRENT_COMMIT}:b${batch}t${threads}" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "sweep-b${batch}t${threads}"
 }
 
 # One drain of the current build with an explicit bucket count. The commit column carries it
@@ -522,7 +547,7 @@ bucket_sweep_round() { # bucket count
   env "$(build_env current)" SECKILL_BUCKETS="$buckets" BENCH_REDIS_CLUSTER="${STACK_REDIS_CLUSTER_NODES:-}" \
     BENCH_OUT="$S_RESULT" BENCH_COMMIT="${S_CURRENT_COMMIT}:k${buckets}" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "bucket-k${buckets}"
 }
 
 wait_cluster_ok() {
@@ -552,7 +577,7 @@ with open(path, 'a', newline='') as f:
         w.writeheader()
     w.writerow(row)
 PY
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "redis-kill"
   # The cluster must be whole again before the next phase measures anything.
   wait_cluster_ok
 }
@@ -576,7 +601,7 @@ with open(path, 'a', newline='') as f:
         w.writeheader()
     w.writerow(row)
 PY
-  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  stop_app "kill-$1"
 }
 
 run_scenario() { # name

@@ -293,6 +293,9 @@ app_start() {
   jar="$(app_jar)"
   [[ -z "$APP_CPUS" ]] || pin_cmd=(taskset -c "$APP_CPUS")
   eval "$(print_env)"
+  # A benchmark starts a fresh app for every measurement, so truncating app.log here used to
+  # leave only the last one. Rotate instead: bench.sh archives all of them with the results.
+  [[ ! -f "${RUN_DIR}/app.log" ]] || mv "${RUN_DIR}/app.log" "${RUN_DIR}/app-$(date +%H%M%S-%N).log"
   # shellcheck disable=SC2086
   nohup "${pin_cmd[@]}" "${APP_JAVA_HOME}/bin/java" $APP_JAVA_OPTS ${APP_EXTRA_JAVA_OPTS:-} -jar "$jar" \
     --server.port="$APP_PORT" \
