@@ -11,6 +11,14 @@
 #                                       APP_JAR runs another build, e.g. an older tag)
 #   scripts/stack.sh pin                pin dependency containers to DEPS_CPUS
 #
+#   INSTANCE=n                          run the n-th application instance: ports APP_PORT+(n-1)
+#                                       and MANAGEMENT_PORT+(n-1), its own pid and log file, and
+#                                       its own APP_CPUS. Unset means instance 1, exactly as
+#                                       before, and app-stop without it stops every instance.
+#   scripts/stack.sh lb-start|lb-stop   nginx on LB_PORT in front of APP_INSTANCES instances:
+#                                       round robin, keepalive upstreams, and X-Trace-Id from
+#                                       $request_id when the caller sent none
+#
 #   REDIS_MODE=cluster                  run Redis as 3 masters + 3 replicas (ports 2700x/3700x)
 #                                       instead of the single node; 'env' then exports
 #                                       SPRING_DATA_REDIS_CLUSTER_NODES for tests and the app.
@@ -32,7 +40,15 @@ REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2700}"
 REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3700}"
 APP_PORT="${APP_PORT:-28083}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
+# Which of the instances this invocation is about, and how many nginx balances over. One
+# instance keeps the pre-M8 ports, pid file and log name, so every earlier scenario is unchanged.
+INSTANCE_GIVEN="${INSTANCE:-}"
+INSTANCE="${INSTANCE:-1}"
+APP_INSTANCES="${APP_INSTANCES:-1}"
+LB_PORT="${LB_PORT:-$((APP_PORT + 900))}"
+LB_ACCESS_LOG="${LB_ACCESS_LOG:-}"
 STACK_SUBNET="${STACK_SUBNET:-172.30.56.0/24}"
+NGINX_IMAGE="${NGINX_IMAGE:-nginx:1.22}"
 MYSQL_PASSWORD="${STACK_MYSQL_PASSWORD:-ld-stack-mysql}"
 REDIS_PASSWORD="${STACK_REDIS_PASSWORD:-ld-stack-redis}"
 SCHEMA="${STACK_SCHEMA:-local_deals}"
@@ -55,14 +71,34 @@ FORBIDDEN_PORTS=(3306 6379 9876 10911 9200 8083 8088)
 
 fail() { echo "stack: $*" >&2; exit 1; }
 
+# Instance n listens one port up from instance n-1, on both the API and the management port.
+instance_app_port() { echo $(( APP_PORT + ${1:-$INSTANCE} - 1 )); }
+instance_management_port() { echo $(( MANAGEMENT_PORT + ${1:-$INSTANCE} - 1 )); }
+# Instance 1 keeps app.pid and app.log, so every scenario written before M8 still finds them.
+instance_suffix() { [[ "${1:-$INSTANCE}" == 1 ]] && echo "" || echo "-i${1:-$INSTANCE}"; }
+instance_pid_file() { echo "${RUN_DIR}/app$(instance_suffix "${1:-$INSTANCE}").pid"; }
+instance_log_file() { echo "${RUN_DIR}/app$(instance_suffix "${1:-$INSTANCE}").log"; }
+# Which instances have a pid file right now, in order.
+running_instances() {
+  local n
+  for (( n = 1; n <= 32; n++ )); do
+    [[ -f "$(instance_pid_file "$n")" ]] && echo "$n"
+  done
+  return 0
+}
+
 check_isolation() {
   [[ "$STACK_ID" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || fail "STACK_ID must match [a-z0-9-]{2,31}"
   local port forbidden
   local cluster_ports=()
   # Both the client and the bus ports: another stack's bus range is just as fatal a collision.
   [[ "$REDIS_MODE" != cluster ]] || mapfile -t cluster_ports < <(redis_cluster_ports; redis_cluster_bus_ports)
+  local instance_ports=() n
+  for (( n = 1; n <= APP_INSTANCES; n++ )); do
+    instance_ports+=("$(instance_app_port "$n")" "$(instance_management_port "$n")")
+  done
   for port in "$MYSQL_PORT" "$REDIS_PORT" "$NAMESRV_PORT" "$BROKER_PORT" "$ES_PORT" "$APP_PORT" \
-      "$MANAGEMENT_PORT" ${cluster_ports[@]+"${cluster_ports[@]}"}; do
+      "$MANAGEMENT_PORT" "$LB_PORT" "${instance_ports[@]}" ${cluster_ports[@]+"${cluster_ports[@]}"}; do
     for forbidden in "${FORBIDDEN_PORTS[@]}"; do
       [[ "$port" != "$forbidden" ]] || fail "port ${port} belongs to the dev stack"
     done
@@ -153,8 +189,10 @@ export ROCKETMQ_NAMESERVER=127.0.0.1:${NAMESRV_PORT}
 export SPRING_ELASTICSEARCH_URIS=http://127.0.0.1:${ES_PORT}
 export STACK_MYSQL="mysql -h127.0.0.1 -P${MYSQL_PORT} -uroot -p${MYSQL_PASSWORD} ${SCHEMA}"
 export STACK_REDIS="redis-cli -h 127.0.0.1 -p ${REDIS_PORT} -a ${REDIS_PASSWORD} --no-auth-warning"
-export STACK_APP=http://127.0.0.1:${APP_PORT}
-export STACK_MANAGEMENT=http://127.0.0.1:${MANAGEMENT_PORT}
+export STACK_APP=http://127.0.0.1:$(instance_app_port)
+export STACK_MANAGEMENT=http://127.0.0.1:$(instance_management_port)
+export STACK_LB=http://127.0.0.1:${LB_PORT}
+export STACK_APP_INSTANCES=${APP_INSTANCES}
 EOF
   # Cluster additions last, so STACK_REDIS ends up pointing at the cluster. The node list gets a
   # neutral name: whether a process should talk to the cluster is its caller's decision (tests
@@ -232,6 +270,7 @@ pin() {
 
 down() {
   check_isolation
+  lb_stop
   app_stop
   compose down --volumes --remove-orphans
   cluster_compose down --volumes --remove-orphans
@@ -248,11 +287,15 @@ down() {
 status() {
   compose ps
   [[ "$REDIS_MODE" != cluster ]] || cluster_compose ps
-  if [[ -f "${RUN_DIR}/app.pid" ]] && kill -0 "$(<"${RUN_DIR}/app.pid")" 2>/dev/null; then
-    echo "app running pid=$(<"${RUN_DIR}/app.pid") port=${APP_PORT}"
-  else
-    echo "app not running"
-  fi
+  local n running=0
+  for n in $(running_instances); do
+    if kill -0 "$(<"$(instance_pid_file "$n")")" 2>/dev/null; then
+      running=1
+      echo "app instance ${n} running pid=$(<"$(instance_pid_file "$n")") port=$(instance_app_port "$n")"
+    fi
+  done
+  (( running == 1 )) || echo "app not running"
+  docker ps --filter "name=^/$(lb_container)$" --format 'nginx running port={{.Ports}}' | head -1
 }
 
 run_tests() {
@@ -287,23 +330,39 @@ app_jar() {
 app_start() {
   check_isolation
   mkdir -p "$RUN_DIR"
-  [[ ! -f "${RUN_DIR}/app.pid" ]] || ! kill -0 "$(<"${RUN_DIR}/app.pid")" 2>/dev/null ||
-    fail "app already running pid=$(<"${RUN_DIR}/app.pid")"
+  local pid_file log_file port management
+  pid_file="$(instance_pid_file)"; log_file="$(instance_log_file)"
+  port="$(instance_app_port)"; management="$(instance_management_port)"
+  [[ ! -f "$pid_file" ]] || ! kill -0 "$(<"$pid_file")" 2>/dev/null ||
+    fail "app instance ${INSTANCE} already running pid=$(<"$pid_file")"
   local jar pin_cmd=()
   jar="$(app_jar)"
   [[ -z "$APP_CPUS" ]] || pin_cmd=(taskset -c "$APP_CPUS")
   eval "$(print_env)"
+  # The instance number is the one thing a log line cannot work out for itself, and with three
+  # of them writing about the same order it is the first thing anyone wants to know.
+  export LOCAL_DEALS_INSTANCE="${LOCAL_DEALS_INSTANCE:-app-${INSTANCE}}"
   # A benchmark starts a fresh app for every measurement, so truncating app.log here used to
   # leave only the last one. Rotate instead: bench.sh archives all of them with the results.
-  [[ ! -f "${RUN_DIR}/app.log" ]] || mv "${RUN_DIR}/app.log" "${RUN_DIR}/app-$(date +%H%M%S-%N).log"
+  [[ ! -f "$log_file" ]] || mv "$log_file" "${log_file%.log}-$(date +%H%M%S-%N).log"
   # shellcheck disable=SC2086
   nohup "${pin_cmd[@]}" "${APP_JAVA_HOME}/bin/java" $APP_JAVA_OPTS ${APP_EXTRA_JAVA_OPTS:-} -jar "$jar" \
-    --server.port="$APP_PORT" \
-    --management.server.port="$MANAGEMENT_PORT" \
-    ${APP_ARGS:-} >"${RUN_DIR}/app.log" 2>&1 &
-  echo "$!" >"${RUN_DIR}/app.pid"
-  wait_for "application readiness" curl -fs "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/health/readiness"
-  echo "app started pid=$(<"${RUN_DIR}/app.pid") cpus=${APP_CPUS:-all} log=${RUN_DIR}/app.log"
+    --server.port="$port" \
+    --management.server.port="$management" \
+    ${APP_ARGS:-} >"$log_file" 2>&1 &
+  echo "$!" >"$pid_file"
+  wait_for "application readiness" curl -fs "http://127.0.0.1:${management}/actuator/health/readiness"
+  echo "app started instance=${INSTANCE} pid=$(<"$pid_file") port=${port} cpus=${APP_CPUS:-all} log=${log_file}"
+}
+
+# Start APP_INSTANCES of them. APP_CPUS_PER_INSTANCE, when set, is a space-separated list of
+# cpusets, one per instance: the scaling ladder needs each instance to own cores rather than
+# share one budget, or it measures process overhead instead of scaling.
+app_start_all() {
+  local n sets=(${APP_CPUS_PER_INSTANCE:-})
+  for (( n = 1; n <= APP_INSTANCES; n++ )); do
+    INSTANCE="$n" APP_CPUS="${sets[n-1]:-$APP_CPUS}" app_start
+  done
 }
 
 # A port nobody is listening on any more. A dead PID is not the same thing: a benchmark that
@@ -312,27 +371,123 @@ port_free() { # port
   ! ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN
 }
 
-app_stop() {
-  local had_pid=0
-  if [[ -f "${RUN_DIR}/app.pid" ]]; then
-    had_pid=1
-    local pid
-    pid="$(<"${RUN_DIR}/app.pid")"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid"
-      for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
-    fi
-    rm -f "${RUN_DIR}/app.pid"
+lb_container() { echo "${STACK_NAME}-nginx"; }
+
+# The edge the M8 scenarios drive: round robin over APP_INSTANCES, keepalive to the upstreams so
+# the measurement is not a TIME_WAIT benchmark, and X-Trace-Id minted here when the caller sent
+# none — which makes nginx's own log and the application's log share one id.
+#
+# No limit_req. The architecture has one, but a rate limit in front of a load test measures the
+# rate limit; the funnel under test is the application's.
+write_lb_config() {
+  local conf="${RUN_DIR}/nginx.conf" n workers access
+  workers="$(tr ',' '\n' <<<"${LB_CPUS:-0,1}" | awk -F- '{ n += ($2 == "" ? 1 : $2 - $1 + 1) } END { print (n < 1 ? 1 : n) }')"
+  if [[ -n "$LB_ACCESS_LOG" ]]; then
+    # Which instance served which trace: the multi-instance evidence, buffered so writing it
+    # does not become the thing being measured.
+    access='    log_format upstream_trace "$trace_id $upstream_addr $status $request_time";
+    access_log /var/log/nginx/access.log upstream_trace buffer=256k flush=2s;'
+  else
+    access='    access_log off;'
   fi
-  # Whether or not we had a PID to kill: the next start needs these two ports, so wait for them
-  # rather than letting Tomcat discover the problem and take the whole phase down with it.
-  local port
-  for port in "$APP_PORT" "$MANAGEMENT_PORT"; do
-    for _ in $(seq 1 60); do port_free "$port" && break; sleep 1; done
-    port_free "$port" || fail "port ${port} is still in use after stopping the app"
+  {
+    echo "worker_processes ${workers};"
+    echo "worker_rlimit_nofile 65535;"
+    echo "error_log /dev/stderr warn;"
+    echo "events { worker_connections 20480; multi_accept on; }"
+    echo "http {"
+    echo "    map \$http_x_trace_id \$trace_id { default \$http_x_trace_id; \"\" \$request_id; }"
+    echo "$access"
+    echo "    upstream app {"
+    for (( n = 1; n <= APP_INSTANCES; n++ )); do
+      echo "        server 127.0.0.1:$(instance_app_port "$n") max_fails=0;"
+    done
+    echo "        keepalive 512;"
+    echo "    }"
+    echo "    server {"
+    echo "        listen ${LB_PORT} reuseport backlog=16384;"
+    echo "        keepalive_requests 100000;"
+    echo "        keepalive_timeout 120s;"
+    echo "        location / {"
+    echo "            proxy_pass http://app;"
+    echo "            proxy_http_version 1.1;"
+    echo "            proxy_set_header Connection \"\";"
+    echo "            proxy_set_header X-Trace-Id \$trace_id;"
+    echo "            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+    echo "            proxy_set_header Host \$host;"
+    echo "            proxy_connect_timeout 2s;"
+    echo "            proxy_read_timeout 30s;"
+    echo "        }"
+    echo "    }"
+    echo "}"
+  } >"$conf"
+  echo "$conf"
+}
+
+lb_start() {
+  check_isolation
+  mkdir -p "$RUN_DIR"
+  lb_stop
+  local conf
+  conf="$(write_lb_config)"
+  port_free "$LB_PORT" || fail "port ${LB_PORT} is already in use"
+  # Host networking: the upstreams are host processes on 127.0.0.1, and a bridge hop would add
+  # a NAT layer to every request of the measurement.
+  docker run -d --name "$(lb_container)" --network host \
+    ${LB_CPUS:+--cpuset-cpus "$LB_CPUS"} \
+    -v "${conf}:/etc/nginx/nginx.conf:ro" \
+    -v "${RUN_DIR}:/var/log/nginx" \
+    "$NGINX_IMAGE" >/dev/null
+  local deadline=$(( SECONDS + 60 ))
+  until curl -fs -o /dev/null "http://127.0.0.1:${LB_PORT}/actuator/health" 2>/dev/null ||
+        curl -s -o /dev/null "http://127.0.0.1:${LB_PORT}/" 2>/dev/null; do
+    (( SECONDS < deadline )) || fail "nginx did not answer on ${LB_PORT}; $(docker logs --tail 20 "$(lb_container)" 2>&1)"
+    sleep 1
   done
-  (( had_pid == 0 )) || echo "app stopped"
+  echo "nginx started port=${LB_PORT} upstreams=${APP_INSTANCES} cpus=${LB_CPUS:-all}"
+}
+
+lb_stop() {
+  docker rm -f "$(lb_container)" >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do port_free "$LB_PORT" && break; sleep 1; done
+}
+
+# Without INSTANCE_GIVEN this stops every instance that left a pid file behind, which is what
+# `down` and every scenario's cleanup want; with it, only that one.
+app_stop() {
+  local targets=()
+  if [[ -n "${INSTANCE_GIVEN:-}" ]]; then
+    targets=("$INSTANCE")
+  else
+    mapfile -t targets < <(running_instances)
+    # Nothing is running, but the ports still have to be free for the next start.
+    [[ ${#targets[@]} -gt 0 ]] || targets=(1)
+  fi
+  local n had_pid=0
+  for n in "${targets[@]}"; do
+    local pid_file port management
+    pid_file="$(instance_pid_file "$n")"
+    port="$(instance_app_port "$n")"; management="$(instance_management_port "$n")"
+    if [[ -f "$pid_file" ]]; then
+      had_pid=1
+      local pid
+      pid="$(<"$pid_file")"
+      if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid"
+        for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
+      fi
+      rm -f "$pid_file"
+    fi
+    # Whether or not we had a PID to kill: the next start needs these two ports, so wait for
+    # them rather than letting Tomcat discover the problem and take the whole phase down.
+    local port_to_wait
+    for port_to_wait in "$port" "$management"; do
+      for _ in $(seq 1 60); do port_free "$port_to_wait" && break; sleep 1; done
+      port_free "$port_to_wait" || fail "port ${port_to_wait} is still in use after stopping the app"
+    done
+  done
+  (( had_pid == 0 )) || echo "app stopped (instances: ${targets[*]})"
 }
 
 case "$ACTION" in
@@ -344,6 +499,9 @@ case "$ACTION" in
   it) run_tests "$@" ;;
   build) build ;;
   app-start) app_start ;;
+  app-start-all) app_start_all ;;
   app-stop) app_stop ;;
-  *) echo "usage: $0 {up|down|status|env|pin|it <pattern>|build|app-start|app-stop}" >&2; exit 2 ;;
+  lb-start) lb_start ;;
+  lb-stop) lb_stop ;;
+  *) echo "usage: $0 {up|down|status|env|pin|it <pattern>|build|app-start|app-start-all|app-stop|lb-start|lb-stop}" >&2; exit 2 ;;
 esac
