@@ -372,7 +372,8 @@ M3_TOKEN_SECRET="bench-seckill-token-secret"
 load_scenario() {
   # Reset first: a suite exports its own S_* and then runs scenarios in child processes.
   S_SUITE=""; S_INSTANCES=""; S_INSTANCE_CPUS=""; S_LB_CPUS=""; S_LB_ACCESS_LOG=""
-  S_FULLCHAIN=""; S_SCALE=""; S_SCALE_RATES=""; S_WINDOW_ROUNDS=0; S_WINDOW_TAIL=""; S_PAY_TIMEOUT=""
+  S_FULLCHAIN=""; S_SCALE=""; S_SCALE_RATES=""; S_SCALE_DRAIN_ROUNDS=0
+  S_WINDOW_ROUNDS=0; S_WINDOW_TAIL=""; S_PAY_TIMEOUT=""
   S_SWEEP=""; S_BUCKET_SWEEP=""; S_BASELINE_SCHEMA=""; S_DRILL_ARGS=""; S_BASELINE_BUCKETS=""
   S_BUCKETS=""; S_REDIS_KILL_ROUNDS=0
   case "$1" in
@@ -528,6 +529,10 @@ load_scenario() {
       S_MILESTONE=m8; S_BASELINE_TAG=v2.0-m6; S_BASELINE_FLAVOUR=funnel
       S_SCALE="1 2 3"; S_INSTANCE_CPUS="0,8 1,9 2,10"; S_LB_CPUS="3,11"; S_LB_ACCESS_LOG=""
       S_SCALE_RATES="5000 10000 20000 30000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      # Admitted in about a second, so the drain that follows measures the consumers and not
+      # the arrival rate. Two rounds per rung, because M4 and M5 both found the consumer
+      # bistable and a single round can land in either state.
+      S_SCALE_DRAIN_STOCK=20000; S_SCALE_DRAIN_RATE=20000; S_SCALE_DRAIN_ROUNDS=2
       S_BUCKETS=16
       S_RATES=""; S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
@@ -536,6 +541,7 @@ load_scenario() {
       S_USERS=100000; S_EXTRA_ARGS=""
       if [[ "$1" == *-smoke ]]; then
         S_SCALE="1 2"; S_SCALE_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+        S_SCALE_DRAIN_STOCK=2000; S_SCALE_DRAIN_RATE=2000; S_SCALE_DRAIN_ROUNDS=1
         S_WARMUP_RATE=200; S_WARMUP_DURATION=5s; S_BUCKETS=8; S_USERS=8000
       fi ;;
     m8-window|m8-window-smoke)
@@ -967,14 +973,30 @@ fullchain_round() {
 }
 
 # One rung of the scaling ladder: N instances, the same rates, everything else unchanged.
+#
+# Two measurements per rung, because the two halves of this system scale against different
+# limits. The admission ladder is bounded by the load generator — after M3 a single instance
+# answers a request for almost nothing, and k6 on four cores runs out at about 26k req/s long
+# before the application does, so that curve can only ever be flat here. The persistence drain
+# is not: the whole stock is admitted in a second or two, and what is then measured is how fast
+# the consumers empty a backlog nobody is still feeding. That is the number M6 could not reach
+# ("2001.5 orders/s is a floor, not a ceiling; the scenario only offered 2000 req/s") and the
+# one that can actually answer whether a second and third instance add anything.
 scale_round() { # instances
-  local count="$1"
+  local count="$1" round
   start_instances "$count"
   warm_instances
   env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
     BENCH_COMMIT="${S_CURRENT_COMMIT}:i${count}" BENCH_TARGET="$STACK_LB" \
     BENCH_EDGE_CONTAINER="${STACK_NAME}-nginx" \
     DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_SCALE_RATES
+  for (( round = 1; round <= S_SCALE_DRAIN_ROUNDS; round++ )); do
+    # The commit column separates the two: :i3 is a ladder row, :i3d a drain row.
+    env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
+      BENCH_COMMIT="${S_CURRENT_COMMIT}:i${count}d" BENCH_TARGET="$STACK_LB" \
+      BENCH_EDGE_CONTAINER="${STACK_NAME}-nginx" \
+      "$0" drain "$S_SCALE_DRAIN_STOCK" "$S_SCALE_DRAIN_RATE"
+  done
   stop_instances "scale-i${count}"
 }
 
@@ -1065,6 +1087,9 @@ run_scenario() { # name
   S_PAY_TIMEOUT="${S_PAY_TIMEOUT:-24h}"; export S_PAY_TIMEOUT
   S_SCALE="${S_SCALE:-}"; export S_SCALE
   S_SCALE_RATES="${S_SCALE_RATES:-}"; export S_SCALE_RATES
+  S_SCALE_DRAIN_ROUNDS="${S_SCALE_DRAIN_ROUNDS:-0}"; export S_SCALE_DRAIN_ROUNDS
+  S_SCALE_DRAIN_STOCK="${S_SCALE_DRAIN_STOCK:-20000}"; export S_SCALE_DRAIN_STOCK
+  S_SCALE_DRAIN_RATE="${S_SCALE_DRAIN_RATE:-20000}"; export S_SCALE_DRAIN_RATE
   S_WINDOW_ROUNDS="${S_WINDOW_ROUNDS:-0}"; export S_WINDOW_ROUNDS
   S_WINDOW_SLEEP="${S_WINDOW_SLEEP:-0}"; export S_WINDOW_SLEEP
   S_WINDOW_TAIL="${S_WINDOW_TAIL:-5}"; export S_WINDOW_TAIL

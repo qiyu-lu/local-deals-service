@@ -247,13 +247,30 @@ prepare_es_data() {
   docker run --rm -u 0 -v "${ES_DATA}:/data" --entrypoint chown alpine:3 -R 1000:0 /data
 }
 
+# Docker sometimes refuses to attach a container to a bridge network it has just created:
+# "failed to add interface vethXXXX to sandbox: check bridge port state: bridge port not
+# forwarding after 200ms". A suite tears the network down and builds it again for every
+# scenario, so it meets this race often — it cost the M8 overnight run its first scenario 38
+# seconds in. The call is idempotent, and the retry has always succeeded.
+compose_up() {
+  local attempt
+  for attempt in 1 2 3; do
+    if compose up -d "$@"; then
+      return 0
+    fi
+    echo "stack: compose up failed (attempt ${attempt}/3); retrying in 5s" >&2
+    sleep 5
+  done
+  fail "compose up did not succeed after three attempts"
+}
+
 up() {
   check_isolation
   prepare_broker_store
   prepare_es_data
   # Cluster mode keeps the single node running as well: a benchmark compares a build that
   # predates the buckets, which cannot run on a cluster, against one that does.
-  compose up -d mysql redis namesrv broker elasticsearch
+  compose_up mysql redis namesrv broker elasticsearch
   wait_for Redis redis_ready
   [[ "$REDIS_MODE" != cluster ]] || start_redis_cluster
   wait_for MySQL mysql_ready
