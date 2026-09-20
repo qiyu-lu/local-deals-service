@@ -587,10 +587,13 @@ sweep_round() { # batch:threads[:pullMs[:pullBatch]]
   APP_JAR="${RUN_DIR}/current.jar" \
     APP_ARGS="${ARGS_CURRENT} --local-deals.seckill.consume.batch-size=${batch} --local-deals.seckill.consume.thread-count=${threads} --local-deals.seckill.consume.pull-interval=${pull_ms}ms --local-deals.seckill.consume.pull-batch-size=${pull_batch} --spring.datasource.hikari.maximum-pool-size=${pool}" \
     "${PROJECT_DIR}/scripts/stack.sh" app-start
-  "$0" users "$S_USERS"
+  # The sweep was written for M4, when there was only one Redis and no buckets. Without this the
+  # fixture seeds unbucketed keys on the single node while the app reads bucketed ones on the
+  # cluster, and every request is a 503.
+  env $(build_redis_env current) "$0" users "$S_USERS"
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="sweep" DURATION="$S_WARMUP_DURATION" \
-    STOCK=1000 env "$(build_env current)" "$0" step "$S_WARMUP_RATE"
-  env "$(build_env current)" BENCH_OUT="$S_RESULT" \
+    STOCK=1000 env "$(build_env current)" $(build_redis_env current) "$0" step "$S_WARMUP_RATE"
+  env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
     BENCH_COMMIT="${S_CURRENT_COMMIT}:${tag}" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
   stop_app "sweep-${tag}"
