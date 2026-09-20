@@ -55,9 +55,24 @@ public interface UserCouponMapper extends BaseMapper<UserCoupon> {
     @Update("UPDATE user_coupon SET status = #{to} WHERE coupon_no = #{couponNo} AND status = #{from}")
     int changeStatus(@Param("couponNo") String couponNo, @Param("from") String from, @Param("to") String to);
 
-    @Update("UPDATE user_coupon SET status = 'EXPIRED' WHERE status = 'AVAILABLE' AND valid_to <= NOW(3) " +
-            "LIMIT #{limit}")
-    int expireDue(@Param("limit") int limit);
+    /**
+     * The lapsed coupons a sweep should take next. The bound cannot be in the UPDATE any more:
+     * ShardingSphere refuses {@code UPDATE ... LIMIT} that routes to more than one node, because
+     * the limit would apply per node and mean something else. Reading first also gives each
+     * update its shard key.
+     */
+    @Select("SELECT id, user_id AS userId FROM user_coupon WHERE status = 'AVAILABLE' " +
+            "AND valid_to <= NOW(3) ORDER BY valid_to LIMIT #{limit}")
+    List<CouponRef> selectDue(@Param("limit") int limit);
+
+    /** Expires one coupon; the status is the CAS, so a repeated sweep changes nothing. */
+    @Update("UPDATE user_coupon SET status = 'EXPIRED' WHERE id = #{id} AND user_id = #{userId} " +
+            "AND status = 'AVAILABLE' AND valid_to <= NOW(3)")
+    int expire(@Param("id") long id, @Param("userId") long userId);
+
+    /** A coupon named the way every statement on it has to name one: with its shard key. */
+    record CouponRef(long id, long userId) {
+    }
 
     @Select("SELECT * FROM user_coupon WHERE user_id = #{userId} ORDER BY id DESC LIMIT #{limit}")
     List<UserCoupon> selectByUser(@Param("userId") long userId, @Param("limit") int limit);

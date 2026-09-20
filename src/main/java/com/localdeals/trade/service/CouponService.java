@@ -56,10 +56,18 @@ public class CouponService {
         return couponMapper.selectOwned(coupon.getId(), coupon.getUserId());
     }
 
-    /** Marks up to {@code limit} lapsed AVAILABLE coupons EXPIRED; returns how many. */
+    /**
+     * Marks up to {@code limit} lapsed AVAILABLE coupons EXPIRED; returns how many.
+     * One statement per coupon rather than one bounded UPDATE: the bound cannot cross shards.
+     * Each is an idempotent CAS, so a sweep interrupted half way simply leaves work for the next.
+     */
     @Transactional
     public int expireDue(int limit) {
-        return couponMapper.expireDue(limit);
+        int expired = 0;
+        for (UserCouponMapper.CouponRef due : couponMapper.selectDue(limit)) {
+            expired += couponMapper.expire(due.id(), due.userId());
+        }
+        return expired;
     }
 
     public List<UserCoupon> listMine(long userId) {
