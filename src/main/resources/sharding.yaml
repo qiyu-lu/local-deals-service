@@ -1,0 +1,101 @@
+# ShardingSphere-JDBC rules for the order domain (M6).
+#
+# Only the rules live here. The two physical data sources are built by
+# ShardingDataSourceConfiguration and handed to the factory, so Flyway can migrate ds_0 and ds_1
+# directly instead of through a routing layer that would have to guess where DDL belongs.
+#
+# Every sharded table is addressed by the same scheme (OrderShardSlots): slot = key % 8,
+# database = slot % 2, table = slot / 2. The columns listed per table are the ways a caller can
+# name a row; they all resolve to the same slot because an order number repeats user_id % 1024 in
+# its low bits, and pay_no / refund_no / a purchase's coupon_no are built from an order number.
+# A value that carries no gene (a grant's coupon_no, a verify_code) broadcasts.
+databaseName: local_deals
+
+rules:
+  - !SHARDING
+    tables:
+      trade_order:
+        actualDataNodes: ds_${0..1}.trade_order_${0..3}
+        databaseStrategy:
+          complex:
+            shardingColumns: user_id,order_no
+            shardingAlgorithmName: order_database
+        tableStrategy:
+          complex:
+            shardingColumns: user_id,order_no
+            shardingAlgorithmName: order_table
+      order_state_log:
+        actualDataNodes: ds_${0..1}.order_state_log_${0..3}
+        databaseStrategy:
+          complex:
+            shardingColumns: order_no
+            shardingAlgorithmName: order_database
+        tableStrategy:
+          complex:
+            shardingColumns: order_no
+            shardingAlgorithmName: order_table
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: order_row_id
+      payment_record:
+        actualDataNodes: ds_${0..1}.payment_record_${0..3}
+        databaseStrategy:
+          complex:
+            shardingColumns: order_no,pay_no
+            shardingAlgorithmName: order_database
+        tableStrategy:
+          complex:
+            shardingColumns: order_no,pay_no
+            shardingAlgorithmName: order_table
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: order_row_id
+      refund_record:
+        actualDataNodes: ds_${0..1}.refund_record_${0..3}
+        databaseStrategy:
+          complex:
+            shardingColumns: order_no,refund_no,pay_no
+            shardingAlgorithmName: order_database
+        tableStrategy:
+          complex:
+            shardingColumns: order_no,refund_no,pay_no
+            shardingAlgorithmName: order_table
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: order_row_id
+      user_coupon:
+        actualDataNodes: ds_${0..1}.user_coupon_${0..3}
+        databaseStrategy:
+          complex:
+            shardingColumns: user_id,coupon_no
+            shardingAlgorithmName: order_database
+        tableStrategy:
+          complex:
+            shardingColumns: user_id,coupon_no
+            shardingAlgorithmName: order_table
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: order_row_id
+
+    shardingAlgorithms:
+      order_database:
+        type: LOCAL_DEALS_ORDER_DATABASE
+      order_table:
+        type: LOCAL_DEALS_ORDER_TABLE
+
+    # The attached tables' primary key used to be AUTO_INCREMENT, which repeats itself in every
+    # physical table. Nothing routes by it, so any collision-free value will do.
+    keyGenerators:
+      order_row_id:
+        type: SNOWFLAKE
+
+  # Everything else — vouchers, shops, users, marketing, RBAC — stays whole in ds_0. Writes to
+  # tb_seckill_voucher.stock in particular must not be duplicated across databases, so these are
+  # single tables and not broadcast tables.
+  - !SINGLE
+    tables:
+      - ds_0.*
+    defaultDataSource: ds_0
+
+props:
+  sql-show: false

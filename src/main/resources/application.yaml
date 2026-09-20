@@ -15,11 +15,10 @@ spring:
       maximum-pool-size: "${LOCAL_DEALS_DB_POOL_SIZE:24}"
       minimum-idle: "${LOCAL_DEALS_DB_POOL_MIN_IDLE:8}"
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 1
-    validate-on-migrate: true
+    # The order domain runs on two databases, and DDL sent through a routing data source would
+    # have to be told where it belongs. ShardingDataSourceConfiguration migrates each physical
+    # database directly instead, with the settings this block used to hold.
+    enabled: false
   data:
     redis:
       host: "${LOCAL_DEALS_REDIS_HOST:localhost}"
@@ -68,6 +67,14 @@ management:
 local-deals:
   # Shared business-day boundary for DAILY_SIGN_IN and TASK_REWARD keys.
   business-time-zone: "${LOCAL_DEALS_BUSINESS_TIME_ZONE:Asia/Shanghai}"
+  sharding:
+    # ds_1 defaults to the same server as spring.datasource.url with this appended to the schema,
+    # so a deployment gains a schema instead of a second set of connection settings. Set url to
+    # put it on another server — V16's carry-over of the pre-shard rows then has nothing to read.
+    second-schema-suffix: "${LOCAL_DEALS_SHARDING_SECOND_SCHEMA_SUFFIX:_1}"
+    url: "${LOCAL_DEALS_SHARDING_URL:}"
+    username: "${LOCAL_DEALS_SHARDING_USERNAME:}"
+    password: "${LOCAL_DEALS_SHARDING_PASSWORD:}"
   client-ip:
     # Proxy headers are trusted only when the direct peer is in this explicit list.
     trusted-proxies: "${LOCAL_DEALS_TRUSTED_PROXIES:${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}}"
