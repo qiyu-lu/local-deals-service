@@ -500,13 +500,16 @@ run_scenario() { # name
   fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
   BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
+  # Take the scenario lock before anything that touches the shared stack, and arm the cleanup
+  # trap only once it is ours: a refused run must never tear down the running one's containers.
+  mkdir -p "${PROJECT_DIR}/benchmark/v2/run"
+  exec 9>"${PROJECT_DIR}/benchmark/v2/run/.scenario.lock"
+  flock -n 9 || fail "preflight: another scenario is running"
   export S_RESULT="${PROJECT_DIR}/benchmark/v2/${S_MILESTONE}/$(date +%Y%m%d-%H%M%S)-$1"
   mkdir -p "${S_RESULT}/raw"
   echo RUNNING >"${S_RESULT}/status"
   : >"${S_RESULT}/run.log"
   trap scenario_cleanup EXIT
-  exec 9>"${PROJECT_DIR}/benchmark/v2/run/.scenario.lock"
-  flock -n 9 || s_fail "preflight: another scenario is running"
   preflight
   write_manifest start
   s_log "scenario $1 -> ${S_RESULT}"
