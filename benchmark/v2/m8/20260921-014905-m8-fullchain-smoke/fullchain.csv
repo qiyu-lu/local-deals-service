@@ -1,0 +1,2 @@
+commit,voucher,stock,users,rate,pay_ratio,instances,accepted_wave1,paid_wave1,left_unpaid_wave1,never_persisted,drain1_s,returned_to_redis,db_stock_after_close,accepted_wave2,drain2_s,orders_total,orders_live,orders_closed,orders_paid,live_buyers,duplicate_buyers,oversold,redis_stock,db_stock,reservations,processing_left,admitted_by_instance,persisted_by_instance,trace_id,trace_in_log
+d1af227,11,50,4000,2000,0.7,2,50,34,16,0,6.3,16,16,16,6.3,66,50,16,34,50,0,0,0,0,50,0,0|0,0|0,4d9ffa645a4d29f28d6fee3b677b9840,none

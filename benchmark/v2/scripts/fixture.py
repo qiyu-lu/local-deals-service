@@ -244,14 +244,25 @@ def order_stats(voucher_id):
 
 
 def one_trace(voucher_id):
-    """One persisted order and the request that created it, for the end-to-end trace check."""
+    """
+    One persisted order and the request that created it, for the end-to-end trace check.
+
+    A CLOSED one by preference. Nothing on the admission path logs per request — at twenty
+    thousand a second it must not — and the batch persist logs at DEBUG, so a paid order leaves
+    no line to find. The close does: "Unpaid order closed" is written at INFO, an hour later, on
+    whichever instance received the timer message, under the trace of the request that bought
+    it. That single line is the whole chain.
+    """
     voucher_id = int(voucher_id)
+    status = os.environ.get('TRACE_ORDER_STATUS', 'CLOSED')
     # Parenthesised branches: MySQL refuses a bare LIMIT inside a UNION arm, and without one
     # this would read every order of the voucher out of all eight tables.
-    union = " UNION ALL ".join(
-        "(SELECT order_no, trace_id FROM {} WHERE voucher_id = {} AND trace_id IS NOT NULL LIMIT 1)"
-        .format(name, voucher_id) for name in order_tables())
-    row = mysql(f"SELECT order_no, trace_id FROM ({union}) o LIMIT 1;").split()
+    def pick(where):
+        union = " UNION ALL ".join(
+            "(SELECT order_no, trace_id FROM {} WHERE voucher_id = {} AND trace_id IS NOT NULL{} LIMIT 1)"
+            .format(name, voucher_id, where) for name in order_tables())
+        return mysql(f"SELECT order_no, trace_id FROM ({union}) o LIMIT 1;").split()
+    row = pick(f" AND status = '{status}'") or pick("")
     print(','.join(row) if len(row) == 2 else '')
 
 

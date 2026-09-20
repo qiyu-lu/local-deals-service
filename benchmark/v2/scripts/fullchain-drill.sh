@@ -77,20 +77,34 @@ run_k6() { # script name rate duration extra-env...
     --summary-export "/out/${name}.json" "/scripts/${script}" >"${OUT}/${name}.log" 2>&1 || true
 }
 
-# Sum one counter across every instance's own actuator, and record the split: three instances
-# that all admitted buyers is the evidence that the load really was spread.
-instance_counter() { # metric-with-labels -> "total per_instance"
-  local metric="$1" n value total=0 split=""
+# One counter per instance, as "a|b|c". Three instances that all admitted buyers is the
+# evidence that the load really was spread rather than pinned to whoever nginx liked.
+instance_counter() { # metric-with-labels -> "a|b|c"
+  local metric="$1" n value split=""
   for (( n = 1; n <= APP_INSTANCES; n++ )); do
     value="$(curl -fsS --max-time 10 "http://127.0.0.1:$(( MANAGEMENT_PORT + n - 1 ))/actuator/prometheus" 2>/dev/null |
       awk -v m="$metric" 'index($0, m) == 1 { print $2; exit }')"
     [[ -n "$value" ]] || value=0
-    value="${value%%.*}"
-    total=$(( total + value ))
-    split="${split}${split:+|}${value}"
+    split="${split}${split:+|}${value%%.*}"
   done
-  echo "${total} ${split}"
+  echo "$split"
 }
+
+# The warm-up went through the same edge to the same instances, so the counters have to be read
+# before and after and subtracted, or the split is mostly warm-up.
+split_delta() { # before after -> "a|b|c"
+  local -a before after
+  IFS='|' read -ra before <<<"$1"
+  IFS='|' read -ra after <<<"$2"
+  local n out=""
+  for n in "${!after[@]}"; do
+    out="${out}${out:+|}$(( ${after[n]:-0} - ${before[n]:-0} ))"
+  done
+  echo "$out"
+}
+
+ACCEPTED_METRIC='local_deals_seckill_requests_total{result="accepted"}'
+PERSISTED_METRIC='local_deals_seckill_consume_batch_size_orders_count{stage="persisted"}' 
 
 wait_until_orders_stop() { # voucher expected -> seconds waited
   local voucher="$1" expected="$2" started previous=-1 stable=0 count
@@ -117,7 +131,8 @@ voucher="$(SECKILL_BUCKETS="$BUCKETS" python3 "$FIXTURE" voucher "$STOCK")"
 stamp="$(date +%H%M%S)"
 
 # ---- wave 1: everyone tries, some pay ------------------------------------------------------
-accepted_before="$(instance_counter 'local_deals_seckill_requests_total{result="accepted",}' | cut -d' ' -f1)"
+accepted_before="$(instance_counter "$ACCEPTED_METRIC")"
+persisted_before="$(instance_counter "$PERSISTED_METRIC")"
 wave1="fullchain-wave1-v${voucher}-${stamp}"
 run_k6 fullchain.js "$wave1" "$RATE" "$(( USERS / RATE + 1 ))s" \
   -e USER_OFFSET=0 -e PAY_RATIO="$PAY_RATIO" -e PAY_SECRET="$PAY_SECRET" \
@@ -129,9 +144,19 @@ never_persisted="$(k6_metric "${OUT}/${wave1}.json" phase_never_persisted)"
 drain1="$(wait_until_orders_stop "$voucher" "$accepted1")"
 stats1="$(stats_of "$voucher")"
 
-# One order, and the instance whose log holds the request that created it. This is the whole
-# point of the trace: the row is in one of eight tables, the log line is on one of three hosts,
-# and nothing else connects them.
+# ---- the unpaid orders time out and give their units back ----------------------------------
+echo "waiting up to ${CLOSE_WAIT_S}s for ${unpaid1} unpaid orders to close" >&2
+closed_deadline=$(( SECONDS + CLOSE_WAIT_S ))
+while (( unpaid1 > 0 && SECONDS < closed_deadline )); do
+  (( $(redis_stock_of "$voucher") < unpaid1 )) || break
+  sleep 5
+done
+redis_stock_after_close="$(redis_stock_of "$voucher")"
+db_stock_after_close="$(db_stock_of "$voucher")"
+
+# One closed order, and the instance whose log holds the request that bought it. This is the
+# whole point of the trace: the row is in one of eight tables, the line was written a minute
+# later by whichever instance received the timer message, and nothing else connects them.
 trace_row="$(python3 "$FIXTURE" one-trace "$voucher")"
 trace_id="${trace_row##*,}"
 trace_found="none"
@@ -143,22 +168,17 @@ if [[ -n "$trace_id" && "$trace_row" == *,* ]]; then
       break
     fi
   done
-  # nginx saw it first; its access log says which upstream served that request.
-  if [[ -f "${RUN_DIR}/access.log" ]]; then
-    grep -m1 -- "$trace_id" "${RUN_DIR}/access.log" >"${OUT}/${wave1}-trace.txt" 2>/dev/null || true
-  fi
-  echo "order=${trace_row%,*} trace=${trace_id} app_log=${trace_found}" >>"${OUT}/${wave1}-trace.txt"
+  {
+    # nginx saw it first; its access log says which upstream served that request.
+    [[ ! -f "${RUN_DIR}/access.log" ]] || grep -m1 -- "$trace_id" "${RUN_DIR}/access.log" || true
+    echo "order=${trace_row%,*} trace=${trace_id} app_log=${trace_found}"
+    for log in "${RUN_DIR}"/app.log "${RUN_DIR}"/app-i*.log; do
+      [[ -f "$log" ]] || continue
+      grep -h -- "$trace_id" "$log" || true
+    done
+  } >"${OUT}/${wave1}-trace.txt" 2>/dev/null || true
 fi
 
-# ---- the unpaid orders time out and give their units back ----------------------------------
-echo "waiting up to ${CLOSE_WAIT_S}s for ${unpaid1} unpaid orders to close" >&2
-closed_deadline=$(( SECONDS + CLOSE_WAIT_S ))
-while (( unpaid1 > 0 && SECONDS < closed_deadline )); do
-  (( $(redis_stock_of "$voucher") < unpaid1 )) || break
-  sleep 5
-done
-redis_stock_after_close="$(redis_stock_of "$voucher")"
-db_stock_after_close="$(db_stock_of "$voucher")"
 
 # ---- wave 2: the returned units are taken again ---------------------------------------------
 wave2="fullchain-wave2-v${voucher}-${stamp}"
@@ -176,8 +196,8 @@ redis_stock="$(redis_stock_of "$voucher")"
 db_stock="$(db_stock_of "$voucher")"
 reservations="$(reservations_of "$voucher")"
 processing_left="$(processing_left_total)"
-read -r accepted_total accepted_split <<<"$(instance_counter 'local_deals_seckill_requests_total{result="accepted",}')"
-read -r persisted_total persisted_split <<<"$(instance_counter 'local_deals_seckill_consume_batch_size_orders_count{stage="persisted",}')"
+accepted_split="$(split_delta "$accepted_before" "$(instance_counter "$ACCEPTED_METRIC")")"
+persisted_split="$(split_delta "$persisted_before" "$(instance_counter "$PERSISTED_METRIC")")"
 oversold=$(( live > STOCK ? live - STOCK : 0 ))
 duplicate_buyers=$(( live - live_buyers ))
 
