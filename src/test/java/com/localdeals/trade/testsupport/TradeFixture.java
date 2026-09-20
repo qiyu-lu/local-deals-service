@@ -38,6 +38,18 @@ public final class TradeFixture {
         return this;
     }
 
+    /**
+     * An order number for {@code userId}, one per {@code seed}.
+     *
+     * <p>The low ten bits repeat {@code user_id % 1024}, which is what the Snowflake generator
+     * does and what the sharding rules require: an insert names both order_no and user_id, and
+     * ShardingSphere refuses a row whose two keys would route to different databases. A test
+     * that makes up an order number has to make up a real one.</p>
+     */
+    public static long orderNo(long seed, long userId) {
+        return (seed << 10) | Math.floorMod(userId, 1024L);
+    }
+
     public int dbStock() {
         return jdbc.queryForObject("SELECT stock FROM tb_seckill_voucher WHERE voucher_id = ?",
                 Integer.class, voucherId);

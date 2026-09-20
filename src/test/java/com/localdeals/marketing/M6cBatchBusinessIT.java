@@ -542,8 +542,12 @@ class M6cBatchBusinessIT {
                 "WHERE t.code LIKE ?", "M6C_%");
         jdbcTemplate.update("DELETE FROM tb_voucher_campaign WHERE name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_marketing_tag WHERE code LIKE ?", "M6C_%");
-        jdbcTemplate.update("DELETE o FROM trade_order o JOIN tb_user u ON u.id=o.user_id " +
-                "WHERE u.nick_name LIKE ?", FIXTURE_PREFIX + "%");
+        // trade_order is sharded: a DELETE joining it to tb_user spans databases, which is not a
+        // statement any more. Find the users first, then delete by the key that routes.
+        for (Long userId : jdbcTemplate.queryForList(
+                "SELECT id FROM tb_user WHERE nick_name LIKE ?", Long.class, FIXTURE_PREFIX + "%")) {
+            jdbcTemplate.update("DELETE FROM trade_order WHERE user_id = ?", userId);
+        }
         jdbcTemplate.update("DELETE FROM tb_user WHERE nick_name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_admin_account WHERE username LIKE ?", ACCOUNT_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_merchant WHERE code LIKE ?", FIXTURE_PREFIX + "%");
