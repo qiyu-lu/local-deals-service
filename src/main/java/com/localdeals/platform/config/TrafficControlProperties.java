@@ -23,7 +23,6 @@ public class TrafficControlProperties {
         }
         requireDurationRange(seckill.window, Duration.ofSeconds(1), Duration.ofSeconds(60),
                 "seckill.window");
-        requireLimit(seckill.activityLimit, 1_000_000, "seckill.activity-limit");
         requireLimit(seckill.userLimit, 10_000, "seckill.user-limit");
         requireLimit(seckill.ipLimit, 100_000, "seckill.ip-limit");
         requireConcurrency(read.dbMaxConcurrent, "read.db-max-concurrent");
@@ -63,7 +62,6 @@ public class TrafficControlProperties {
     public static class Seckill {
         private boolean enabled = true;
         private Duration window = Duration.ofSeconds(1);
-        private int activityLimit = 300;
         private int userLimit = 2;
         private int ipLimit = 100;
     }

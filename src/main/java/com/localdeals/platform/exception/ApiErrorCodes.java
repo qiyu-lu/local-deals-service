@@ -9,6 +9,8 @@ public final class ApiErrorCodes {
     public static final String ADMIN_LOGIN_RATE_LIMITED = "ADMIN_LOGIN_RATE_LIMITED";
     public static final String ADMIN_LOGIN_UNAVAILABLE = "ADMIN_LOGIN_UNAVAILABLE";
     public static final String SECKILL_RATE_LIMITED = "SECKILL_RATE_LIMITED";
+    public static final String SECKILL_BUSY = "SECKILL_BUSY";
+    public static final String SECKILL_TOKEN_INVALID = "SECKILL_TOKEN_INVALID";
     public static final String SECKILL_OUT_OF_STOCK = "SECKILL_OUT_OF_STOCK";
     public static final String SECKILL_DUPLICATE = "SECKILL_DUPLICATE";
     public static final String SECKILL_NOT_STARTED = "SECKILL_NOT_STARTED";

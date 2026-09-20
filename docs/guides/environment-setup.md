@@ -23,6 +23,17 @@ scripts/bench.sh step 500 1000 2000 # 开环阶梯压测，结果写 benchmark/v
 scripts/stack.sh down               # 删除隔离栈及其 volume
 ```
 
+里程碑的长压测用场景入口，无人值守：自带独立隔离栈（`STACK_ID=m3bench`，3xxxx 端口）、
+构建基线 tag 与当前 HEAD、预热、阶梯、落库、故障演练，结束后删除容器。结果目录
+`benchmark/v2/m3/<时间戳>-<场景>/` 里有 `status`（RUNNING/DONE/FAILED + 原因）、`manifest.json`、
+`run.log`、`summary.csv`、`kill-drill.csv` 与 `raw/`。工作区有未提交改动时拒绝运行。
+
+```bash
+scripts/bench.sh m3-smoke                                   # 缩小参数冒烟，约 6 分钟
+nohup scripts/bench.sh m3 > /tmp/m3-bench.out 2>&1 &        # 正式场景
+cat benchmark/v2/m3/*-m3/status                             # DONE 即完成
+```
+
 ## 后端接口检查
 
 可以访问下面的接口检查后端是否正常启动：

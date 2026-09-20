@@ -58,9 +58,9 @@ stateDiagram-v2
 | 方向 | 当前实现 |
 | --- | --- |
 | 商户后台与隔离 | 独立后台身份、固定角色 RBAC、merchant scope、范围 SQL 与 WebSocket 会话隔离 |
-| 秒杀一致性 | Redis Lua 精确预约 + RocketMQ 事务消息 + MySQL 唯一约束与幂等落库 |
+| 秒杀准入漏斗 | nginx 限流 → 本地售罄标记（0 次网络 IO）→ 按剩余库存定速的本地令牌桶 → 单次 Redis Lua（限频 + 判重 + 扣减 + 预占）；本地 Snowflake 发号；只有成功者发一条普通消息，预占即 outbox |
 | 订单闭环 | 状态机 CAS、RocketMQ 5 定时消息关单 + 兜底扫描、签名回调幂等、自动退款、统一券资产与核销、后台操作审计 |
-| 恢复与对账 | `PROCESSING` 状态、精确补偿、超龄对账、`SUSPENDED` 与 `QUARANTINE` |
+| 恢复与对账 | `PROCESSING` 预占、对账器重投丢失的消息、超时精确补偿、`SUSPENDED`；MySQL 唯一约束与幂等落库兜底 |
 | 点赞与热榜 | MySQL 点赞事实 + Transactional Outbox + generation-fenced 可重建 Redis 热榜 |
 | 营销闭环 | 标签、签到、统一 Grant、有限批量 Job 与通知 Outbox |
 | 运行保障 | 入口限流、有界缓存降级、Prometheus 指标与专用环境故障演练 |

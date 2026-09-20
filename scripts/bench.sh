@@ -8,6 +8,10 @@
 #                                               measures how fast MySQL catches up
 #   scripts/bench.sh profile SECONDS NAME       async-profiler flame graph of the running app
 #
+#   scripts/bench.sh m3 | m3-smoke              unattended scenario (see "Scenarios" below): own stack,
+#                                               builds, warm-up, ladder, drains, crash drills, cleanup;
+#                                               results in benchmark/v2/m3/<timestamp>-<scenario>/
+#
 # Every run writes raw k6 JSON/logs under benchmark/v2/<MILESTONE>/raw/ (gitignored) and appends
 # one row per run to benchmark/v2/<MILESTONE>/summary.csv. The commit column is HEAD unless
 # BENCH_COMMIT names the build under test (e.g. a jar built from an older tag).
@@ -18,8 +22,16 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${1:-}" in
+  m3|m3-smoke)
+    # Scenarios own a separate stack, so they never touch the stack used for integration tests.
+    export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
+      NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
+      APP_PORT="${APP_PORT:-38083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-38184}" \
+      STACK_SUBNET="${STACK_SUBNET:-172.30.57.0/24}" ;;
+esac
 MILESTONE="${MILESTONE:-m0}"
-OUT_DIR="${PROJECT_DIR}/benchmark/v2/${MILESTONE}"
+OUT_DIR="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE}}"
 RAW_DIR="${OUT_DIR}/raw"
 SUMMARY="${OUT_DIR}/summary.csv"
 STACK_ID="${STACK_ID:-v2}"
@@ -52,6 +64,12 @@ container_ns() {
   cat "/sys/fs/cgroup/cpu,cpuacct/docker/${id}/cpuacct.usage"
 }
 
+# Sum of max offsets over all queues of a topic: messages ever written to it.
+topic_offset() {
+  docker exec "${STACK_NAME}-broker" sh mqadmin topicStatus -n namesrv:9876 -t "$1" 2>/dev/null |
+    awk -v b="$STACK_NAME" '$1 == b { s += $4 } END { print s + 0 }'
+}
+
 token_count() { wc -l <"${PROJECT_DIR}/benchmark/v2/run/tokens.csv"; }
 
 # Each run starts where the previous one stopped so a user never repeats inside the
@@ -66,14 +84,23 @@ advance_user_cursor() { echo $(( ($(next_user_offset) + $1) % $(token_count) )) 
 run_k6() { # name voucher rate duration
   local name="$1" voucher="$2" rate="$3" duration="$4" offset
   offset="$(next_user_offset)"
-  docker run --rm --network host --cpuset-cpus "$K6_CPUS" --user "$(id -u):$(id -g)" \
+  # The load generator's own CPU goes into the summary: a saturated client caps the ladder too.
+  local container="${STACK_NAME}-k6-$$"
+  ( while ! id="$(docker inspect -f '{{.Id}}' "$container" 2>/dev/null)"; do sleep 0.2; done
+    f="/sys/fs/cgroup/cpu,cpuacct/docker/${id}/cpuacct.usage"
+    while [[ -r "$f" ]] && v="$(cat "$f" 2>/dev/null)"; do echo "$v" >"${RAW_DIR}/${name}.k6ns"; sleep 0.5; done
+  ) &
+  local sampler=$!
+  docker run --rm --name "$container" --network host --cpuset-cpus "$K6_CPUS" --user "$(id -u):$(id -g)" \
     -v "${PROJECT_DIR}/benchmark/v2/scripts:/scripts:ro" \
     -v "${PROJECT_DIR}/benchmark/v2/run:/data:ro" \
     -v "${RAW_DIR}:/out" \
     "$K6_IMAGE" run --quiet \
     -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$rate" -e DURATION="$duration" \
     -e TOKENS=/data/tokens.csv -e USER_OFFSET="$offset" \
+    ${SECKILL_TOKEN_SECRET:+-e SECKILL_TOKEN_SECRET="$SECKILL_TOKEN_SECRET"} \
     --summary-export "/out/${name}.json" /scripts/seckill.js >"${RAW_DIR}/${name}.log" 2>&1 || true
+  kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
   [[ -s "${RAW_DIR}/${name}.json" ]] || fail "k6 produced no summary; see ${RAW_DIR}/${name}.log"
 }
 
@@ -110,6 +137,8 @@ one_run() { # kind rate stock duration
   name="${kind}-r${rate}-s${stock}-$(date +%H%M%S)"
   pid="$(app_pid)"
   hz="$(getconf CLK_TCK)"
+  local half0 half1 msg0 msg1
+  half0="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg0="$(topic_offset seckill-order-topic)"
   for svc in mysql redis broker; do dep0[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
   sample_orders "$voucher" "${RAW_DIR}/${name}-orders.csv" &
   local sampler=$!
@@ -129,13 +158,16 @@ PY
 )"
   drain="$(wait_drain "$voucher" "$accepted")"
   sleep 1; kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
+  half1="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg1="$(topic_offset seckill-order-topic)"
   python3 - "$SUMMARY" "${RAW_DIR}/${name}.json" "$kind" "$rate" "$stock" "$voucher" "$drain" \
     "$(python3 -c "print(round(($ticks1-$ticks0)/$hz/($ended-$started),2))")" \
     "$(python3 -c "print(round(($ended-$started),1))")" \
     "${dep0[mysql]}:${dep1[mysql]}" "${dep0[redis]}:${dep1[redis]}" "${dep0[broker]}:${dep1[broker]}" \
-    "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" <<'PY'
+    "${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}" \
+    "$(( half1 - half0 ))" "$(( msg1 - msg0 ))" <<'PY'
 import csv, json, os, sys
-summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit = sys.argv[1:]
+summary, raw, kind, rate, stock, voucher, drain, app_cpu, wall, mysql_ns, redis_ns, broker_ns, commit, \
+    half_msgs, order_msgs = sys.argv[1:]
 samples = [tuple(float(x) for x in line.split(',')) for line in open(raw[:-5] + '-orders.csv') if ',' in line]
 m = json.load(open(raw))['metrics']
 wall = float(wall)
@@ -144,6 +176,11 @@ def cores(pair):
     return round((b - a) / 1e9 / wall, 2)
 def val(metric, key, default=0):
     return m.get(metric, {}).get(key, default)
+def k6_cores():
+    try:
+        return round(int(open(raw[:-5] + '.k6ns').read()) / 1e9 / wall, 2)
+    except (OSError, ValueError):
+        return ''
 outcomes = {k[len('outcome_'):]: int(v['count']) for k, v in m.items() if k.startswith('outcome_')}
 accepted = outcomes.get('accepted', 0)
 def persist_rate():
@@ -172,6 +209,9 @@ row = {
     'persist_orders_per_s': persist_rate(),
     'app_cpu_cores': float(app_cpu), 'mysql_cpu_cores': cores(mysql_ns),
     'redis_cpu_cores': cores(redis_ns), 'broker_cpu_cores': cores(broker_ns),
+    # messages written during the run, drain included: half messages and order messages
+    'half_msgs': int(half_msgs), 'order_msgs': int(order_msgs),
+    'k6_cpu_cores': k6_cores(),
     'raw': os.path.basename(raw),
 }
 new = not os.path.exists(summary)
@@ -197,10 +237,249 @@ profile() { # seconds name
   echo "${RAW_DIR}/${name}.html"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Scenarios: one command, no supervision. Each run gets benchmark/v2/<milestone>/<ts>-<name>/:
+#   status          RUNNING, DONE, or FAILED: <phase>: <reason>
+#   manifest.json   commits, scenario parameters, CPU pinning, JVM options, machine load
+#   run.log         every phase with its start/end time and output
+#   summary.csv     one row per ladder step / drain (same columns as the per-milestone file)
+#   kill-drill.csv  one row per crash drill
+#   raw/            k6 JSON and logs, order samples (gitignored)
+# Every phase has a timeout; the first failure stops the run, records why, and the stack and
+# app are always torn down. Preflight refuses a dirty worktree (results must map to a commit),
+# busy ports and a nearly full disk.
+# ---------------------------------------------------------------------------------------------
+M3_LIMITS_BASELINE="--local-deals.traffic.seckill.activity-limit=100000 --local-deals.traffic.seckill.ip-limit=100000"
+M3_LIMITS_CURRENT="--local-deals.traffic.seckill.ip-limit=100000"
+M3_TOKEN_SECRET="bench-seckill-token-secret"
+
+load_scenario() {
+  case "$1" in
+    m3)
+      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
+      S_RATES="500 1000 2000 5000 10000 15000 20000 25000 30000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=3; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_KILL_ROUNDS=2; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
+      S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m3-smoke)
+      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2
+      S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+      S_RATES="500 2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
+      # only the smoke shortens reconciliation, so the drill converges within minutes
+      S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
+      S_USERS=20000 ;;
+    *) fail "unknown scenario $1" ;;
+  esac
+}
+
+S_RESULT="${S_RESULT:-}"
+s_log() { echo "$(date '+%F %T') $*" | tee -a "${S_RESULT}/run.log" >&2; }
+s_fail() { echo "FAILED: $*" >"${S_RESULT}/status"; s_log "FAILED: $*"; exit 1; }
+
+# phase NAME TIMEOUT_SECONDS function args... ; the function runs in a re-executed bench.sh
+# (timeout cannot run a shell function), output goes to run.log
+phase() {
+  local name="$1" limit="$2"; shift 2
+  s_log "phase ${name} start (timeout ${limit}s)"
+  local rc=0
+  timeout --kill-after=30 "$limit" "$0" _phase "$@" >>"${S_RESULT}/run.log" 2>&1 || rc=$?
+  if (( rc == 124 || rc == 137 )); then s_fail "${name}: timed out after ${limit}s"; fi
+  (( rc == 0 )) || s_fail "${name}: exit ${rc} (see run.log)"
+  s_log "phase ${name} done"
+}
+
+scenario_cleanup() {
+  local rc=$?
+  [[ -n "$S_RESULT" ]] || return
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop >>"${S_RESULT}/run.log" 2>&1 || true
+  docker unpause "${STACK_NAME}-broker" >/dev/null 2>&1 || true
+  if [[ -z "${KEEP_STACK:-}" ]]; then
+    "${PROJECT_DIR}/scripts/stack.sh" down >>"${S_RESULT}/run.log" 2>&1 || true
+  fi
+  git -C "$PROJECT_DIR" worktree remove --force "${RUN_DIR}/baseline-src" >/dev/null 2>&1 || true
+  if (( rc != 0 )) && grep -qx RUNNING "${S_RESULT}/status" 2>/dev/null; then
+    echo "FAILED: interrupted (exit ${rc})" >"${S_RESULT}/status"
+  fi
+  echo "$(date '+%F %T') cleanup done; status: $(cat "${S_RESULT}/status")" >>"${S_RESULT}/run.log"
+}
+
+preflight() {
+  local dirty
+  # earlier result directories are untracked by design and do not count
+  dirty="$(git -C "$PROJECT_DIR" status --porcelain -- . ':(exclude)benchmark/v2/*/[0-9]*-*/')"
+  if [[ -n "$dirty" ]]; then
+    # ALLOW_DIRTY=1 is for smoke runs only; the dirty files are kept in manifest.json.
+    [[ -n "${ALLOW_DIRTY:-}" ]] ||
+      s_fail "preflight: the worktree has uncommitted changes; commit them so results map to a commit"
+    s_log "preflight: ALLOW_DIRTY set, running with uncommitted changes: ${dirty//$'\n'/; }"
+  fi
+  local port
+  for port in "$MYSQL_PORT" "$REDIS_PORT" "$NAMESRV_PORT" "$BROKER_PORT" "$ES_PORT" "$APP_PORT" "$MANAGEMENT_PORT"; do
+    ! ss -ltn "( sport = :${port} )" | grep -q LISTEN || s_fail "preflight: port ${port} is already in use"
+  done
+  local path free
+  for path in "$PROJECT_DIR" "$(dirname "$BROKER_STORE_ROOT_CHECK")"; do
+    [[ -d "$path" ]] || continue
+    free="$(df -Pk "$path" | awk 'NR==2 {print int($4/1024/1024)}')"
+    (( free >= 15 )) || s_fail "preflight: only ${free} GB free under ${path} (need 15)"
+  done
+  command -v docker >/dev/null && docker info >/dev/null 2>&1 || s_fail "preflight: docker is not usable"
+  [[ -x "${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}/bin/java" ]] || s_fail "preflight: no JDK 21 (APP_JAVA_HOME)"
+  command -v mysql >/dev/null && command -v redis-cli >/dev/null || s_fail "preflight: mysql and redis-cli clients are required"
+}
+
+write_manifest() { # phase-free: captured at start and again at the end
+  python3 - "${S_RESULT}/manifest.json" "$@" <<'PY'
+import json, os, subprocess, sys, time
+path, when = sys.argv[1], sys.argv[2]
+def sh(cmd):
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30).stdout.strip()
+    except Exception as e:
+        return f"error: {e}"
+m = json.load(open(path)) if os.path.exists(path) else {}
+if when == 'start':
+    m.update({
+        'scenario': os.environ['S_NAME'],
+        'started_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        'commit': sh('git rev-parse HEAD'), 'commit_short': sh('git rev-parse --short HEAD'),
+        'uncommitted_changes': sh('git status --porcelain'),
+        'baseline': {'tag': os.environ['S_BASELINE_TAG'], 'commit': sh(f"git rev-parse {os.environ['S_BASELINE_TAG']}^{{commit}}")},
+        'parameters': {k[2:].lower(): v for k, v in os.environ.items() if k.startswith('S_') and k not in ('S_NAME', 'S_RESULT')},
+        'cpu_pinning': {'app': os.environ['APP_CPUS'], 'dependencies': os.environ['DEPS_CPUS'], 'k6': os.environ['K6_CPUS']},
+        'jvm_options': os.environ.get('APP_JAVA_OPTS', '-Xms2g -Xmx2g'),
+        'app_args': {'baseline': os.environ['ARGS_BASELINE'], 'current': os.environ['ARGS_CURRENT']},
+        'stack': {'id': os.environ['STACK_ID'], 'app_port': os.environ['APP_PORT']},
+        'k6_image': os.environ['K6_IMAGE'],
+        'machine': {'cpu': sh("lscpu | sed -n 's/^Model name: *//p'"), 'nproc': sh('nproc'),
+                    'mem': sh("free -g | awk 'NR==2 {print $2\" GB\"}'"), 'kernel': sh('uname -r')},
+        'load_at_start': {'loadavg': sh('cat /proc/loadavg'),
+                          'other_containers': sh("docker ps --format '{{.Names}}' | grep -v '^" + os.environ['STACK_NAME'] + "-' | sort | tr '\\n' ' '")},
+    })
+else:
+    m['finished_at'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+    m['load_at_end'] = {'loadavg': sh('cat /proc/loadavg')}
+    m['status'] = open(os.path.join(os.path.dirname(path), 'status')).read().strip()
+json.dump(m, open(path, 'w'), indent=2, ensure_ascii=False)
+PY
+}
+
+stack_up() { "${PROJECT_DIR}/scripts/stack.sh" up; }
+
+build_jars() {
+  local src="${RUN_DIR}/baseline-src"
+  git -C "$PROJECT_DIR" worktree remove --force "$src" >/dev/null 2>&1 || true
+  git -C "$PROJECT_DIR" worktree add --detach "$src" "$S_BASELINE_TAG"
+  (cd "$src" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
+  cp "$src"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/baseline.jar"
+  (cd "$PROJECT_DIR" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
+  cp "$PROJECT_DIR"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/current.jar"
+}
+
+# A fresh app for every measurement, fresh login tokens (they expire ~30 min after last use)
+# and a warm-up that is not recorded in summary.csv.
+start_build() { # which
+  local which="$1"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  # the app first: on a fresh stack its Flyway migrations create the tables the fixture fills
+  APP_JAR="${RUN_DIR}/${which}.jar" APP_ARGS="$(build_args "$which")" "${PROJECT_DIR}/scripts/stack.sh" app-start
+  "$0" users "$S_USERS"
+  BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="$(build_commit "$which")" DURATION="$S_WARMUP_DURATION" \
+    STOCK=1000 "$0" step "$S_WARMUP_RATE"
+}
+build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
+build_commit() { [[ "$1" == baseline ]] && git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}" || git -C "$PROJECT_DIR" rev-parse --short HEAD; }
+build_env() { # which -> k6 needs the token secret only for the current build
+  [[ "$1" == current ]] && echo "SECKILL_TOKEN_SECRET=${M3_TOKEN_SECRET}" || echo "SECKILL_TOKEN_SECRET="
+}
+
+ladder() { # which
+  start_build "$1"
+  env "$(build_env "$1")" BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+    DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_RATES
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+drain_round() { # which
+  start_build "$1"
+  env "$(build_env "$1")" BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+    "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+kill_round() { # mode: kill | broker
+  start_build current
+  local line broker_down=""
+  [[ "$1" == broker ]] && broker_down=1
+  line="$(env "$(build_env current)" BENCH_OUT="$S_RESULT" APP_JAR="${RUN_DIR}/current.jar" \
+    APP_ARGS="$ARGS_CURRENT" BROKER_DOWN="$broker_down" DRILL_TIMEOUT=1800 \
+    "${PROJECT_DIR}/benchmark/v2/scripts/kill-drill.sh" "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
+  [[ "$line" == voucher=* ]] || { echo "kill drill printed no result: ${line}"; return 1; }
+  python3 - "${S_RESULT}/kill-drill.csv" "$(git -C "$PROJECT_DIR" rev-parse --short HEAD)" "$1" "$line" <<'PY'
+import csv, os, sys
+path, commit, mode, line = sys.argv[1:]
+row = {'commit': commit, 'mode': mode, **dict(kv.split('=', 1) for kv in line.split(','))}
+new = not os.path.exists(path)
+with open(path, 'a', newline='') as f:
+    w = csv.DictWriter(f, fieldnames=list(row))
+    if new:
+        w.writeheader()
+    w.writerow(row)
+PY
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+run_scenario() { # name
+  cd "$PROJECT_DIR"
+  export S_NAME="$1"
+  load_scenario "$1"
+  export S_MILESTONE S_BASELINE_TAG S_WARMUP_RATE S_WARMUP_DURATION S_RATES S_STEP_DURATION S_STEP_STOCK \
+    S_DRAIN_ROUNDS S_DRAIN_STOCK S_DRAIN_RATE S_KILL_ROUNDS S_BROKER_KILL_ROUNDS S_KILL_STOCK S_KILL_RATE \
+    S_KILL_AFTER S_EXTRA_ARGS S_USERS STACK_NAME K6_IMAGE
+  # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
+  export APP_CPUS="${APP_CPUS:-0-3,8-11}" DEPS_CPUS="${DEPS_CPUS:-4-5,12-13}" K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
+  K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
+  export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
+  export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
+  BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
+  export S_RESULT="${PROJECT_DIR}/benchmark/v2/${S_MILESTONE}/$(date +%Y%m%d-%H%M%S)-$1"
+  mkdir -p "${S_RESULT}/raw"
+  echo RUNNING >"${S_RESULT}/status"
+  : >"${S_RESULT}/run.log"
+  trap scenario_cleanup EXIT
+  exec 9>"${PROJECT_DIR}/benchmark/v2/run/.scenario.lock"
+  flock -n 9 || s_fail "preflight: another scenario is running"
+  preflight
+  write_manifest start
+  s_log "scenario $1 -> ${S_RESULT}"
+
+  phase stack-up 900 stack_up
+  phase build 1200 build_jars
+  local rounds_timeout=$(( 600 + $(wc -w <<<"$S_RATES") * 180 ))
+  phase ladder-baseline "$rounds_timeout" ladder baseline
+  phase ladder-current "$rounds_timeout" ladder current
+  local i
+  for (( i = 1; i <= S_DRAIN_ROUNDS; i++ )); do
+    phase "drain-baseline-${i}" 1500 drain_round baseline
+    phase "drain-current-${i}" 1500 drain_round current
+  done
+  for (( i = 1; i <= S_KILL_ROUNDS; i++ )); do phase "kill-drill-${i}" 2400 kill_round kill; done
+  for (( i = 1; i <= S_BROKER_KILL_ROUNDS; i++ )); do phase "broker-kill-drill-${i}" 2700 kill_round broker; done
+  [[ -s "${S_RESULT}/summary.csv" ]] || s_fail "result: summary.csv is empty"
+  echo DONE >"${S_RESULT}/status"
+  write_manifest end
+  s_log "scenario $1 done -> ${S_RESULT}"
+}
+
 case "${1:-}" in
   users) python3 "$FIXTURE" users "${2:?count}"; rm -f "$USER_CURSOR_FILE" ;;
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  m3|m3-smoke) run_scenario "$1" ;;
+  _phase) shift; "$@" ;;
+  *) sed -n '2,20p' "$0"; exit 2 ;;
 esac

@@ -16,6 +16,8 @@ public class SeckillProperties {
     private String topic = "seckill-order-topic";
     private String consumerGroup = "seckill-consumer-group";
     private Reconciliation reconciliation = new Reconciliation();
+    private Funnel funnel = new Funnel();
+    private Token token = new Token();
 
     @PostConstruct
     public void validate() {
@@ -27,6 +29,46 @@ public class SeckillProperties {
             throw new IllegalStateException("local-deals.seckill.reconciliation must not be null");
         }
         reconciliation.validate();
+        if (funnel == null) {
+            throw new IllegalStateException("local-deals.seckill.funnel must not be null");
+        }
+        funnel.validate();
+        if (token == null) {
+            throw new IllegalStateException("local-deals.seckill.token must not be null");
+        }
+        token.validate();
+    }
+
+    /** Short-lived purchase tokens, issued only while an activity is open. */
+    @Data
+    public static class Token {
+        private boolean required = true;
+        private String secret = "local-dev-seckill-token-secret";
+        private Duration ttl = Duration.ofMinutes(10);
+
+        void validate() {
+            if (secret == null || secret.isBlank() || ttl == null || ttl.getSeconds() < 10) {
+                throw new IllegalStateException("local-deals.seckill.token needs a secret and a ttl of at least 10s");
+            }
+        }
+    }
+
+    /** The JVM-local layers of the admission funnel. */
+    @Data
+    public static class Funnel {
+        /** L2: permits per second per instance = remaining stock x this factor. */
+        private double stockFactor = 2.0;
+        /** L2: floor of that rate, so a nearly sold-out voucher still admits some traffic. */
+        private double minPermitsPerSecond = 50;
+        /** L1: a voucher flagged sold out lets one probe per interval through to Redis. */
+        private Duration soldOutProbeInterval = Duration.ofSeconds(1);
+
+        void validate() {
+            if (!(stockFactor > 0) || !(minPermitsPerSecond >= 1) || soldOutProbeInterval == null
+                    || soldOutProbeInterval.toMillis() < 10) {
+                throw new IllegalStateException("local-deals.seckill.funnel settings are out of range");
+            }
+        }
     }
 
     @Data

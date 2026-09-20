@@ -316,7 +316,10 @@
 
         this.$message({ message: '正在提交抢购请求...', type: 'info', duration: 1500 });
 
-        axios.post("/voucher-order/seckill/" + v.id)
+        // 活动开始后才能领到与本人绑定的短期令牌，下单时必须带上
+        axios.get("/voucher-order/seckill/" + v.id + "/token")
+          .then(({ data: seckillToken }) => axios.post("/voucher-order/seckill/" + v.id, null,
+            { headers: { "X-Seckill-Token": seckillToken } }))
           .then(({ data }) => {
             // data = orderId（Lua 校验通过，消息已入队）
             this.$message({ message: '请求已提交，等待下单结果...', type: 'info', duration: 2500 });

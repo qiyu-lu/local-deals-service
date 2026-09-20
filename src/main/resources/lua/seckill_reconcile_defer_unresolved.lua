@@ -1,22 +1,16 @@
--- Defers one canonical due member whose owner fields cannot be trusted enough to resolve the
--- shared user lock. This script changes only the scheduler index, never reservation/stock/status.
+-- Defers one due member to now + retry-delay without touching its business state: a busy
+-- shared user lock, an unresolvable owner, or a state that needs an operator. Index only.
 -- KEYS[1] order status Hash
 -- KEYS[2] global PROCESSING due-time ZSET
--- KEYS[3] reconciliation quarantine ZSET
 -- ARGV[1] canonical orderId string
 -- ARGV[2] retry-delay seconds
--- Returns 1 deferred, 2 terminal entry removed, 3 quarantined entry removed, 0 index missing,
+-- Returns 1 deferred, 2 terminal entry removed, 0 index missing,
 -- and -1 for invalid configuration.
 
 local orderId = ARGV[1]
 local retryDelaySeconds = tonumber(ARGV[2])
 if not retryDelaySeconds or retryDelaySeconds <= 0 then
     return -1
-end
-
-if redis.call('ZSCORE', KEYS[3], orderId) then
-    redis.call('ZREM', KEYS[2], orderId)
-    return 3
 end
 
 local state = redis.call('HMGET', KEYS[1], 'status', 'orderId', 'userId', 'voucherId')

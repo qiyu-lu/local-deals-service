@@ -26,8 +26,6 @@ import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,14 +38,6 @@ class SeckillOrderStateIT {
     private static final Long USER_ID = 88001L;
     private static final Long ORDER_ID = 90071992547409931L;
     private static final Long SECOND_ORDER_ID = 90071992547409932L;
-
-    private static final DefaultRedisScript<Long> ADMISSION_SCRIPT;
-
-    static {
-        ADMISSION_SCRIPT = new DefaultRedisScript<>();
-        ADMISSION_SCRIPT.setLocation(new ClassPathResource("lua/seckill_check.lua"));
-        ADMISSION_SCRIPT.setResultType(Long.class);
-    }
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -69,13 +59,6 @@ class SeckillOrderStateIT {
                 statusKey(ORDER_ID), statusKey(SECOND_ORDER_ID)));
         stringRedisTemplate.opsForZSet().remove(
                 SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
-                "malformed-id", "01", "+1", "", " ");
-        stringRedisTemplate.opsForZSet().remove(
-                SECKILL_PROCESSING_QUARANTINE_KEY, ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
-                "malformed-id", "01", "+1", "", " ");
-        stringRedisTemplate.opsForHash().delete(
-                SECKILL_PROCESSING_QUARANTINE_REASON_KEY,
-                ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
                 "malformed-id", "01", "+1", "", " ");
     }
 
@@ -155,28 +138,18 @@ class SeckillOrderStateIT {
                 .isEqualTo(SeckillOrderStateService.ReservationDecision.RETRYABLE_STATE_MISSING);
     }
 
+    /** Code 8 of the admission script: a status Hash is never shared by two reservations. */
     @Test
-    void quarantinedProcessingReservationIsPoisonedForLateConsumerDelivery() {
+    void anOrderIdThatAlreadyOwnsAStatusCannotBeAdmittedTwice() {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
-        SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
 
-        assertThat(stateService.quarantineProcessingOrder(ORDER_ID, "ORDER_ID_CONFLICT")).isTrue();
-        assertThat(stateService.validateForConsumption(message))
-                .isEqualTo(SeckillOrderStateService.ReservationDecision.POISONED);
-        assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
-        assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_QUARANTINE_KEY, ORDER_ID.toString())).isNotNull();
-        assertThat(stateService.claimForReconciliation(message).getDecision())
-                .isEqualTo(SeckillOrderStateService.ReconciliationClaimDecision.QUARANTINED);
-        assertThat(stateService.compensate(message, "PROCESSING_TIMEOUT")).isFalse();
+        assertThat(admit(USER_ID + 1, ORDER_ID)).isEqualTo(8L);
+
         assertThat(stringRedisTemplate.opsForValue().get(stockKey())).isEqualTo("1");
-        assertThat(stringRedisTemplate.opsForHash().get(reservationKey(), USER_ID.toString()))
-                .isEqualTo(ORDER_ID.toString());
-        assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "status"))
-                .isEqualTo("PROCESSING");
-        assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
+        assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "userId"))
+                .isEqualTo(USER_ID.toString());
+        assertThat(stringRedisTemplate.opsForHash().hasKey(reservationKey(), Long.toString(USER_ID + 1)))
+                .isFalse();
     }
 
     @Test
@@ -219,7 +192,7 @@ class SeckillOrderStateIT {
     }
 
     @Test
-    void malformedDueMemberIsQuarantinedWithoutBlockingValidMember() {
+    void malformedDueMemberIsDroppedWithoutBlockingValidMember() {
         long dueAt = Instant.now().getEpochSecond() - 1;
         for (String malformed : Arrays.asList("malformed-id", "01", "+1", "", " ")) {
             stringRedisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, malformed, dueAt);
@@ -231,11 +204,6 @@ class SeckillOrderStateIT {
         for (String malformed : Arrays.asList("malformed-id", "01", "+1", "", " ")) {
             assertThat(stringRedisTemplate.opsForZSet().score(
                     SECKILL_PROCESSING_INDEX_KEY, malformed)).isNull();
-            assertThat(stringRedisTemplate.opsForZSet().score(
-                    SECKILL_PROCESSING_QUARANTINE_KEY, malformed)).isNotNull();
-            assertThat(stringRedisTemplate.opsForHash().get(
-                    SECKILL_PROCESSING_QUARANTINE_REASON_KEY, malformed))
-                    .isEqualTo("INVALID_PROCESSING_INDEX_MEMBER");
         }
     }
 
@@ -335,13 +303,11 @@ class SeckillOrderStateIT {
     }
 
     private long admit(Long userId, Long orderId) {
-        Long result = stringRedisTemplate.execute(
-                ADMISSION_SCRIPT,
-                Arrays.asList(stockKey(), metaKey(), reservationKey(),
-                        statusKey(orderId), SECKILL_PROCESSING_INDEX_KEY),
-                userId.toString(), VOUCHER_ID.toString(), orderId.toString(),
-                "120");
-        return result == null ? -1L : result;
+        com.localdeals.platform.config.TrafficControlProperties noLimits =
+                new com.localdeals.platform.config.TrafficControlProperties();
+        noLimits.getSeckill().setEnabled(false);
+        return new SeckillAdmissionService(stringRedisTemplate, new SeckillProperties(), noLimits)
+                .admit(VOUCHER_ID, userId, orderId, "127.0.0.1").code();
     }
 
     private void setActivity(long beginAt, long endAt) {
@@ -378,7 +344,8 @@ class SeckillOrderStateIT {
         @Bean
         SeckillOrderStateService seckillOrderStateService(StringRedisTemplate stringRedisTemplate,
                                                           SeckillProperties seckillProperties) {
-            return new SeckillOrderStateService(stringRedisTemplate, seckillProperties);
+            return new SeckillOrderStateService(stringRedisTemplate, seckillProperties,
+                    org.mockito.Mockito.mock(SeckillSoldOutRegistry.class));
         }
     }
 }

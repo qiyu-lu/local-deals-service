@@ -5,7 +5,6 @@
 -- KEYS[1] order status Hash
 -- KEYS[2] per-voucher reservation Hash
 -- KEYS[3] global PROCESSING due-time ZSET
--- KEYS[4] reconciliation quarantine ZSET
 -- ARGV[1] userId
 -- ARGV[2] voucherId
 -- ARGV[3] orderId (string)
@@ -13,12 +12,11 @@
 --
 -- Return tuple: {decision, redisNow, createdAt, reconcileAttempts}
 -- 1 claimed; 2 not due; 3 terminal; 4 ownership mismatch; 5 invalid/missing state;
--- 6 reservation mismatch; 7 index member missing; 8 already quarantined.
+-- 6 reservation mismatch; 7 index member missing.
 
 local statusKey = KEYS[1]
 local reservationKey = KEYS[2]
 local processingIndexKey = KEYS[3]
-local quarantineKey = KEYS[4]
 local userId = ARGV[1]
 local voucherId = ARGV[2]
 local orderId = ARGV[3]
@@ -55,11 +53,6 @@ local redisTime = redis.call('TIME')
 local now = tonumber(redisTime[1])
 if not retryDelaySeconds or retryDelaySeconds <= 0 then
     return {5, tostring(now), '', '0'}
-end
-
-if redis.call('ZSCORE', quarantineKey, orderId) then
-    redis.call('ZREM', processingIndexKey, orderId)
-    return {8, tostring(now), '', '0'}
 end
 
 local state = redis.call('HMGET', statusKey,

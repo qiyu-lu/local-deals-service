@@ -3,6 +3,7 @@ package com.localdeals.trade.service;
 import com.localdeals.trade.config.SeckillProperties;
 import com.localdeals.trade.dto.SeckillOrderPersistenceResult;
 import com.localdeals.trade.mq.SeckillOrderMessage;
+import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,8 @@ class SeckillOrderReconcilerTest {
     private RLock schedulingLock;
     @Mock
     private WebSocketNotifier webSocketNotifier;
+    @Mock
+    private SeckillOrderProducer producer;
 
     private SeckillProperties properties;
     private SeckillOrderReconciler reconciler;
@@ -55,7 +58,7 @@ class SeckillOrderReconcilerTest {
 
         reconciler = new SeckillOrderReconciler(
                 stateService, voucherOrderService, redissonClient, webSocketNotifier,
-                properties, new SimpleMeterRegistry());
+                producer, properties, new SimpleMeterRegistry());
 
         lenient().when(stateService.findDueOrderIds(100))
                 .thenReturn(Collections.singletonList(ORDER_ID));
@@ -105,8 +108,12 @@ class SeckillOrderReconcilerTest {
         verify(webSocketNotifier).notify(USER_ID, true, ORDER_ID, VOUCHER_ID);
     }
 
+    /**
+     * The reservation is the outbox: an admitted order whose message never reached the broker
+     * (send failed, or the process died right after the Lua) is published again.
+     */
     @Test
-    void absentOrderBeforeHardDeadlineIsDeferred() {
+    void absentOrderBeforeHardDeadlineIsRedrivenWithTheExactMessage() {
         when(voucherOrderService.classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID))
                 .thenReturn(SeckillOrderPersistenceResult.absent());
         when(stateService.claimForReconciliation(any())).thenReturn(
@@ -114,8 +121,21 @@ class SeckillOrderReconcilerTest {
 
         reconciler.reconcileDueOrders();
 
+        verify(producer).publish(message());
         verify(stateService, never()).compensate(any(), anyString());
         verifyNoInteractions(webSocketNotifier);
+    }
+
+    @Test
+    void aFailedRedriveLeavesTheReservationForTheNextRound() {
+        when(voucherOrderService.classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID))
+                .thenReturn(SeckillOrderPersistenceResult.absent());
+        doThrow(new IllegalStateException("broker unavailable")).when(producer).publish(any());
+
+        reconciler.reconcileDueOrders();
+
+        verify(producer).publish(message());
+        verify(stateService, never()).compensate(any(), anyString());
     }
 
     @Test
@@ -127,8 +147,8 @@ class SeckillOrderReconcilerTest {
 
         reconciler.reconcileDueOrders();
 
+        verify(producer, never()).publish(any());
         verify(stateService, never()).compensate(any(), anyString());
-        verify(stateService, never()).quarantineProcessingOrder(anyLong(), anyString());
     }
 
     @Test
@@ -155,7 +175,6 @@ class SeckillOrderReconcilerTest {
 
         verify(stateService, never()).markSuccess(any());
         verify(stateService, never()).compensate(any(), anyString());
-        verify(stateService, never()).quarantineProcessingOrder(anyLong(), anyString());
     }
 
     @Test
@@ -167,7 +186,6 @@ class SeckillOrderReconcilerTest {
 
         verify(stateService).suspendVoucher(VOUCHER_ID, "DB_ORDER_CONFLICT");
         verify(stateService, never()).compensate(any(), anyString());
-        verify(stateService, never()).quarantineProcessingOrder(anyLong(), anyString());
     }
 
     @Test
@@ -186,19 +204,17 @@ class SeckillOrderReconcilerTest {
     }
 
     @Test
-    void orderIdConflictAlwaysSuspendsAndQuarantinesWithoutCompensation() {
+    void orderIdConflictIsCompensatedLikeAPairConflict() {
         properties.getReconciliation().setCompensationEnabled(true);
         when(voucherOrderService.classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID))
                 .thenReturn(SeckillOrderPersistenceResult.orderIdConflict(ORDER_ID, 99L, 88L));
-        when(stateService.quarantineProcessingOrder(ORDER_ID, "DB_ORDER_ID_CONFLICT"))
-                .thenReturn(true);
+        when(stateService.compensate(message(), "DB_ORDER_ID_CONFLICT")).thenReturn(true);
 
         reconciler.reconcileDueOrders();
 
         InOrder order = inOrder(stateService);
         order.verify(stateService).suspendVoucher(VOUCHER_ID, "DB_ORDER_ID_CONFLICT");
-        order.verify(stateService).quarantineProcessingOrder(ORDER_ID, "DB_ORDER_ID_CONFLICT");
-        verify(stateService, never()).compensate(any(), anyString());
+        order.verify(stateService).compensate(message(), "DB_ORDER_ID_CONFLICT");
     }
 
     @Test
@@ -229,7 +245,7 @@ class SeckillOrderReconcilerTest {
     }
 
     @Test
-    void missingSnapshotIsLeftPendingWithoutAnOutOfLockQuarantine() {
+    void missingSnapshotIsLeftPendingAndDeferred() {
         when(stateService.find(ORDER_ID)).thenReturn(null);
         when(stateService.deferProcessingOrder(ORDER_ID)).thenReturn(true);
 
@@ -241,22 +257,20 @@ class SeckillOrderReconcilerTest {
         verify(schedulingLock).tryLock();
         verify(schedulingLock).unlock();
         verify(stateService).deferProcessingOrder(ORDER_ID);
-        verify(stateService, never()).quarantineProcessingOrder(anyLong(), anyString());
         verify(stateService, never()).claimForReconciliation(any());
     }
 
+    /** An unsafe state cannot heal itself; it stays visible (and deferred) for an operator. */
     @Test
-    void unsafeClaimIsQuarantinedWithoutDatabaseAccess() {
+    void unsafeClaimIsDeferredWithoutDatabaseAccess() {
         when(stateService.claimForReconciliation(any())).thenReturn(
                 new SeckillOrderStateService.ReconciliationClaim(
                         RESERVATION_MISMATCH, REDIS_NOW, REDIS_NOW - 60, 0));
-        when(stateService.quarantineProcessingOrder(
-                ORDER_ID, "CLAIM_RESERVATION_MISMATCH")).thenReturn(true);
+        when(stateService.deferProcessingOrder(ORDER_ID)).thenReturn(true);
 
         reconciler.reconcileDueOrders();
 
-        verify(stateService).quarantineProcessingOrder(
-                ORDER_ID, "CLAIM_RESERVATION_MISMATCH");
+        verify(stateService).deferProcessingOrder(ORDER_ID);
         verify(stateService, never()).markSuccess(any());
         verify(stateService, never()).compensate(any(), anyString());
         verifyNoInteractions(voucherOrderService);

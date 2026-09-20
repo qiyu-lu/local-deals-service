@@ -1,7 +1,8 @@
 package com.localdeals.trade.mq;
 
-import com.localdeals.trade.utils.RedisIdWorker;
+import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.trade.service.IVoucherOrderService;
+import com.localdeals.trade.service.SeckillAdmissionService;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,14 +28,13 @@ import static org.awaitility.Awaitility.await;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(properties =
-        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true")
+@SpringBootTest(properties = {
+        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true",
+        "local-deals.traffic.seckill.ip-limit=100000"})
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SeckillWithRocketMQIT {
@@ -43,7 +43,10 @@ class SeckillWithRocketMQIT {
     private SeckillOrderProducer seckillOrderProducer;
 
     @Resource
-    private RedisIdWorker redisIdWorker;
+    private SnowflakeOrderIdGenerator orderIdGenerator;
+
+    @Resource
+    private SeckillAdmissionService seckillAdmissionService;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -92,14 +95,11 @@ class SeckillWithRocketMQIT {
                     .map(String::valueOf)
                     .toArray(String[]::new);
             stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, (Object[]) orderIds);
-            stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_QUARANTINE_KEY, (Object[]) orderIds);
-            stringRedisTemplate.opsForHash().delete(
-                    SECKILL_PROCESSING_QUARANTINE_REASON_KEY, (Object[]) orderIds);
         }
     }
 
     @Test
-    void sendSeckillTransaction_concurrentUsers_noOversell() throws InterruptedException {
+    void admitThenPublish_concurrentUsers_noOversell() throws InterruptedException {
         ExecutorService pool = Executors.newFixedThreadPool(50);
         CountDownLatch latch = new CountDownLatch(TOTAL_USERS);
         Set<Integer> results = java.util.Collections.synchronizedSet(new HashSet<>());
@@ -109,11 +109,14 @@ class SeckillWithRocketMQIT {
             final long userId = 10000L + i;
             pool.submit(() -> {
                 try {
-                    long orderId = redisIdWorker.nextId("order");
+                    long orderId = orderIdGenerator.nextId(userId);
                     issuedOrderIds.add(orderId);
-                    int r = seckillOrderProducer.sendSeckillTransaction(TEST_VOUCHER_ID, userId, orderId);
+                    int r = seckillAdmissionService.admit(TEST_VOUCHER_ID, userId, orderId, "10.0.0.1").code();
                     results.add(r);
-                    if (r == 0) acceptedOrderIds.add(orderId);
+                    if (r == 0) {
+                        acceptedOrderIds.add(orderId);
+                        seckillOrderProducer.publish(new SeckillOrderMessage(TEST_VOUCHER_ID, userId, orderId));
+                    }
                 } finally {
                     latch.countDown();
                 }
@@ -150,8 +153,6 @@ class SeckillWithRocketMQIT {
             String member = String.valueOf(orderId);
             assertThat(stringRedisTemplate.opsForZSet().score(
                     SECKILL_PROCESSING_INDEX_KEY, member)).isNull();
-            assertThat(stringRedisTemplate.opsForZSet().score(
-                    SECKILL_PROCESSING_QUARANTINE_KEY, member)).isNull();
         });
 
         System.out.println("Accepted orders: " + acceptedOrderIds.size() + "/" + TOTAL_USERS);

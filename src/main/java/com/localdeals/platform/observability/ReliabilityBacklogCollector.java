@@ -13,11 +13,10 @@ import org.springframework.stereotype.Component;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
 
 /** Low-frequency, read-only sampling of reliability backlogs. */
 @Component
@@ -110,16 +109,14 @@ public class ReliabilityBacklogCollector {
         try {
             String sample = redisTemplate.execute(
                     SECKILL_BACKLOG_SCRIPT,
-                    Arrays.asList(SECKILL_PROCESSING_INDEX_KEY,
-                            SECKILL_PROCESSING_QUARANTINE_KEY));
+                    Collections.singletonList(SECKILL_PROCESSING_INDEX_KEY));
             String[] fields = sample == null ? new String[0] : sample.split("\\|", -1);
-            if (fields.length != 3) {
+            if (fields.length != 2) {
                 throw new IllegalStateException("Malformed seckill backlog sample");
             }
             long due = nonNegativeLong(fields[0]);
             long oldest = nonNegativeLong(fields[1]);
-            long quarantine = nonNegativeLong(fields[2]);
-            metrics.updateSeckillBacklog(due, oldest, quarantine);
+            metrics.updateSeckillBacklog(due, oldest);
         } catch (RuntimeException failure) {
             metrics.failSeckillCollector();
         }

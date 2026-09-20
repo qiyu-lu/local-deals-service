@@ -35,12 +35,15 @@ public class ReservationReleaseService {
     private final StringRedisTemplate stringRedisTemplate;
     private final TradeOrderMapper tradeOrderMapper;
     private final ISeckillVoucherService seckillVoucherService;
+    private final SeckillSoldOutRegistry soldOutRegistry;
 
     public ReservationReleaseService(StringRedisTemplate stringRedisTemplate, TradeOrderMapper tradeOrderMapper,
-                                     ISeckillVoucherService seckillVoucherService) {
+                                     ISeckillVoucherService seckillVoucherService,
+                                     SeckillSoldOutRegistry soldOutRegistry) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.tradeOrderMapper = tradeOrderMapper;
         this.seckillVoucherService = seckillVoucherService;
+        this.soldOutRegistry = soldOutRegistry;
     }
 
     /**
@@ -58,11 +61,14 @@ public class ReservationReleaseService {
     /** @return true when Redis is released (now or earlier) and the pending flag is cleared. */
     public boolean release(TradeOrder order) {
         try {
-            stringRedisTemplate.execute(RELEASE_SCRIPT,
+            Long released = stringRedisTemplate.execute(RELEASE_SCRIPT,
                     Arrays.asList(SECKILL_STOCK_KEY + order.getVoucherId(),
                             SECKILL_RESERVATION_KEY + order.getVoucherId()),
                     order.getUserId().toString(), order.getOrderNo().toString());
             tradeOrderMapper.clearReleasePending(order.getOrderNo());
+            if (Long.valueOf(1L).equals(released)) {
+                soldOutRegistry.clear(order.getVoucherId());
+            }
             return true;
         } catch (RuntimeException e) {
             log.warn("Redis release failed; the order scan will retry. orderNo={}", order.getOrderNo(), e);

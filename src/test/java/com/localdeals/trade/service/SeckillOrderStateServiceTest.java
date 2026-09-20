@@ -15,8 +15,6 @@ import java.util.Map;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_QUARANTINE_REASON_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +32,7 @@ class SeckillOrderStateServiceTest {
     private HashOperations<String, Object, Object> hashOperations;
     private SeckillOrderStateService service;
     private SeckillOrderMessage message;
+    private SeckillSoldOutRegistry soldOut;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -41,7 +40,8 @@ class SeckillOrderStateServiceTest {
         redisTemplate = mock(StringRedisTemplate.class);
         hashOperations = mock(HashOperations.class);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties());
+        soldOut = mock(SeckillSoldOutRegistry.class);
+        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties(), soldOut);
         message = new SeckillOrderMessage(17L, 23L, 90071992547409931L);
     }
 
@@ -76,8 +76,7 @@ class SeckillOrderStateServiceTest {
                 any(RedisScript.class),
                 eq(Arrays.asList(
                         SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_RESERVATION_KEY + message.getVoucherId(),
-                        SECKILL_PROCESSING_QUARANTINE_KEY)),
+                        SECKILL_RESERVATION_KEY + message.getVoucherId())),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()));
@@ -113,8 +112,7 @@ class SeckillOrderStateServiceTest {
                         SECKILL_STOCK_KEY + message.getVoucherId(),
                         SECKILL_RESERVATION_KEY + message.getVoucherId(),
                         SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY)),
+                        SECKILL_PROCESSING_INDEX_KEY)),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
@@ -135,13 +133,14 @@ class SeckillOrderStateServiceTest {
     }
 
     @Test
-    void dueQueryIsBoundedAndQuarantinesMalformedRawMemberWithoutDroppingValidIds() {
+    @SuppressWarnings("unchecked")
+    void dueQueryIsBoundedAndDropsMalformedRawMembersWithoutDroppingValidIds() {
+        org.springframework.data.redis.core.ZSetOperations<String, String> zSet =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSet);
         doReturn(Arrays.asList("41", "not-a-long", "01", "+1", "", " ", "42"))
                 .when(redisTemplate).execute(
                 any(RedisScript.class), anyList(), eq("100"));
-        doReturn(1L).when(redisTemplate).execute(
-                any(RedisScript.class), anyList(), any(),
-                eq("INVALID_PROCESSING_INDEX_MEMBER"));
 
         assertThat(service.findDueOrderIds(500)).containsExactly(41L, 42L);
 
@@ -149,21 +148,9 @@ class SeckillOrderStateServiceTest {
                 any(RedisScript.class),
                 eq(java.util.Collections.singletonList(SECKILL_PROCESSING_INDEX_KEY)),
                 eq("100"));
-        verify(redisTemplate).execute(
-                any(RedisScript.class),
-                eq(Arrays.asList(
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_REASON_KEY)),
-                eq("not-a-long"), eq("INVALID_PROCESSING_INDEX_MEMBER"));
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(),
-                eq("01"), eq("INVALID_PROCESSING_INDEX_MEMBER"));
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(),
-                eq("+1"), eq("INVALID_PROCESSING_INDEX_MEMBER"));
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(),
-                eq(""), eq("INVALID_PROCESSING_INDEX_MEMBER"));
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(),
-                eq(" "), eq("INVALID_PROCESSING_INDEX_MEMBER"));
+        for (String malformed : new String[]{"not-a-long", "01", "+1", "", " "}) {
+            verify(zSet).remove(SECKILL_PROCESSING_INDEX_KEY, malformed);
+        }
     }
 
     @Test
@@ -184,8 +171,7 @@ class SeckillOrderStateServiceTest {
                 eq(Arrays.asList(
                         SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
                         SECKILL_RESERVATION_KEY + message.getVoucherId(),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY)),
+                        SECKILL_PROCESSING_INDEX_KEY)),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
@@ -193,7 +179,7 @@ class SeckillOrderStateServiceTest {
     }
 
     @Test
-    void unresolvedStateDeferralUsesOnlySchedulerAndSafetyKeys() {
+    void unresolvedStateDeferralUsesOnlyTheSchedulerKeys() {
         doReturn(1L).when(redisTemplate).execute(
                 any(RedisScript.class), anyList(), any(), any());
 
@@ -203,8 +189,7 @@ class SeckillOrderStateServiceTest {
                 any(RedisScript.class),
                 eq(Arrays.asList(
                         SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_PROCESSING_INDEX_KEY,
-                        SECKILL_PROCESSING_QUARANTINE_KEY)),
+                        SECKILL_PROCESSING_INDEX_KEY)),
                 eq(message.getOrderId().toString()),
                 eq("60"));
     }
@@ -217,6 +202,26 @@ class SeckillOrderStateServiceTest {
         assertThat(service.compensate(message, "PROCESSING_TIMEOUT")).isTrue();
 
         org.mockito.Mockito.verifyNoInteractions(hashOperations);
+    }
+
+    @Test
+    void aFreshCompensationGivesTheUnitBackAndClearsTheSoldOutFlag() {
+        doReturn(1L).when(redisTemplate).execute(
+                any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
+
+        assertThat(service.compensate(message, "DB_STOCK_EXHAUSTED")).isTrue();
+
+        verify(soldOut).clear(17L);
+    }
+
+    @Test
+    void aReplayedCompensationDoesNotBroadcast() {
+        doReturn(2L).when(redisTemplate).execute(
+                any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
+
+        service.compensate(message, "DB_STOCK_EXHAUSTED");
+
+        org.mockito.Mockito.verifyNoInteractions(soldOut);
     }
 
     private Map<Object, Object> state(String status, String reason) {

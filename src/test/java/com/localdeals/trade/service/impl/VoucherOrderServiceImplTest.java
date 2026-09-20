@@ -9,8 +9,11 @@ import com.localdeals.trade.entity.TradeOrder;
 import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.SeckillOrderStateService;
-import com.localdeals.trade.service.SeckillTrafficGuard;
-import com.localdeals.trade.utils.RedisIdWorker;
+import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.trade.service.SeckillLocalRateLimiter;
+import com.localdeals.trade.service.SeckillSoldOutRegistry;
+import com.localdeals.platform.observability.LocalDealsMetrics;
+import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -30,33 +33,44 @@ class VoucherOrderServiceImplTest {
 
     private static final long LARGE_ORDER_ID = 90071992547409931L;
 
+    private static final long SECOND_ORDER_ID = 90071992547409932L;
+
     private VoucherOrderServiceImpl service;
     private TradeOrderMapper tradeOrderMapper;
-    private RedisIdWorker redisIdWorker;
+    private SnowflakeOrderIdGenerator orderIdGenerator;
+    private SeckillAdmissionService admissionService;
     private SeckillOrderProducer producer;
     private SeckillOrderStateService stateService;
-    private SeckillTrafficGuard trafficGuard;
+    private SeckillSoldOutRegistry soldOut;
+    private SeckillLocalRateLimiter bucket;
 
     @BeforeEach
     void setUp() {
         service = new VoucherOrderServiceImpl();
-        redisIdWorker = mock(RedisIdWorker.class);
+        orderIdGenerator = mock(SnowflakeOrderIdGenerator.class);
+        admissionService = mock(SeckillAdmissionService.class);
         producer = mock(SeckillOrderProducer.class);
         stateService = mock(SeckillOrderStateService.class);
-        trafficGuard = mock(SeckillTrafficGuard.class);
+        soldOut = mock(SeckillSoldOutRegistry.class);
+        bucket = mock(SeckillLocalRateLimiter.class);
+        when(bucket.tryAcquire(17L)).thenReturn(true);
 
         tradeOrderMapper = mock(TradeOrderMapper.class);
         MybatisPlusMocks.injectMapper(service, tradeOrderMapper, TradeOrder.class);
-        ReflectionTestUtils.setField(service, "redisIdWorker", redisIdWorker);
+        ReflectionTestUtils.setField(service, "orderIdGenerator", orderIdGenerator);
+        ReflectionTestUtils.setField(service, "seckillAdmissionService", admissionService);
         ReflectionTestUtils.setField(service, "seckillOrderProducer", producer);
         ReflectionTestUtils.setField(service, "seckillOrderStateService", stateService);
-        ReflectionTestUtils.setField(service, "seckillTrafficGuard", trafficGuard);
+        ReflectionTestUtils.setField(service, "seckillSoldOutRegistry", soldOut);
+        ReflectionTestUtils.setField(service, "seckillLocalRateLimiter", bucket);
         ReflectionTestUtils.setField(service, "meterRegistry", new SimpleMeterRegistry());
+        ReflectionTestUtils.setField(service, "localDealsMetrics", mock(LocalDealsMetrics.class));
         ReflectionTestUtils.invokeMethod(service, "registerMetrics");
 
         UserDTO user = new UserDTO();
         user.setId(23L);
         UserHolder.saveUser(user);
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID);
     }
 
     @AfterEach
@@ -64,54 +78,62 @@ class VoucherOrderServiceImplTest {
         UserHolder.removeUser();
     }
 
+    private void admissionReturns(int code) {
+        when(admissionService.admit(17L, 23L, LARGE_ORDER_ID, "203.0.113.9"))
+                .thenReturn(new SeckillAdmissionService.Admission(code, 5L));
+    }
+
     @Test
-    void acceptedOrderIdUsesExactStringWireContract() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
-        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(0);
+    void acceptedOrderIdUsesExactStringWireContractAndPublishesOnce() {
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
 
         Result result = service.seckillVoucher(17L, "203.0.113.9");
 
         assertThat(result.getSuccess()).isTrue();
         assertThat(result.getData()).isEqualTo("90071992547409931");
+        verify(producer).publish(argThat(message -> message.getOrderId().equals(LARGE_ORDER_ID)
+                && message.getUserId().equals(23L) && message.getVoucherId().equals(17L)));
     }
 
     @Test
-    void ambiguousProducerFailureRecoversOnlyTheExactProcessingReservation() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
-        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(-1);
-        when(stateService.find(LARGE_ORDER_ID)).thenReturn(new SeckillOrderStateService.Snapshot(
-                LARGE_ORDER_ID, 23L, 17L, SeckillOrderStateService.STATUS_PROCESSING, null));
-
-        Result result = service.seckillVoucher(17L, "203.0.113.9");
-
-        assertThat(result.getSuccess()).isTrue();
-        assertThat(result.getData()).isEqualTo(Long.toString(LARGE_ORDER_ID));
-    }
-
-    @Test
-    void businessRejectionsKeepHttp200BodyContractWithStableCodes() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
+    void rejectedRequestsNeverTouchTheBroker() {
         String[] expectedCodes = {
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_OUT_OF_STOCK,
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_DUPLICATE,
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_NOT_STARTED,
                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_ENDED
         };
-        for (int resultCode = 1; resultCode <= 4; resultCode++) {
-            when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID))
-                    .thenReturn(resultCode);
+        for (int code = 1; code <= 4; code++) {
+            admissionReturns(code);
 
             Result result = service.seckillVoucher(17L, "203.0.113.9");
 
             assertThat(result.getSuccess()).isFalse();
-            assertThat(result.getCode()).isEqualTo(expectedCodes[resultCode - 1]);
+            assertThat(result.getCode()).isEqualTo(expectedCodes[code - 1]);
         }
+        verifyNoInteractions(producer);
     }
 
     @Test
-    void unavailableMetadataAndUnrecoveredProducerFailureReturn503Codes() {
-        when(redisIdWorker.nextId("order")).thenReturn(LARGE_ORDER_ID);
-        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(5);
+    void userAndIpLimitsAnswer429WithoutTouchingTheBroker() {
+        for (int code : new int[]{SeckillAdmissionService.USER_RATE_LIMITED,
+                SeckillAdmissionService.IP_RATE_LIMITED}) {
+            admissionReturns(code);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> service.seckillVoucher(17L, "203.0.113.9"))
+                    .isInstanceOfSatisfying(com.localdeals.platform.exception.ApiStatusException.class, error -> {
+                        assertThat(error.getStatus().value()).isEqualTo(429);
+                        assertThat(error.getCode()).isEqualTo(
+                                com.localdeals.platform.exception.ApiErrorCodes.SECKILL_RATE_LIMITED);
+                    });
+        }
+        verifyNoInteractions(producer);
+    }
+
+    @Test
+    void unavailableMetadataReturns503() {
+        admissionReturns(SeckillAdmissionService.META_NOT_READY);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
@@ -120,9 +142,42 @@ class VoucherOrderServiceImplTest {
                     assertThat(error.getCode()).isEqualTo(
                             com.localdeals.platform.exception.ApiErrorCodes.SECKILL_STATE_UNAVAILABLE);
                 });
+        verifyNoInteractions(producer);
+    }
 
-        when(producer.sendSeckillTransaction(17L, 23L, LARGE_ORDER_ID)).thenReturn(-1);
+    @Test
+    void aFailedPublishStillReturnsTheReservedOrder() {
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
+        org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(producer).publish(any());
+
+        Result result = service.seckillVoucher(17L, "203.0.113.9");
+
+        // The Redis reservation is durable; the reconciler repairs a missing message.
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(Long.toString(LARGE_ORDER_ID));
+    }
+
+    @Test
+    void anAmbiguousAdmissionErrorRecoversOnlyTheExactProcessingReservation() {
+        when(admissionService.admit(17L, 23L, LARGE_ORDER_ID, "203.0.113.9"))
+                .thenThrow(new IllegalStateException("redis timeout after execution"));
+        when(stateService.find(LARGE_ORDER_ID)).thenReturn(new SeckillOrderStateService.Snapshot(
+                LARGE_ORDER_ID, 23L, 17L, SeckillOrderStateService.STATUS_PROCESSING, null));
+
+        Result result = service.seckillVoucher(17L, "203.0.113.9");
+
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(Long.toString(LARGE_ORDER_ID));
+        verify(producer).publish(any());
+    }
+
+    @Test
+    void anUnrecoveredAdmissionErrorReturns503WithoutPublishing() {
+        when(admissionService.admit(17L, 23L, LARGE_ORDER_ID, "203.0.113.9"))
+                .thenThrow(new IllegalStateException("redis down"));
         when(stateService.find(LARGE_ORDER_ID)).thenReturn(null);
+
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
                 .isInstanceOfSatisfying(com.localdeals.platform.exception.ApiStatusException.class, error -> {
@@ -130,11 +185,25 @@ class VoucherOrderServiceImplTest {
                     assertThat(error.getCode()).isEqualTo(
                             com.localdeals.platform.exception.ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE);
                 });
+        verifyNoInteractions(producer);
     }
 
     @Test
-    void idAllocationFailureDoesNotSendMq() {
-        when(redisIdWorker.nextId("order")).thenThrow(new RuntimeException("redis down"));
+    void anOrderIdAlreadyInUseIsReplacedOnce() {
+        when(orderIdGenerator.nextId(23L)).thenReturn(LARGE_ORDER_ID, SECOND_ORDER_ID);
+        admissionReturns(SeckillAdmissionService.ORDER_ID_IN_USE);
+        when(admissionService.admit(17L, 23L, SECOND_ORDER_ID, "203.0.113.9"))
+                .thenReturn(new SeckillAdmissionService.Admission(SeckillAdmissionService.ACCEPTED, 4L));
+
+        Result result = service.seckillVoucher(17L, "203.0.113.9");
+
+        assertThat(result.getData()).isEqualTo(Long.toString(SECOND_ORDER_ID));
+        verify(producer).publish(argThat(message -> message.getOrderId().equals(SECOND_ORDER_ID)));
+    }
+
+    @Test
+    void idAllocationFailureTouchesNeitherRedisNorTheBroker() {
+        when(orderIdGenerator.nextId(23L)).thenThrow(new IllegalStateException("no worker lease"));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
@@ -142,21 +211,59 @@ class VoucherOrderServiceImplTest {
                         assertThat(error.getCode()).isEqualTo(
                                 com.localdeals.platform.exception.ApiErrorCodes.SECKILL_SUBMIT_UNAVAILABLE));
 
-        verifyNoInteractions(producer, stateService);
+        verifyNoInteractions(admissionService, producer, stateService);
     }
 
     @Test
-    void rateRejectionOccursBeforeIdAllocationAndMqSubmission() {
-        org.mockito.Mockito.doThrow(new com.localdeals.platform.exception.ApiStatusException(
-                org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
-                com.localdeals.platform.exception.ApiErrorCodes.SECKILL_RATE_LIMITED, "busy"))
-                .when(trafficGuard).check(17L, 23L, "203.0.113.9");
+    void theLocalBucketTurnsExcessAwayBeforeAnyIdOrRedisCall() {
+        when(bucket.tryAcquire(17L)).thenReturn(false);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
-                .isInstanceOf(com.localdeals.platform.exception.ApiStatusException.class);
+                .isInstanceOfSatisfying(com.localdeals.platform.exception.ApiStatusException.class, error -> {
+                    assertThat(error.getStatus().value()).isEqualTo(429);
+                    assertThat(error.getCode()).isEqualTo(com.localdeals.platform.exception.ApiErrorCodes.SECKILL_BUSY);
+                });
+        verifyNoInteractions(orderIdGenerator, admissionService, producer);
+    }
 
-        verifyNoInteractions(redisIdWorker, producer, stateService);
+    @Test
+    void theRemainingStockReportedByRedisSizesTheBucket() {
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(bucket).observe(17L, 5L);
+    }
+
+    @Test
+    void outOfStockFlagsTheVoucherSoldOutForTheWholeCluster() {
+        admissionReturns(SeckillAdmissionService.OUT_OF_STOCK);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).markSoldOut(17L);
+    }
+
+    @Test
+    void takingTheLastUnitFlagsSoldOutRightAway() {
+        when(admissionService.admit(17L, 23L, LARGE_ORDER_ID, "203.0.113.9"))
+                .thenReturn(new SeckillAdmissionService.Admission(SeckillAdmissionService.ACCEPTED, 0L));
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).markSoldOut(17L);
+    }
+
+    @Test
+    void aProbeThatFindsStockClearsAStaleFlag() {
+        when(soldOut.isSoldOut(17L)).thenReturn(true);
+        admissionReturns(SeckillAdmissionService.ACCEPTED);
+
+        service.seckillVoucher(17L, "203.0.113.9");
+
+        verify(soldOut).clear(17L);
+        verify(soldOut, org.mockito.Mockito.never()).markSoldOut(17L);
     }
 
     @Test

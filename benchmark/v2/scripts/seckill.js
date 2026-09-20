@@ -3,14 +3,21 @@
 // real knee instead of a closed-loop client slowing itself down.
 //
 //   k6 run -e BASE_URL=http://127.0.0.1:28083 -e VOUCHER_ID=42 -e RATE=2000 -e DURATION=30s \
-//          -e TOKENS=/data/tokens.csv -e USER_OFFSET=0 seckill.js
+//          -e TOKENS=/data/tokens.csv -e USER_OFFSET=0 [-e SECKILL_TOKEN_SECRET=...] seckill.js
+//
+// With SECKILL_TOKEN_SECRET the script signs each user's seckill token itself (same HMAC as
+// SeckillTokenService) instead of calling the token endpoint first: every request is a new user,
+// so fetching one would double the load. The server still verifies every token.
 import http from 'k6/http';
 import { SharedArray } from 'k6/data';
 import { Counter } from 'k6/metrics';
 import exec from 'k6/execution';
+import { hmac } from 'k6/crypto';
 
-const tokens = new SharedArray('tokens', () =>
-  open(__ENV.TOKENS).split('\n').filter((line) => line.length > 0).map((line) => line.split(',')[0]));
+const users = new SharedArray('tokens', () =>
+  open(__ENV.TOKENS).split('\n').filter((line) => line.length > 0).map((line) => line.split(',')));
+const secret = __ENV.SECKILL_TOKEN_SECRET || '';
+const tokenTtl = parseInt(__ENV.SECKILL_TOKEN_TTL || '600', 10);
 
 const rate = parseInt(__ENV.RATE || '1000', 10);
 const offset = parseInt(__ENV.USER_OFFSET || '0', 10);
@@ -54,9 +61,15 @@ export const options = {
 
 export default function () {
   // Each iteration is a different user until the token pool wraps around.
-  const i = (offset + exec.scenario.iterationInTest) % tokens.length;
+  const [token, userId] = users[(offset + exec.scenario.iterationInTest) % users.length];
+  const headers = { authorization: token };
+  if (secret) {
+    const expiry = Math.floor(Date.now() / 1000) + tokenTtl;
+    const data = `${userId}:${__ENV.VOUCHER_ID}:${expiry}`;
+    headers['X-Seckill-Token'] = `${expiry}.${hmac('sha256', secret, data, 'base64rawurl')}`;
+  }
   const res = http.post(`${__ENV.BASE_URL}/voucher-order/seckill/${__ENV.VOUCHER_ID}`, null, {
-    headers: { authorization: tokens[i] },
+    headers,
     timeout: __ENV.TIMEOUT || '10s',
   });
   counters[classify(res)].add(1);

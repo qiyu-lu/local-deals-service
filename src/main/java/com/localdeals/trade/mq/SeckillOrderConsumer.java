@@ -152,7 +152,7 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
         } catch (StockExhaustedException e) {
             handlePermanentFailure(msg, "DB_STOCK_EXHAUSTED", e);
         } catch (OrderIdConflictException e) {
-            handleOrderIdConflict(msg, e);
+            handlePermanentFailure(msg, "DB_ORDER_ID_CONFLICT", e);
         } catch (OrderReservationConflictException e) {
             handlePermanentFailure(msg, "DB_ORDER_CONFLICT", e);
         } catch (Exception e) {
@@ -204,31 +204,6 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
         log.warn("Permanent seckill failure compensated. voucherId={} orderId={} reason={}",
                 msg.getVoucherId(), msg.getOrderId(), reason);
         notifyBestEffort(msg, false);
-    }
-
-    private void handleOrderIdConflict(SeckillOrderMessage msg, OrderIdConflictException cause) {
-        try {
-            seckillOrderStateService.suspendVoucher(msg.getVoucherId(), "DB_ORDER_ID_CONFLICT");
-            if (!seckillOrderStateService.quarantineProcessingOrder(
-                    msg.getOrderId(), "DB_ORDER_ID_CONFLICT")) {
-                throw new IllegalStateException(
-                        "Order-id conflict could not be quarantined. orderId=" + msg.getOrderId(), cause);
-            }
-        } catch (RuntimeException quarantineFailure) {
-            localDealsMetrics.recordMqConsumeOutcome(
-                    LocalDealsMetrics.MqConsumeOutcome.QUARANTINE_ERROR);
-            consumeFailureCounter.increment();
-            log.error("Order-id conflict could not be isolated; MQ will retry. orderId={}",
-                    msg.getOrderId(), quarantineFailure);
-            throw quarantineFailure;
-        }
-
-        localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.QUARANTINED);
-        consumeFailureCounter.increment();
-        log.error("Order-id conflict was quarantined without Redis compensation; MQ will retain " +
-                        "the poison message through retry/DLQ. voucherId={} orderId={}",
-                msg.getVoucherId(), msg.getOrderId(), cause);
-        throw cause;
     }
 
     private void scheduleCloseBestEffort(SeckillOrderMessage msg) {

@@ -1,5 +1,5 @@
 -- Read-only, server-time-consistent PROCESSING backlog sample.
--- KEYS[1] due-time ZSET; KEYS[2] quarantine ZSET.
+-- KEYS[1] due-time ZSET.
 
 local nowParts = redis.call('TIME')
 local now = tonumber(nowParts[1])
@@ -22,5 +22,4 @@ if due > 0 then
     oldestOverdue = math.max(0, now - oldestScore)
 end
 
-local quarantine = redis.call('ZCARD', KEYS[2])
-return tostring(due) .. '|' .. tostring(oldestOverdue) .. '|' .. tostring(quarantine)
+return tostring(due) .. '|' .. tostring(oldestOverdue)
