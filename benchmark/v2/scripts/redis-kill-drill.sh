@@ -42,6 +42,10 @@ REPLICA_SLEEP_S="${REPLICA_SLEEP_S:-0}"
 # How long the master keeps taking writes after the replication link is severed. Everything it
 # accepts in this window is what the promoted replica will not know about.
 REPLICA_GAP_S="${REPLICA_GAP_S:-3}"
+# Seconds of load after the stock would have sold out. The default is M5's. A replication-gap
+# round needs far more: the stock that comes back from the dead is only over-admitted if buyers
+# are still asking for it after the promotion, and only then does MySQL get to refuse a batch.
+DRILL_TAIL_S="${DRILL_TAIL_S:-5}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 BUCKETS="${SECKILL_BUCKETS:?set SECKILL_BUCKETS to the bucket count of the application under test}"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
@@ -137,7 +141,7 @@ name="redis-kill-drill-v${voucher}-$(date +%H%M%S)"
 docker run --rm --network host --cpuset-cpus "${K6_CPUS:-6-7,14-15}" --user "$(id -u):$(id -g)" \
   -v "${PROJECT_DIR}/benchmark/v2/scripts:/scripts:ro" -v "${PROJECT_DIR}/benchmark/v2/run:/data:ro" \
   -v "${OUT}:/out" "${K6_IMAGE:-grafana/k6:2.2.0}" run --quiet \
-  -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$RATE" -e DURATION="$(( STOCK / RATE + 5 ))s" \
+  -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$RATE" -e DURATION="$(( STOCK / RATE + DRILL_TAIL_S ))s" \
   -e TOKENS=/data/tokens.csv -e USER_OFFSET=0 -e TIMEOUT=2s ${SECKILL_TOKEN_SECRET:+-e SECKILL_TOKEN_SECRET="$SECKILL_TOKEN_SECRET"} \
   --summary-export "/out/${name}.json" /scripts/seckill.js >"${OUT}/${name}.log" 2>&1 &
 k6=$!

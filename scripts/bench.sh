@@ -360,7 +360,7 @@ M3_TOKEN_SECRET="bench-seckill-token-secret"
 load_scenario() {
   # Reset first: a suite exports its own S_* and then runs scenarios in child processes.
   S_SUITE=""; S_INSTANCES=""; S_INSTANCE_CPUS=""; S_LB_CPUS=""; S_LB_ACCESS_LOG=""
-  S_FULLCHAIN=""; S_SCALE=""; S_SCALE_RATES=""; S_WINDOW_ROUNDS=0; S_PAY_TIMEOUT=""
+  S_FULLCHAIN=""; S_SCALE=""; S_SCALE_RATES=""; S_WINDOW_ROUNDS=0; S_WINDOW_TAIL=""; S_PAY_TIMEOUT=""
   S_SWEEP=""; S_BUCKET_SWEEP=""; S_BASELINE_SCHEMA=""; S_DRILL_ARGS=""; S_BASELINE_BUCKETS=""
   S_BUCKETS=""; S_REDIS_KILL_ROUNDS=0
   case "$1" in
@@ -537,20 +537,23 @@ load_scenario() {
       S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
       S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
-      # The shape matters more than the size. The link is severed at KILL_AFTER + 0.3 s and the
-      # master dies REPLICA_GAP_S later, so the stock must still be selling then (or nothing is
-      # lost) and demand must outlast the promotion at about SLEEP + 8 s (or the stock that
-      # comes back from the dead is never asked for). 40000 at 2000/s sells out around 20 s:
-      # the gap runs 5.3–8.3 s, the promoted node serves again by ~16 s, 9 s of demand remain.
-      S_WINDOW_ROUNDS=2; S_WINDOW_SLEEP=8
-      S_KILL_STOCK=40000; S_KILL_RATE=2000; S_KILL_AFTER=5
+      # Three things have to line up, and the third is the one the first two runs got wrong.
+      # (1) The stock must still be selling when the link is severed at KILL_AFTER + 0.3 s, or
+      # nothing is lost. (2) The promoted node must be serving again — about SLEEP + 8 s — with
+      # demand still arriving, or the stock that came back from the dead is never asked for.
+      # (3) There must be more buyers than stock, or Redis never over-admits and MySQL is never
+      # asked to refuse a batch, which is the whole point. 30000 at 2000/s with a 15 s tail is
+      # 60000 buyers for 30000 units: gap 5.3–8.3 s, promoted by ~16 s, 14 s of demand left.
+      S_WINDOW_ROUNDS=2; S_WINDOW_SLEEP=8; S_WINDOW_TAIL=15
+      S_KILL_STOCK=30000; S_KILL_RATE=2000; S_KILL_AFTER=5
       S_WARMUP_RATE=500; S_WARMUP_DURATION=20s
       S_USERS=100000; S_EXTRA_ARGS=""
       S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=10s --local-deals.seckill.reconciliation.fixed-delay=5s --local-deals.seckill.reconciliation.stale-after=20s --local-deals.seckill.reconciliation.retry-delay=10s --local-deals.seckill.reconciliation.batch-size=1000"
       if [[ "$1" == *-smoke ]]; then
-        # Same shape, a quarter of the size: sells out at 12 s, window at 3.5 s, back by ~10 s.
-        S_WINDOW_ROUNDS=1; S_WINDOW_SLEEP=4
-        S_KILL_STOCK=6000; S_KILL_RATE=500; S_KILL_AFTER=3
+        # Same three conditions, a fraction of the size: 10000 buyers for 4000 units, gap at
+        # 3.3 s, promoted by ~10 s, 10 s of demand left.
+        S_WINDOW_ROUNDS=1; S_WINDOW_SLEEP=4; S_WINDOW_TAIL=12
+        S_KILL_STOCK=4000; S_KILL_RATE=500; S_KILL_AFTER=3
         S_WARMUP_RATE=200; S_WARMUP_DURATION=5s; S_BUCKETS=8; S_USERS=20000
       fi ;;
     *) fail "unknown scenario $1" ;;
@@ -969,7 +972,8 @@ window_round() {
   local line
   line="$(env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
     APP_JAR="${RUN_DIR}/current.jar" APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" DRILL_TIMEOUT=1800 \
-    REPLICA_SLEEP_S="$S_WINDOW_SLEEP" MANAGEMENT_PORT="$MANAGEMENT_PORT" \
+    REPLICA_SLEEP_S="$S_WINDOW_SLEEP" DRILL_TAIL_S="$S_WINDOW_TAIL" \
+    MANAGEMENT_PORT="$MANAGEMENT_PORT" \
     "${PROJECT_DIR}/benchmark/v2/scripts/redis-kill-drill.sh" \
     "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
   [[ "$line" == voucher=* ]] || { echo "replication-window drill printed no result: ${line}"; return 1; }
@@ -1051,6 +1055,7 @@ run_scenario() { # name
   S_SCALE_RATES="${S_SCALE_RATES:-}"; export S_SCALE_RATES
   S_WINDOW_ROUNDS="${S_WINDOW_ROUNDS:-0}"; export S_WINDOW_ROUNDS
   S_WINDOW_SLEEP="${S_WINDOW_SLEEP:-0}"; export S_WINDOW_SLEEP
+  S_WINDOW_TAIL="${S_WINDOW_TAIL:-5}"; export S_WINDOW_TAIL
   # Shared between the application and the load generator, which plays the payment channel.
   export M8_PAY_SECRET="${M8_PAY_SECRET:-bench-payment-callback-secret}"
   export S_CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"

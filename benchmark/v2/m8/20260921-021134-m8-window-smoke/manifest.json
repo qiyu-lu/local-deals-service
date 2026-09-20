@@ -1,9 +1,9 @@
 {
   "scenario": "m8-window-smoke",
-  "started_at": "2026-09-21T02:06:18+0800",
-  "commit": "e5438dce3ae40e493b819fee4e04c9f40333995d",
-  "commit_short": "e5438dc",
-  "uncommitted_changes": "D benchmark/v2/m8/20260921-020242-m8-window-smoke/manifest.json\n D benchmark/v2/m8/20260921-020242-m8-window-smoke/redis-window-drill.csv\n D benchmark/v2/m8/20260921-020242-m8-window-smoke/run.log\n D benchmark/v2/m8/20260921-020242-m8-window-smoke/status\n?? benchmark/v2/m8/20260921-020618-m8-window-smoke/",
+  "started_at": "2026-09-21T02:11:34+0800",
+  "commit": "3e263f44fcb374f43a45deb04456677e0a3db3a1",
+  "commit_short": "3e263f4",
+  "uncommitted_changes": "D benchmark/v2/m8/20260921-020618-m8-window-smoke/manifest.json\n D benchmark/v2/m8/20260921-020618-m8-window-smoke/redis-window-drill.csv\n D benchmark/v2/m8/20260921-020618-m8-window-smoke/run.log\n D benchmark/v2/m8/20260921-020618-m8-window-smoke/status\n?? benchmark/v2/m8/20260921-021134-m8-window-smoke/",
   "baseline": {
     "tag": "v2.0-m6",
     "commit": "6be81334c3d5014e6129e4f6eb664c93303dc0f8"
@@ -44,7 +44,7 @@
     "warmup_duration": "5s",
     "baseline_flavour": "funnel",
     "fullchain_users": "0",
-    "current_commit": "e5438dc",
+    "current_commit": "3e263f4",
     "step_stock": "1000",
     "baseline_buckets": "",
     "redis_kill_rounds": "0",
@@ -75,12 +75,12 @@
     "kernel": "5.15.0-134-generic"
   },
   "load_at_start": {
-    "loadavg": "6.66 7.43 7.13 6/3506 1793635",
+    "loadavg": "5.61 7.08 7.17 5/3451 1821874",
     "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
   },
-  "finished_at": "2026-09-21T02:08:34+0800",
+  "finished_at": "2026-09-21T02:15:37+0800",
   "load_at_end": {
-    "loadavg": "8.43 8.13 7.45 5/4256 1817606"
+    "loadavg": "5.91 7.06 7.21 5/4245 1848322"
   },
   "status": "DONE"
 }

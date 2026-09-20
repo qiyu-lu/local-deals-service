@@ -144,7 +144,6 @@ paid1="$(k6_metric "${OUT}/${wave1}.json" phase_paid)"
 unpaid1="$(k6_metric "${OUT}/${wave1}.json" phase_left_unpaid)"
 never_persisted="$(k6_metric "${OUT}/${wave1}.json" phase_never_persisted)"
 drain1="$(wait_until_orders_stop "$voucher" "$accepted1")"
-stats1="$(stats_of "$voucher")"
 
 # ---- the unpaid orders time out and give their units back ----------------------------------
 echo "waiting up to ${CLOSE_WAIT_S}s for ${unpaid1} unpaid orders to close" >&2
