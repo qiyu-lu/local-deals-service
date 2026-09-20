@@ -44,12 +44,20 @@ case "${1:-}" in
   m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke|\
   m8|m8-smoke|m8-fullchain|m8-fullchain-smoke|m8-scale|m8-scale-smoke|m8-window|m8-window-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
-    export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
-      NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
-      APP_PORT="${APP_PORT:-38083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-38184}" \
+    #
+    # Every port here is below 32768, and that is not cosmetic. This host's ephemeral range is
+    # 32768-60999, a benchmark holds around five hundred connections in it, and a Redis node or
+    # an application instance binds its port directly on the host network. A run that had taken
+    # one of these as an outbound source port left the next process unable to bind: the M8 suite
+    # smoke lost two of four scenarios that way, once a cluster node ("timed out waiting for
+    # Redis node") and once a second instance (BindException on the API port). Both read as
+    # something wrong with multiple instances and were nothing of the kind.
+    export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-24306}" REDIS_PORT="${REDIS_PORT:-24379}" \
+      NAMESRV_PORT="${NAMESRV_PORT:-24876}" BROKER_PORT="${BROKER_PORT:-20912}" ES_PORT="${ES_PORT:-24200}" \
+      APP_PORT="${APP_PORT:-24083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-24184}" \
       STACK_SUBNET="${STACK_SUBNET:-172.30.58.0/24}" \
-      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-3800}" \
-      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-4800}" ;;
+      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2500}" \
+      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-2600}" ;;
 esac
 MILESTONE="${MILESTONE:-m0}"
 OUT_DIR="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE}}"

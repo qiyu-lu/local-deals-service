@@ -1,0 +1,45 @@
+2026-09-21 02:21:40 scenario m8-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022140-m8-smoke
+2026-09-21 02:21:40 suite of m6-smoke m8-fullchain-smoke m8-scale-smoke m8-window-smoke
+2026-09-21 02:21:40 suite: m6-smoke starting
+2026-09-21 02:21:40 scenario m6-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-022140-m6-smoke
+2026-09-21 02:21:40 phase stack-up start (timeout 900s)
+2026-09-21 02:24:53 FAILED: stack-up: exit 1 (see run.log)
+2026-09-21 02:25:20 suite: m6-smoke -> FAILED: stack-up: exit 1 (see run.log)
+2026-09-21 02:25:25 suite: m8-fullchain-smoke starting
+2026-09-21 02:25:25 scenario m8-fullchain-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022525-m8-fullchain-smoke
+2026-09-21 02:25:25 phase stack-up start (timeout 900s)
+2026-09-21 02:26:17 phase stack-up done
+2026-09-21 02:26:17 phase build start (timeout 1200s)
+2026-09-21 02:26:19 phase build done
+2026-09-21 02:26:19 phase full-chain start (timeout 3600s)
+2026-09-21 02:28:10 phase full-chain done
+2026-09-21 02:28:10 scenario m8-fullchain-smoke done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022525-m8-fullchain-smoke
+2026-09-21 02:28:38 suite: m8-fullchain-smoke -> DONE
+2026-09-21 02:28:43 suite: m8-scale-smoke starting
+2026-09-21 02:28:43 scenario m8-scale-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022843-m8-scale-smoke
+2026-09-21 02:28:43 phase stack-up start (timeout 900s)
+2026-09-21 02:29:36 phase stack-up done
+2026-09-21 02:29:36 phase build start (timeout 1200s)
+2026-09-21 02:29:37 phase build done
+2026-09-21 02:29:37 phase scale-1-instances start (timeout 2400s)
+2026-09-21 02:31:05 phase scale-1-instances done
+2026-09-21 02:31:05 phase scale-2-instances start (timeout 2400s)
+2026-09-21 02:34:20 FAILED: scale-2-instances: exit 1 (see run.log)
+2026-09-21 02:34:56 suite: m8-scale-smoke -> FAILED: scale-2-instances: exit 1 (see run.log)
+2026-09-21 02:35:01 suite: m8-window-smoke starting
+2026-09-21 02:35:01 scenario m8-window-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-023501-m8-window-smoke
+2026-09-21 02:35:01 phase stack-up start (timeout 900s)
+2026-09-21 02:35:51 phase stack-up done
+2026-09-21 02:35:51 phase build start (timeout 1200s)
+2026-09-21 02:35:51 phase build done
+2026-09-21 02:35:51 phase redis-window-drill-1 start (timeout 2700s)
+2026-09-21 02:38:54 phase redis-window-drill-1 done
+2026-09-21 02:38:54 scenario m8-window-smoke done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-023501-m8-window-smoke
+2026-09-21 02:39:21 suite: m8-window-smoke -> DONE
+2026-09-21 02:39:26 suite done: 2 finished, 2 not -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022140-m8-smoke
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Volume ld-m3bench_mysql-data  Removed
+ Volume ld-m3bench_redis-data  Removed
+time="2026-09-21T02:39:26+08:00" level=warning msg="Warning: No resource found to remove for project \"ld-m3bench-redis-cluster\"."
+2026-09-21 02:39:26 cleanup done; status: DONE with 2 failed scenario(s); see scenarios.csv

@@ -37,7 +37,9 @@ BROKER_PORT="${BROKER_PORT:-20911}"
 ES_PORT="${ES_PORT:-29200}"
 REDIS_MODE="${REDIS_MODE:-single}"
 REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2700}"
-REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3700}"
+# Below 32768 like every other port here: the cluster bus binds on the host network, and this
+# host hands out 32768-60999 as ephemeral ports to anything making an outbound connection.
+REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-2800}"
 APP_PORT="${APP_PORT:-28083}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 # Which of the instances this invocation is about, and how many nginx balances over. One
