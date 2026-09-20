@@ -51,7 +51,15 @@ abstract class OrderShardingAlgorithm implements ComplexKeysShardingAlgorithm<Co
         return targets.isEmpty() ? availableTargets : targets;
     }
 
-    /** The slots the statement can touch, or {@code null} when it must be broadcast. */
+    /**
+     * The slots the statement can touch, or {@code null} when it must be broadcast.
+     *
+     * <p>Columns are intersected, not combined: they are predicates on one row, so each one can
+     * only narrow the answer. A column whose values carry no slot narrows nothing and is skipped
+     * — which is what lets a grant coupon, whose coupon_no has no gene, still be routed by the
+     * user_id beside it. Two columns that name different slots leave nothing, and that is
+     * returned as a broadcast so an insert fails loudly rather than landing on one of them.</p>
+     */
     private Set<Integer> slotsOf(ComplexKeysShardingValue<Comparable<?>> shardingValue) {
         Map<String, Range<Comparable<?>>> ranges = shardingValue.getColumnNameAndRangeValuesMap();
         if (ranges != null && !ranges.isEmpty()) {
@@ -61,15 +69,30 @@ abstract class OrderShardingAlgorithm implements ComplexKeysShardingAlgorithm<Co
         if (columns == null || columns.isEmpty()) {
             return null;
         }
-        Set<Integer> slots = new LinkedHashSet<>();
+        Set<Integer> slots = null;
         for (Map.Entry<String, Collection<Comparable<?>>> column : columns.entrySet()) {
-            for (Comparable<?> value : column.getValue()) {
-                OptionalInt slot = slotOf(column.getKey(), value);
-                if (slot.isEmpty()) {
-                    return null;
-                }
-                slots.add(slot.getAsInt());
+            Set<Integer> narrowed = slotsOf(column.getKey(), column.getValue());
+            if (narrowed == null) {
+                continue;
             }
+            if (slots == null) {
+                slots = narrowed;
+            } else {
+                slots.retainAll(narrowed);
+            }
+        }
+        return slots == null || slots.isEmpty() ? null : slots;
+    }
+
+    /** One column's slots, or {@code null} when any of its values cannot name one. */
+    private static Set<Integer> slotsOf(String column, Collection<Comparable<?>> values) {
+        Set<Integer> slots = new LinkedHashSet<>();
+        for (Comparable<?> value : values) {
+            OptionalInt slot = slotOf(column, value);
+            if (slot.isEmpty()) {
+                return null;
+            }
+            slots.add(slot.getAsInt());
         }
         return slots.isEmpty() ? null : slots;
     }
