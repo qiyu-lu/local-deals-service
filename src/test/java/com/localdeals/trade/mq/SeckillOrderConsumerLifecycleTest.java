@@ -25,12 +25,15 @@ class SeckillOrderConsumerLifecycleTest {
 
         verify(pushConsumer).setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         verify(pushConsumer).setConsumeMessageBatchMaxSize(64);
-        verify(pushConsumer).setPullBatchSize(64);
+        // batch-size and thread-count are set above; pull-batch-size and pull-interval are not,
+        // so these two carry the defaults the M6 sweep settled on.
+        verify(pushConsumer).setPullBatchSize(256);
         // One connection per consume thread at most: a consumer must never wait for the pool.
         verify(pushConsumer).setConsumeThreadMin(16);
         verify(pushConsumer).setConsumeThreadMax(16);
-        // Nothing waits by default: the pull interval is the knob, not a new default.
-        verify(pushConsumer).setPullInterval(0L);
+        // A queue now waits 50 ms between pulls by default, which is what gives a batch something
+        // to be a batch of: mean 2.16 orders at 0 ms, 12.68 at 50 ms, both at 2000 orders/s.
+        verify(pushConsumer).setPullInterval(50L);
     }
 
     // The M5 smoke measured a mean batch of 1.03 with batchSize=64: the consumer keeps up with
