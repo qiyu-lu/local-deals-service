@@ -27,7 +27,13 @@ KILL_NODE="${REDIS_KILL_NODE:-ld-${STACK_ID}-redis-c1}"
 BUCKETS="${SECKILL_BUCKETS:?set SECKILL_BUCKETS to the bucket count of the application under test}"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
 mkdir -p "$OUT"
-redis() { $STACK_REDIS "$@"; }
+# Every read of this drill must go through a node that survives it: STACK_REDIS points at the
+# first node, which is the one being killed.
+SURVIVOR="${REDIS_SURVIVOR:-$(cut -d, -f2 <<<"${STACK_REDIS_CLUSTER_NODES:?cluster mode is required}")}"
+redis() {
+  redis-cli -c -h "${SURVIVOR%%:*}" -p "${SURVIVOR##*:}" -a "$LOCAL_DEALS_REDIS_PASSWORD" \
+    --no-auth-warning "$@"
+}
 
 # Every total is the sum over the buckets; a bucket key is prefixed with its hash tag.
 sum_over_buckets() { # command, key suffix after the bucket prefix

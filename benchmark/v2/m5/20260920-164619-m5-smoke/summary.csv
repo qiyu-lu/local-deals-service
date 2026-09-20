@@ -1,0 +1,2 @@
+commit,kind,target_rps,stock,voucher,achieved_rps,requests,dropped,p50_ms,p95_ms,p99_ms,max_ms,http_fail_rate,accepted,outcomes,drain_s_after_load,persist_orders_per_s,app_cpu_cores,mysql_cpu_cores,redis_cpu_cores,broker_cpu_cores,half_msgs,order_msgs,k6_cpu_cores,raw
+7c4ee52,step,2000,200,11,1999.8,20001,0,0.1,0.3,29.7,52.1,0,200,accepted=200;out_of_stock=19801,0.0,,0.44,0.02,0.0,0.08,0,200,0.34,step-r2000-s200-164758.json

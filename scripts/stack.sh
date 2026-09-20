@@ -142,14 +142,6 @@ datasource_url() {
 }
 
 print_env() {
-  if [[ "$REDIS_MODE" == cluster ]]; then
-    # A neutral name: whether a given process should talk to the cluster is decided by its
-    # caller (tests do, a pre-bucket build under benchmark does not).
-    cat <<EOF
-export STACK_REDIS_CLUSTER_NODES='$(redis_cluster_nodes)'
-export STACK_REDIS="redis-cli -c -h 127.0.0.1 -p ${REDIS_CLUSTER_PORT_BASE}1 -a ${REDIS_PASSWORD} --no-auth-warning"
-EOF
-  fi
   cat <<EOF
 export LOCAL_DEALS_DATASOURCE_URL='$(datasource_url)'
 export LOCAL_DEALS_DATASOURCE_USERNAME=root
@@ -164,6 +156,15 @@ export STACK_REDIS="redis-cli -h 127.0.0.1 -p ${REDIS_PORT} -a ${REDIS_PASSWORD}
 export STACK_APP=http://127.0.0.1:${APP_PORT}
 export STACK_MANAGEMENT=http://127.0.0.1:${MANAGEMENT_PORT}
 EOF
+  # Cluster additions last, so STACK_REDIS ends up pointing at the cluster. The node list gets a
+  # neutral name: whether a process should talk to the cluster is its caller's decision (tests
+  # do; a build from before the buckets cannot).
+  if [[ "$REDIS_MODE" == cluster ]]; then
+    cat <<EOF
+export STACK_REDIS_CLUSTER_NODES='$(redis_cluster_nodes)'
+export STACK_REDIS="redis-cli -c -h 127.0.0.1 -p ${REDIS_CLUSTER_PORT_BASE}1 -a ${REDIS_PASSWORD} --no-auth-warning"
+EOF
+  fi
 }
 
 wait_for() {
