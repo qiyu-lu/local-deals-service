@@ -29,10 +29,21 @@ scripts/stack.sh down               # 删除隔离栈及其 volume
 `run.log`、`summary.csv`、`kill-drill.csv` 与 `raw/`。工作区有未提交改动时拒绝运行。
 
 ```bash
-scripts/bench.sh m3-smoke                                   # 缩小参数冒烟，约 6 分钟
-nohup scripts/bench.sh m3 > /tmp/m3-bench.out 2>&1 &        # 正式场景
+scripts/bench.sh m3-smoke                                   # 缩小参数冒烟，约 8 分钟
+nohup scripts/bench.sh m3 > /tmp/m3-bench.out 2>&1 &        # 正式场景，约 53 分钟
 cat benchmark/v2/m3/*-m3/status                             # DONE 即完成
+
+scripts/bench.sh m4-smoke                                   # M4（消费侧）冒烟
+nohup scripts/bench.sh m4 > /tmp/m4-bench.out 2>&1 &        # M4 正式场景
 ```
+
+M4 的场景以落库为主：对照 `v2.0-m3` 交替 3 轮全量接收落库，再按 `batch-size:thread-count`
+做一轮参数扫描（`1:16` 就是关掉批量的同一份代码），最后各做一次 `kill -9` 与「先杀 Broker」
+演练。扫描行在 `summary.csv` 的 commit 列里带组合名（如 `1aad214:b64t16`）。
+
+批量消费的参数：`local-deals.seckill.consume.batch-size`（默认 64）、`thread-count`（16）、
+`claim-lease`（30s）、`enabled`（测试 profile 里关闭）。线程数应当 ≤ Hikari 池
+（`spring.datasource.hikari.maximum-pool-size`，默认 24）。
 
 ## 后端接口检查
 

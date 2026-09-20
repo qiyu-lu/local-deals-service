@@ -257,14 +257,14 @@ M3_TOKEN_SECRET="bench-seckill-token-secret"
 load_scenario() {
   case "$1" in
     m3)
-      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2
+      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2; S_BASELINE_FLAVOUR=pre-funnel
       S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
       S_RATES="500 1000 2000 5000 10000 15000 20000 25000 30000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
       S_DRAIN_ROUNDS=3; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
       S_KILL_ROUNDS=2; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
       S_EXTRA_ARGS=""; S_USERS=100000 ;;
     m3-smoke)
-      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2
+      S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2; S_BASELINE_FLAVOUR=pre-funnel
       S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
       S_RATES="500 2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
@@ -273,7 +273,7 @@ load_scenario() {
       S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
     m4)
-      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3
+      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3; S_BASELINE_FLAVOUR=funnel
       S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
       # M4 changes the consumer, not admission: a short ladder only proves no regression.
       S_RATES="10000 20000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
@@ -283,7 +283,7 @@ load_scenario() {
       S_KILL_ROUNDS=1; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
       S_EXTRA_ARGS=""; S_USERS=100000 ;;
     m4-smoke)
-      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3
+      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3; S_BASELINE_FLAVOUR=funnel
       S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
       S_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
@@ -413,8 +413,13 @@ start_build() { # which
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
 build_commit() { [[ "$1" == baseline ]] && git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}" || git -C "$PROJECT_DIR" rev-parse --short HEAD; }
-build_env() { # which -> k6 needs the token secret only for the current build
-  [[ "$1" == current ]] && echo "SECKILL_TOKEN_SECRET=${M3_TOKEN_SECRET}" || echo "SECKILL_TOKEN_SECRET="
+# k6 signs a seckill token itself; only a build that predates the funnel does not want one.
+build_env() { # which
+  if [[ "$1" == current || "$S_BASELINE_FLAVOUR" == funnel ]]; then
+    echo "SECKILL_TOKEN_SECRET=${M3_TOKEN_SECRET}"
+  else
+    echo "SECKILL_TOKEN_SECRET="
+  fi
 }
 
 ladder() { # which
@@ -477,12 +482,17 @@ run_scenario() { # name
   load_scenario "$1"
   export S_MILESTONE S_BASELINE_TAG S_WARMUP_RATE S_WARMUP_DURATION S_RATES S_STEP_DURATION S_STEP_STOCK \
     S_DRAIN_ROUNDS S_DRAIN_STOCK S_DRAIN_RATE S_KILL_ROUNDS S_BROKER_KILL_ROUNDS S_KILL_STOCK S_KILL_RATE \
-    S_KILL_AFTER S_EXTRA_ARGS S_USERS STACK_NAME K6_IMAGE
+    S_KILL_AFTER S_EXTRA_ARGS S_USERS S_BASELINE_FLAVOUR STACK_NAME K6_IMAGE
   S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
   export APP_CPUS="${APP_CPUS:-0-3,8-11}" DEPS_CPUS="${DEPS_CPUS:-4-5,12-13}" K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
   K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
-  export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
+  if [[ "$S_BASELINE_FLAVOUR" == funnel ]]; then
+    # v2.0-m3 and later: no activity limit any more, and the same token secret as the current build
+    export ARGS_BASELINE="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET}"
+  else
+    export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
+  fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
   BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
   export S_RESULT="${PROJECT_DIR}/benchmark/v2/${S_MILESTONE}/$(date +%Y%m%d-%H%M%S)-$1"
