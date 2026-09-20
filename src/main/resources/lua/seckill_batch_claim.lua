@@ -66,8 +66,10 @@ for i = 1, count do
             redis.call('HSET', statusKey,
                     'claimOwner', owner,
                     'claimExpireAt', tostring(now + leaseSeconds))
-            -- 'XX' keeps a finalized order from being re-queued by a late claim.
-            redis.call('ZADD', processingIndexKey, 'XX', now + leaseSeconds, orderId)
+            -- 'XX' keeps a finalized order from being re-queued by a late claim; 'GT' keeps a
+            -- lease shorter than the stale-after window from pulling the due time closer and
+            -- handing the reconciler orders it could only refuse.
+            redis.call('ZADD', processingIndexKey, 'XX', 'GT', now + leaseSeconds, orderId)
             decision = 1
         end
     end
