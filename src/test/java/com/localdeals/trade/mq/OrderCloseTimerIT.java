@@ -49,8 +49,11 @@ class OrderCloseTimerIT {
 
     @Test
     void theTimerMessageClosesTheUnpaidOrderAtItsDeadline() {
-        long orderNo = BASE + System.currentTimeMillis() % 1000;
-        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, BASE + 1, orderNo));
+        // The seed still varies per run, but the order number has to carry the buyer's gene:
+        // BASE + currentTimeMillis() % 1000 matched it one millisecond in eight.
+        long buyer = BASE + 1;
+        long orderNo = TradeFixture.orderNo(BASE + System.currentTimeMillis() % 1000, buyer);
+        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, buyer, orderNo));
         long sentAt = System.currentTimeMillis();
 
         assertThat(scheduler.scheduleClose(orderNo)).isTrue();
