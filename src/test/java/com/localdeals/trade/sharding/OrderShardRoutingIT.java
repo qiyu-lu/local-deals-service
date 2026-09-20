@@ -5,6 +5,7 @@ import com.localdeals.trade.exception.OrderReservationConflictException;
 import com.localdeals.trade.mapper.TradeOrderMapper;
 import com.localdeals.trade.mq.SeckillOrderMessage;
 import com.localdeals.trade.service.IVoucherOrderService;
+import com.localdeals.trade.service.SeckillOrderBatchPersister;
 import com.localdeals.trade.testsupport.TradeFixture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,8 @@ class OrderShardRoutingIT {
     private IVoucherOrderService orderService;
     @Autowired
     private TradeOrderMapper orderMapper;
+    @Autowired
+    private SeckillOrderBatchPersister persister;
     @Autowired
     private JdbcTemplate jdbc;
     @Autowired
@@ -127,6 +130,31 @@ class OrderShardRoutingIT {
         assertThat(countEverywhere("trade_order", "voucher_id", fixture.voucherId)).isEqualTo(9);
     }
 
+    /**
+     * One consumer batch is one transaction across both databases, and that is worth stating
+     * out loud: ShardingSphere's LOCAL transaction commits each physical connection in turn, so
+     * a process that dies between the two commits leaves half a batch. The half that is missing
+     * still holds its Redis reservation, so the reconciler republishes it and INSERT IGNORE
+     * makes the replay a no-op — but the stock decrement for those rows has already happened
+     * and happens again on replay. The error is bounded by the batch size and it is always in
+     * the safe direction: stock reads lower than it is, never higher.
+     */
+    @Test
+    void oneBatchOfOrdersIsOneTransactionOverBothDatabases() {
+        List<SeckillOrderMessage> batch = new ArrayList<>();
+        for (int slot = 0; slot < OrderShardSlots.SLOTS; slot++) {
+            long userId = USERS + 200 + slot;
+            batch.add(new SeckillOrderMessage(
+                    fixture.voucherId, userId, TradeFixture.orderNo(BASE + 60 + slot, userId)));
+        }
+
+        persister.persistGroup(fixture.voucherId, batch);
+
+        assertThat(countIn(database0, "trade_order", "voucher_id", fixture.voucherId)).isEqualTo(4);
+        assertThat(countIn(database1, "trade_order", "voucher_id", fixture.voucherId)).isEqualTo(4);
+        assertThat(fixture.dbStock()).isEqualTo(64 - OrderShardSlots.SLOTS);
+    }
+
     /** The physical nodes that hold this row, named as the rules name them. */
     private List<String> nodesHolding(String table, String column, long value) {
         List<String> nodes = new ArrayList<>();
@@ -149,12 +177,14 @@ class OrderShardRoutingIT {
 
     /** The same count over all eight physical tables, read outside the routing layer. */
     private int countEverywhere(String logicalTable, String column, long value) {
+        return countIn(database0, logicalTable, column, value)
+                + countIn(database1, logicalTable, column, value);
+    }
+
+    private int countIn(DataSource source, String logicalTable, String column, long value) {
         int total = 0;
-        for (int database = 0; database < OrderShardSlots.DATABASES; database++) {
-            for (int index = 0; index < OrderShardSlots.TABLES_PER_DATABASE; index++) {
-                total += count(database == 0 ? database0 : database1,
-                        logicalTable + "_" + index, column, value);
-            }
+        for (int index = 0; index < OrderShardSlots.TABLES_PER_DATABASE; index++) {
+            total += count(source, logicalTable + "_" + index, column, value);
         }
         return total;
     }
