@@ -1,3 +1,6 @@
 commit,kind,target_rps,stock,voucher,achieved_rps,requests,dropped,p50_ms,p95_ms,p99_ms,max_ms,http_fail_rate,accepted,outcomes,drain_s_after_load,persist_orders_per_s,app_cpu_cores,mysql_cpu_cores,redis_cpu_cores,broker_cpu_cores,half_msgs,order_msgs,k6_cpu_cores,raw
 7c4ee52,step,2000,200,11,1999.6,19999,0,0.1,0.2,18.6,53.7,0,200,accepted=200;out_of_stock=19799,0.0,,0.41,0.02,0.0,0.09,0,200,0.36,step-r2000-s200-165742.json
 ee1aff4,step,2000,200,13,1999.9,20002,0,0.1,0.2,7.1,49.7,0.0001,200,accepted=200;http_429=2;out_of_stock=19800,0.0,73.8,0.49,0.03,0.02,0.09,0,200,0.35,step-r2000-s200-165842.json
+7c4ee52,drain,1000,2000,15,1000.0,3001,0,0.7,4.0,10.0,23.7,0,2000,accepted=2000;out_of_stock=1001,4.2,341.2,1.23,0.11,0.05,0.2,0,2000,0.23,drain-r1000-s2000-165951.json
+ee1aff4,drain,1000,2000,17,999.7,3001,0,0.8,10.3,35.4,61.9,0,2000,accepted=2000;out_of_stock=1001,1.1,390.3,2.49,0.32,0.22,0.23,0,2000,0.22,drain-r1000-s2000-170053.json
+ee1aff4:k1,drain,1000,2000,19,999.7,3001,0,0.8,10.7,31.9,42.1,0,2000,accepted=2000;out_of_stock=1001,8.4,155.0,2.13,0.26,0.17,0.19,0,2000,0.22,drain-r1000-s2000-170149.json
