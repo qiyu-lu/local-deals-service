@@ -140,9 +140,12 @@ class SeckillOrderStateIT {
 
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "claimOwner"))
                 .isEqualTo(stateService.claimOwner());
+        // The lease may only push the due time away, never pull it closer: a reservation that
+        // was due in two minutes must not become due in thirty seconds because someone claimed
+        // it, or every claimed batch would hand the reconciler work it has to refuse.
         assertThat(stringRedisTemplate.opsForZSet()
                 .score(ROUTER.processingKey(0), ORDER_ID.toString()))
-                .isGreaterThan(dueBefore);
+                .isGreaterThanOrEqualTo(dueBefore);
 
         // Another instance must not take the same order while the lease holds.
         SeckillOrderStateService otherInstance = new SeckillOrderStateService(
