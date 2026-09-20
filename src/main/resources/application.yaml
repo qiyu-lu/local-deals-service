@@ -174,14 +174,19 @@ local-deals:
       ttl: "${LOCAL_DEALS_SECKILL_TOKEN_TTL:10m}"
     consume:
       enabled: "${LOCAL_DEALS_SECKILL_CONSUME_ENABLED:true}"
+      # These four are the M6 sweep's winning combination, shipped whole because that is how it
+      # was measured: 2001.5 orders/s, drained 0.1 s after the load, mean batch 12.68.
+      # See benchmark/v2/m6/consume-sweep.md.
       # One consume call takes this many messages: one INSERT and one stock UPDATE per voucher.
-      batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:64}"
-      thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:16}"
+      batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:256}"
+      thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:4}"
       # Messages one pull brings back; a consume batch can never exceed it.
-      pull-batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_BATCH_SIZE:32}"
+      pull-batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_BATCH_SIZE:256}"
       # How long a queue waits between pulls. Zero pulls continuously, and a consumer that keeps
-      # up with the arrivals then only ever finds one message waiting (measured: mean batch 1.03).
-      pull-interval: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_INTERVAL:0ms}"
+      # up with the arrivals then only ever finds one message waiting (measured: mean batch 2.16).
+      # At 2000 orders/s, 50 ms accumulates a mean batch of 12.68 instead, and costs each order
+      # up to one interval of extra latency before it lands.
+      pull-interval: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_INTERVAL:50ms}"
       # How long a claimed batch is leased away from the reconciler.
       claim-lease: "${LOCAL_DEALS_SECKILL_CONSUME_CLAIM_LEASE:30s}"
     funnel:

@@ -73,21 +73,29 @@ public class SeckillProperties {
          * turn it off so no cached ApplicationContext competes for real broker messages.
          */
         private boolean enabled = true;
-        /** Messages handed to one consume call; one INSERT and one stock update per voucher. */
-        private int batchSize = 64;
+        /**
+         * Messages handed to one consume call; one INSERT and one stock update per voucher.
+         * The four values below are the M6 sweep's winning combination (see
+         * benchmark/v2/m6/consume-sweep.md); they are shipped together because that is how they
+         * were measured.
+         */
+        private int batchSize = 256;
         /** Consumer threads; keep at or below the DB pool so a thread never waits for a connection. */
-        private int threadCount = 16;
+        private int threadCount = 4;
         /**
          * Messages one pull brings back. A consume batch can never be larger than this, so it is
-         * raised to {@link #batchSize} when it is set below it.
+         * raised to {@link #batchSize} when it is set below it. The M6 sweep never saw a delivered
+         * batch above 32, so neither this nor {@link #batchSize} was the binding limit there.
          */
-        private int pullBatchSize = 32;
+        private int pullBatchSize = 256;
         /**
          * How long a queue waits before the next pull. Zero pulls continuously, which is why a
          * consumer that keeps up with the arrivals only ever sees one message at a time; a few
          * milliseconds let a queue accumulate so a consume batch has something to be a batch of.
+         * Measured at 2000 orders/s: 0 ms gives a mean batch of 2.16, 10 ms 3.90, 20 ms 6.53,
+         * 50 ms 12.68. The trade is latency — an order waits up to one interval before it lands.
          */
-        private Duration pullInterval = Duration.ZERO;
+        private Duration pullInterval = Duration.ofMillis(50);
         /**
          * How long a claimed batch is leased away from the reconciler. It must outlast one
          * persist round trip and is released as soon as the batch is finalized.
