@@ -16,6 +16,9 @@ docker compose --profile dev up -d nginx canal-server   # 需要前端或 Canal 
 
 ```bash
 scripts/stack.sh up                 # MySQL/Redis/RocketMQ/ES
+REDIS_MODE=cluster scripts/stack.sh up   # 另加 3 主 3 从 Redis Cluster（2700x 客户端 / 3700x 总线）
+                                    # 单节点同时保留：M5 之前的版本没有 hash tag，跑不了 Cluster
+                                    # 这样起栈后，stack.sh it 会自动让测试连 Cluster
 scripts/stack.sh it '*IT'           # 在隔离栈上用 Java 21 跑集成测试
 scripts/stack.sh build && scripts/stack.sh app-start
 scripts/bench.sh users 100000       # 压测用户与 token
@@ -35,11 +38,22 @@ cat benchmark/v2/m3/*-m3/status                             # DONE 即完成
 
 scripts/bench.sh m4-smoke                                   # M4（消费侧）冒烟
 nohup scripts/bench.sh m4 > /tmp/m4-bench.out 2>&1 &        # M4 正式场景
+
+scripts/bench.sh m5-smoke                                   # M5（分桶 + Cluster）冒烟，约 8 分钟
+nohup scripts/bench.sh m5 > /tmp/m5-bench.out 2>&1 &        # M5 正式场景，约 1 小时
 ```
 
 M4 的场景以落库为主：对照 `v2.0-m3` 交替 3 轮全量接收落库，再按 `batch-size:thread-count`
 做一轮参数扫描（`1:16` 就是关掉批量的同一份代码），最后各做一次 `kill -9` 与「先杀 Broker」
 演练。扫描行在 `summary.csv` 的 commit 列里带组合名（如 `1aad214:b64t16`）。
+
+M5 的场景把这份代码（16 桶）放在 Cluster 上，与单节点上的 `v2.0-m4` 交替对照：阶梯、落库各
+若干轮，再按桶数扫描（1/8/64），最后 `kill -9` 应用一次、**杀 Redis 主节点两次**。桶数扫描行的
+commit 列带 `:k<桶数>`，Redis 演练写 `redis-kill-drill.csv`（失联/恢复秒数、被告知中签却没有订单
+的人数、Redis 比真相多出的库存、是否超卖、收敛秒数）。
+
+分桶的参数：`local-deals.seckill.bucket.count`（默认 16，2 的幂且 ≤ 1024）。运行中改桶数会把旧桶
+的状态搁浅，要先把在途订单放干。Cluster 模式下应用需要 `spring.data.redis.cluster.nodes`。
 
 批量消费的参数：`local-deals.seckill.consume.batch-size`（默认 64）、`thread-count`（16）、
 `claim-lease`（30s）、`enabled`（测试 profile 里关闭）。线程数应当 ≤ Hikari 池

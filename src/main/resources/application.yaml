@@ -160,6 +160,12 @@ local-deals:
     verify-limit-per-minute: "${LOCAL_DEALS_COUPON_VERIFY_LIMIT_PER_MINUTE:120}"
   seckill:
     topic: "${LOCAL_DEALS_SECKILL_TOPIC:seckill-order-topic}"
+    bucket:
+      # A voucher's stock is split into this many buckets: one buyer, one bucket, one Cluster
+      # slot. A power of two up to 1024 (the order number carries userId % 1024 in its low
+      # bits, which is how a bucket is recovered from an order number alone). Changing it while
+      # orders are in flight strands the state of the old buckets — drain first.
+      count: "${LOCAL_DEALS_SECKILL_BUCKETS:16}"
     token:
       # Purchases need a short-lived token issued only while the activity is open.
       required: "${LOCAL_DEALS_SECKILL_TOKEN_REQUIRED:true}"
