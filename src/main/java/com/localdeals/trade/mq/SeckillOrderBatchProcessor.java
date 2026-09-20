@@ -1,6 +1,7 @@
 package com.localdeals.trade.mq;
 
 import com.localdeals.platform.observability.LocalDealsMetrics;
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.service.SeckillOrderBatchPersister;
@@ -169,8 +170,10 @@ public class SeckillOrderBatchProcessor {
         for (SeckillOrderMessage message : group) {
             try {
                 // The single-message path finalizes Redis, schedules the close and notifies on
-                // its own, so a message it handled is already finished here.
-                singleMessageConsumer.onMessage(message);
+                // its own, so a message it handled is already finished here. Its log lines
+                // belong to the buyer, not to the batch that failed around them.
+                TraceContext.runWith(TraceContext.accept(message.getTraceId()),
+                        () -> singleMessageConsumer.onMessage(message));
             } catch (RuntimeException e) {
                 complete = false;
             }
@@ -203,7 +206,8 @@ public class SeckillOrderBatchProcessor {
             localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.PERSISTED);
             // Neither the timer message nor the announcement may cost a round trip per order on
             // the consume thread: that is what is left once the DB work is batched.
-            orderTimeoutScheduler.scheduleCloseAsync(message.getOrderId());
+            orderTimeoutScheduler.scheduleCloseAsync(
+                    message.getOrderId(), TraceContext.accept(message.getTraceId()));
             announced.add(message);
         }
         webSocketNotifier.notifySeckillBatch(announced);

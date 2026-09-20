@@ -1,5 +1,6 @@
 package com.localdeals.trade.service;
 
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.trade.config.OrderProperties;
 import com.localdeals.trade.entity.OrderStateLog;
 import com.localdeals.trade.entity.OrderStatus;
@@ -62,7 +63,8 @@ public class SeckillOrderBatchPersister {
         }
         List<TradeOrderMapper.SeckillOrderRow> rows = new ArrayList<>(messages.size());
         for (SeckillOrderMessage message : messages) {
-            rows.add(new TradeOrderMapper.SeckillOrderRow(message.getOrderId(), message.getUserId()));
+            rows.add(new TradeOrderMapper.SeckillOrderRow(
+                    message.getOrderId(), message.getUserId(), TraceContext.accept(message.getTraceId())));
         }
 
         // One read per voucher per batch: trade_order is sharded, tb_voucher is not, so the

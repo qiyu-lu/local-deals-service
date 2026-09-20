@@ -62,7 +62,7 @@ class OrderTimeoutSchedulerTest {
         when(template.getProducer()).thenReturn(producer);
         long before = System.currentTimeMillis();
 
-        scheduler.scheduleCloseAsync(77L);
+        scheduler.scheduleCloseAsync(77L, "trace-of-77");
 
         ArgumentCaptor<Message> sent = ArgumentCaptor.forClass(Message.class);
         verify(producer).send(sent.capture(), any(SendCallback.class));
@@ -72,7 +72,9 @@ class OrderTimeoutSchedulerTest {
                 .isBetween(before + Duration.ofMinutes(15).toMillis(),
                         System.currentTimeMillis() + Duration.ofMinutes(15).toMillis() + 2000);
         assertThat(new String(sent.getValue().getBody(), java.nio.charset.StandardCharsets.UTF_8))
-                .contains("77");
+                .contains("77")
+                // the buyer's trace rides the timer message, so the close an hour later joins it
+                .contains("trace-of-77");
         verify(template, org.mockito.Mockito.never())
                 .syncSendDeliverTimeMills(any(String.class), any(Object.class), anyLong());
     }
@@ -86,6 +88,6 @@ class OrderTimeoutSchedulerTest {
                 .when(producer).send(any(Message.class), any(SendCallback.class));
 
         // The order is committed; OrderTimeoutScanner closes it if no timer message exists.
-        scheduler.scheduleCloseAsync(77L);
+        scheduler.scheduleCloseAsync(77L, null);
     }
 }

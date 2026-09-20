@@ -275,7 +275,7 @@ class SeckillOrderConsumerTest {
         InOrder inOrder = inOrder(voucherOrderService, seckillOrderStateService, orderTimeoutScheduler);
         inOrder.verify(voucherOrderService).createPendingOrder(msg);
         inOrder.verify(seckillOrderStateService).markSuccess(msg);
-        inOrder.verify(orderTimeoutScheduler).scheduleClose(4242L);
+        inOrder.verify(orderTimeoutScheduler).scheduleClose(4242L, null);
     }
 
     @Test

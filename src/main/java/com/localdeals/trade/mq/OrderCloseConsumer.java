@@ -1,10 +1,13 @@
 package com.localdeals.trade.mq;
 
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.trade.service.OrderCloseService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Receives the timer message at the order's deadline. */
 @Slf4j
@@ -26,8 +29,12 @@ public class OrderCloseConsumer implements RocketMQListener<OrderCloseMessage> {
             log.error("Dropping malformed order close message: {}", message);
             return;
         }
-        OrderCloseService.Outcome outcome = orderCloseService.closeIfExpired(message.getOrderNo(), "SYSTEM");
-        if (outcome == OrderCloseService.Outcome.NOT_DUE) {
+        // Under the buyer's trace, so "Unpaid order closed" joins the request that bought it —
+        // an hour earlier, on whichever instance happened to admit it.
+        AtomicReference<OrderCloseService.Outcome> outcome = new AtomicReference<>();
+        TraceContext.runWith(TraceContext.accept(message.getTraceId()),
+                () -> outcome.set(orderCloseService.closeIfExpired(message.getOrderNo(), "SYSTEM")));
+        if (outcome.get() == OrderCloseService.Outcome.NOT_DUE) {
             // Broker and database clocks disagree; the broker's retry backoff brings it back.
             throw new IllegalStateException("Order is not due yet. orderNo=" + message.getOrderNo());
         }

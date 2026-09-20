@@ -38,11 +38,11 @@ public class OrderTimeoutScheduler {
      * same sense as {@link #scheduleClose}: if it never reaches the broker, OrderTimeoutScanner
      * closes the order later.
      */
-    public void scheduleCloseAsync(long orderNo) {
+    public void scheduleCloseAsync(long orderNo, String traceId) {
         long deliverAt = System.currentTimeMillis() + orderProperties.getPayTimeout().toMillis() + DELIVERY_SLACK_MS;
         try {
             Message message = new Message(orderProperties.getCloseTopic(),
-                    objectMapper.writeValueAsString(new OrderCloseMessage(orderNo))
+                    objectMapper.writeValueAsString(new OrderCloseMessage(orderNo, traceId))
                             .getBytes(StandardCharsets.UTF_8));
             message.setDeliverTimeMs(deliverAt);
             rocketMQTemplate.getProducer().send(message, new SendCallback() {
@@ -67,10 +67,14 @@ public class OrderTimeoutScheduler {
 
     /** Best effort: returns false when the broker refused; the fallback scan closes the order later. */
     public boolean scheduleClose(long orderNo) {
+        return scheduleClose(orderNo, null);
+    }
+
+    public boolean scheduleClose(long orderNo, String traceId) {
         long deliverAt = System.currentTimeMillis() + orderProperties.getPayTimeout().toMillis() + DELIVERY_SLACK_MS;
         try {
             SendResult result = rocketMQTemplate.syncSendDeliverTimeMills(
-                    orderProperties.getCloseTopic(), (Object) new OrderCloseMessage(orderNo), deliverAt);
+                    orderProperties.getCloseTopic(), (Object) new OrderCloseMessage(orderNo, traceId), deliverAt);
             return result != null && result.getSendStatus() == SendStatus.SEND_OK;
         } catch (RuntimeException e) {
             log.warn("Order timeout message not sent; the fallback scan will close it. orderNo={}", orderNo, e);
