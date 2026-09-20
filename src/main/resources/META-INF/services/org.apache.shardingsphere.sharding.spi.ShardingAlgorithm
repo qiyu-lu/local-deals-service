@@ -1,0 +1,2 @@
+com.localdeals.trade.sharding.OrderDatabaseShardingAlgorithm
+com.localdeals.trade.sharding.OrderTableShardingAlgorithm
