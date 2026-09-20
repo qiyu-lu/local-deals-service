@@ -51,3 +51,48 @@ app stopped
 app started pid=2155758 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
 users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
 commit=7a2ac04, kind=step, target_rps=200, stock=1000, voucher=14, achieved_rps=191.3, requests=958, dropped=43, p50_ms=4.2, p95_ms=719.5, p99_ms=885.6, max_ms=938.2, http_fail_rate=0, accepted=958, outcomes=accepted=958, drain_s_after_load=0.0, persist_orders_per_s=270.0, app_cpu_cores=2.04, mysql_cpu_cores=0.2, redis_cpu_cores=0.05, broker_cpu_cores=0.42, half_msgs=0, order_msgs=958, k6_cpu_cores=0.1, raw=step-r200-s1000-141047.json
+commit=7a2ac04, kind=drain, target_rps=1000, stock=2000, voucher=15, achieved_rps=1000.0, requests=3001, dropped=0, p50_ms=0.7, p95_ms=3.1, p99_ms=7.0, max_ms=17.2, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=22.1, persist_orders_per_s=79.4, app_cpu_cores=1.21, mysql_cpu_cores=0.1, redis_cpu_cores=0.05, broker_cpu_cores=0.27, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.21, raw=drain-r1000-s2000-141113.json
+app stopped
+2026-09-20 14:11:58 phase drain-baseline-1 done
+2026-09-20 14:11:58 phase drain-current-1 start (timeout 1500s)
+app started pid=2168557 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=4cc6507, kind=step, target_rps=200, stock=1000, voucher=16, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.5, p95_ms=4.3, p99_ms=33.2, max_ms=106.8, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=7.4, persist_orders_per_s=76.3, app_cpu_cores=1.25, mysql_cpu_cores=0.09, redis_cpu_cores=0.03, broker_cpu_cores=0.18, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.08, raw=step-r200-s1000-141204.json
+commit=4cc6507, kind=drain, target_rps=1000, stock=2000, voucher=17, achieved_rps=999.6, requests=3001, dropped=0, p50_ms=0.7, p95_ms=4.4, p99_ms=12.7, max_ms=36.7, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=8.4, persist_orders_per_s=169.0, app_cpu_cores=1.9, mysql_cpu_cores=0.26, redis_cpu_cores=0.08, broker_cpu_cores=0.21, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.22, raw=drain-r1000-s2000-141237.json
+app stopped
+2026-09-20 14:13:15 phase drain-current-1 done
+2026-09-20 14:13:15 phase sweep-1x8 start (timeout 1500s)
+app started pid=2181035 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=sweep, kind=step, target_rps=200, stock=1000, voucher=18, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.5, p95_ms=3.0, p99_ms=37.9, max_ms=92.6, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=10.6, persist_orders_per_s=60.9, app_cpu_cores=1.19, mysql_cpu_cores=0.09, redis_cpu_cores=0.03, broker_cpu_cores=0.14, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.09, raw=step-r200-s1000-141322.json
+commit=4cc6507:b1t8, kind=drain, target_rps=1000, stock=2000, voucher=19, achieved_rps=999.9, requests=3001, dropped=0, p50_ms=0.7, p95_ms=1.3, p99_ms=5.3, max_ms=8.2, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=23.2, persist_orders_per_s=77.1, app_cpu_cores=1.01, mysql_cpu_cores=0.09, redis_cpu_cores=0.05, broker_cpu_cores=0.17, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.23, raw=drain-r1000-s2000-141355.json
+scripts/bench.sh: 行 541: 未预期的符号“;;”附近有语法错误
+2026-09-20 14:14:38 FAILED: sweep-1x8: exit 2 (see run.log)
+app stopped
+ Container ld-m3bench-mysql  Stopping
+ Container ld-m3bench-es  Stopping
+ Container ld-m3bench-broker  Stopping
+ Container ld-m3bench-redis  Stopping
+ Container ld-m3bench-redis  Stopped
+ Container ld-m3bench-redis  Removing
+ Container ld-m3bench-redis  Removed
+ Container ld-m3bench-mysql  Stopped
+ Container ld-m3bench-mysql  Removing
+ Container ld-m3bench-mysql  Removed
+ Container ld-m3bench-es  Stopped
+ Container ld-m3bench-es  Removing
+ Container ld-m3bench-es  Removed
+ Container ld-m3bench-broker  Stopped
+ Container ld-m3bench-broker  Removing
+ Container ld-m3bench-broker  Removed
+ Container ld-m3bench-namesrv  Stopping
+ Container ld-m3bench-namesrv  Stopped
+ Container ld-m3bench-namesrv  Removing
+ Container ld-m3bench-namesrv  Removed
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Network ld-m3bench_local-deals-net  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+ Network ld-m3bench_local-deals-net  Removed
+2026-09-20 14:15:08 cleanup done; status: FAILED: sweep-1x8: exit 2 (see run.log)
