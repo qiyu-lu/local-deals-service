@@ -1,0 +1,70 @@
+{
+  "scenario": "m6-smoke",
+  "started_at": "2026-09-21T00:55:13+0800",
+  "commit": "9932da761f5123cc0a9544a50d8b10f6902c91a0",
+  "commit_short": "9932da7",
+  "uncommitted_changes": "D benchmark/v2/m6/20260921-001205-m6-smoke/manifest.json\n D benchmark/v2/m6/20260921-001205-m6-smoke/run.log\n D benchmark/v2/m6/20260921-001205-m6-smoke/status\n D benchmark/v2/m6/20260921-001205-m6-smoke/summary.csv\n?? benchmark/v2/m6/20260921-005513-m6-smoke/",
+  "baseline": {
+    "tag": "v2.0-m5",
+    "commit": "043d86366a91c18e4371f998980c15a639209ca1"
+  },
+  "parameters": {
+    "sweep": "",
+    "rates": "2000",
+    "drill_args": "",
+    "drain_rounds": "1",
+    "milestone": "m6",
+    "drain_stock": "2000",
+    "kill_stock": "3000",
+    "extra_args": "",
+    "baseline_schema": "local_deals_pre_m6",
+    "kill_rate": "1000",
+    "users": "20000",
+    "baseline_tag": "v2.0-m5",
+    "baseline_commit": "043d863",
+    "kill_rounds": "0",
+    "buckets": "8",
+    "broker_kill_rounds": "0",
+    "kill_after": "3",
+    "warmup_rate": "200",
+    "bucket_sweep": "",
+    "warmup_duration": "5s",
+    "baseline_flavour": "funnel",
+    "current_commit": "9932da7",
+    "step_stock": "200",
+    "baseline_buckets": "8",
+    "redis_kill_rounds": "0",
+    "drain_rate": "1000",
+    "step_duration": "10s"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret --spring.datasource.url=jdbc:mysql://127.0.0.1:33306/local_deals_pre_m6?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true --local-deals.seckill.bucket.count=8 --spring.data.redis.cluster.nodes=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 --spring.data.redis.cluster.max-redirects=5",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret  --local-deals.seckill.bucket.count=8 --spring.data.redis.cluster.nodes=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 --spring.data.redis.cluster.max-redirects=5"
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "38083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "5.29 5.42 6.22 8/3453 1588968",
+    "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  },
+  "finished_at": "2026-09-21T01:00:47+0800",
+  "load_at_end": {
+    "loadavg": "7.26 6.91 6.70 5/4266 1631298"
+  },
+  "status": "DONE"
+}

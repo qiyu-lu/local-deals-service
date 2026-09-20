@@ -1,0 +1,147 @@
+2026-09-21 00:55:13 scenario m6-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-005513-m6-smoke
+2026-09-21 00:55:13 phase stack-up start (timeout 900s)
+ Network ld-m3bench_local-deals-net  Creating
+ Network ld-m3bench_local-deals-net  Created
+ Volume "ld-m3bench_redis-data"  Creating
+ Volume "ld-m3bench_redis-data"  Created
+ Volume "ld-m3bench_mysql-data"  Creating
+ Volume "ld-m3bench_mysql-data"  Created
+ Container ld-m3bench-redis  Creating
+ Container ld-m3bench-es  Creating
+ Container ld-m3bench-namesrv  Creating
+ Container ld-m3bench-mysql  Creating
+ Container ld-m3bench-mysql  Created
+ Container ld-m3bench-redis  Created
+ Container ld-m3bench-namesrv  Created
+ Container ld-m3bench-broker  Creating
+ Container ld-m3bench-es  Created
+ Container ld-m3bench-broker  Created
+ Container ld-m3bench-es  Starting
+ Container ld-m3bench-mysql  Starting
+ Container ld-m3bench-redis  Starting
+ Container ld-m3bench-namesrv  Starting
+ Container ld-m3bench-mysql  Started
+ Container ld-m3bench-namesrv  Started
+ Container ld-m3bench-broker  Starting
+ Container ld-m3bench-redis  Started
+ Container ld-m3bench-es  Started
+ Container ld-m3bench-broker  Started
+ Container ld-m3bench-redis-c3  Creating
+ Container ld-m3bench-redis-c4  Creating
+ Container ld-m3bench-redis-c5  Creating
+ Container ld-m3bench-redis-c6  Creating
+ Container ld-m3bench-redis-c1  Creating
+ Container ld-m3bench-redis-c2  Creating
+ Container ld-m3bench-redis-c6  Created
+ Container ld-m3bench-redis-c5  Created
+ Container ld-m3bench-redis-c1  Created
+ Container ld-m3bench-redis-c4  Created
+ Container ld-m3bench-redis-c2  Created
+ Container ld-m3bench-redis-c3  Created
+ Container ld-m3bench-redis-c1  Starting
+ Container ld-m3bench-redis-c2  Starting
+ Container ld-m3bench-redis-c4  Starting
+ Container ld-m3bench-redis-c3  Starting
+ Container ld-m3bench-redis-c5  Starting
+ Container ld-m3bench-redis-c6  Starting
+ Container ld-m3bench-redis-c6  Started
+ Container ld-m3bench-redis-c3  Started
+ Container ld-m3bench-redis-c5  Started
+ Container ld-m3bench-redis-c4  Started
+ Container ld-m3bench-redis-c1  Started
+ Container ld-m3bench-redis-c2  Started
+dependency containers pinned to CPUs 4-5,12-13
+stack ld-m3bench ready: mysql=33306 redis-cluster=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 namesrv=39876 broker=30911 es=39200
+2026-09-21 00:56:04 phase stack-up done
+2026-09-21 00:56:04 phase build start (timeout 1200s)
+准备工作区（分离头指针 043d863）
+HEAD 现在位于 043d863 Merge M5: Redis Cluster, stock buckets, and a master kill that cost 12.6k 503s
+2026-09-21 00:56:13 phase build done
+2026-09-21 00:56:13 phase ladder-baseline start (timeout 780s)
+app started pid=1592955 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+voucher ids start at 1000000
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=043d863, kind=step, target_rps=200, stock=1000, voucher=1000000, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.8, p95_ms=7.4, p99_ms=74.7, max_ms=124.8, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=7.5, persist_orders_per_s=76.9, app_cpu_cores=1.31, mysql_cpu_cores=0.1, redis_cpu_cores=0.08, broker_cpu_cores=0.5, half_msgs=0, order_msgs=1000, k6_cpu_cores=, batch_mean=, raw=step-r200-s1000-005624.json
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+commit=043d863, kind=step, target_rps=2000, stock=200, voucher=1000001, achieved_rps=1999.8, requests=20000, dropped=0, p50_ms=0.1, p95_ms=0.3, p99_ms=9.8, max_ms=53.9, http_fail_rate=0.0002, accepted=200, outcomes=accepted=200;http_429=4;out_of_stock=19796, drain_s_after_load=0.1, persist_orders_per_s=70.2, app_cpu_cores=0.48, mysql_cpu_cores=0.03, redis_cpu_cores=0.02, broker_cpu_cores=0.09, half_msgs=0, order_msgs=200, k6_cpu_cores=0.33, batch_mean=, raw=step-r2000-s200-005654.json
+app stopped
+2026-09-21 00:57:22 phase ladder-baseline done
+2026-09-21 00:57:22 phase ladder-current start (timeout 780s)
+app started pid=1600055 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=9932da7, kind=step, target_rps=200, stock=1000, voucher=10, achieved_rps=200.0, requests=1000, dropped=0, p50_ms=1.9, p95_ms=12.1, p99_ms=57.4, max_ms=121.3, http_fail_rate=0, accepted=1000, outcomes=accepted=1000, drain_s_after_load=6.5, persist_orders_per_s=83.8, app_cpu_cores=1.72, mysql_cpu_cores=0.11, redis_cpu_cores=0.08, broker_cpu_cores=0.29, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.09, batch_mean=1.35, raw=step-r200-s1000-005737.json
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+commit=9932da7, kind=step, target_rps=2000, stock=200, voucher=11, achieved_rps=1999.7, requests=19999, dropped=0, p50_ms=0.1, p95_ms=0.3, p99_ms=7.2, max_ms=72.3, http_fail_rate=0.0005, accepted=200, outcomes=accepted=200;http_429=10;out_of_stock=19789, drain_s_after_load=0.0, persist_orders_per_s=, app_cpu_cores=0.47, mysql_cpu_cores=0.02, redis_cpu_cores=0.02, broker_cpu_cores=0.1, half_msgs=0, order_msgs=200, k6_cpu_cores=0.37, batch_mean=6.25, raw=step-r2000-s200-005808.json
+app stopped
+2026-09-21 00:58:40 phase ladder-current done
+2026-09-21 00:58:40 phase drain-baseline-1 start (timeout 1500s)
+app started pid=1607133 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+voucher ids start at 1000000
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=043d863, kind=step, target_rps=200, stock=1000, voucher=1000002, achieved_rps=200.0, requests=1001, dropped=0, p50_ms=1.7, p95_ms=6.2, p99_ms=38.7, max_ms=95.2, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=7.5, persist_orders_per_s=75.8, app_cpu_cores=1.36, mysql_cpu_cores=0.1, redis_cpu_cores=0.08, broker_cpu_cores=0.37, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.08, batch_mean=, raw=step-r200-s1000-005847.json
+commit=043d863, kind=drain, target_rps=1000, stock=2000, voucher=1000003, achieved_rps=999.9, requests=3001, dropped=0, p50_ms=0.7, p95_ms=7.2, p99_ms=39.2, max_ms=58.0, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=6.5, persist_orders_per_s=217.1, app_cpu_cores=1.45, mysql_cpu_cores=0.1, redis_cpu_cores=0.12, broker_cpu_cores=0.21, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.21, batch_mean=, raw=drain-r1000-s2000-005917.json
+app stopped
+2026-09-21 00:59:51 phase drain-baseline-1 done
+2026-09-21 00:59:51 phase drain-current-1 start (timeout 1500s)
+app started pid=1619430 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=9932da7, kind=step, target_rps=200, stock=1000, voucher=12, achieved_rps=200.0, requests=1000, dropped=0, p50_ms=1.6, p95_ms=6.0, p99_ms=122.0, max_ms=171.1, http_fail_rate=0, accepted=1000, outcomes=accepted=1000, drain_s_after_load=0.1, persist_orders_per_s=197.2, app_cpu_cores=2.0, mysql_cpu_cores=0.14, redis_cpu_cores=0.09, broker_cpu_cores=0.15, half_msgs=0, order_msgs=1000, k6_cpu_cores=0.08, batch_mean=1.62, raw=step-r200-s1000-010001.json
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+commit=9932da7, kind=drain, target_rps=1000, stock=2000, voucher=13, achieved_rps=1000.1, requests=3001, dropped=0, p50_ms=0.8, p95_ms=6.6, p99_ms=32.3, max_ms=46.4, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=0.1, persist_orders_per_s=998.8, app_cpu_cores=2.07, mysql_cpu_cores=0.19, redis_cpu_cores=0.18, broker_cpu_cores=0.21, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.22, batch_mean=6.25, raw=drain-r1000-s2000-010024.json
+app stopped
+2026-09-21 01:00:47 phase drain-current-1 done
+2026-09-21 01:00:47 scenario m6-smoke done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-005513-m6-smoke
+ Container ld-m3bench-es  Stopping
+ Container ld-m3bench-mysql  Stopping
+ Container ld-m3bench-redis  Stopping
+ Container ld-m3bench-broker  Stopping
+ Container ld-m3bench-redis  Stopped
+ Container ld-m3bench-redis  Removing
+ Container ld-m3bench-redis  Removed
+ Container ld-m3bench-mysql  Stopped
+ Container ld-m3bench-mysql  Removing
+ Container ld-m3bench-mysql  Removed
+ Container ld-m3bench-es  Stopped
+ Container ld-m3bench-es  Removing
+ Container ld-m3bench-es  Removed
+ Container ld-m3bench-broker  Stopped
+ Container ld-m3bench-broker  Removing
+ Container ld-m3bench-broker  Removed
+ Container ld-m3bench-namesrv  Stopping
+ Container ld-m3bench-namesrv  Stopped
+ Container ld-m3bench-namesrv  Removing
+ Container ld-m3bench-namesrv  Removed
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Network ld-m3bench_local-deals-net  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+ Network ld-m3bench_local-deals-net  Removed
+ Container ld-m3bench-redis-c2  Stopping
+ Container ld-m3bench-redis-c4  Stopping
+ Container ld-m3bench-redis-c5  Stopping
+ Container ld-m3bench-redis-c1  Stopping
+ Container ld-m3bench-redis-c6  Stopping
+ Container ld-m3bench-redis-c3  Stopping
+ Container ld-m3bench-redis-c5  Stopped
+ Container ld-m3bench-redis-c5  Removing
+ Container ld-m3bench-redis-c5  Removed
+ Container ld-m3bench-redis-c1  Stopped
+ Container ld-m3bench-redis-c1  Removing
+ Container ld-m3bench-redis-c2  Stopped
+ Container ld-m3bench-redis-c2  Removing
+ Container ld-m3bench-redis-c6  Stopped
+ Container ld-m3bench-redis-c6  Removing
+ Container ld-m3bench-redis-c4  Stopped
+ Container ld-m3bench-redis-c4  Removing
+ Container ld-m3bench-redis-c1  Removed
+ Container ld-m3bench-redis-c2  Removed
+ Container ld-m3bench-redis-c3  Stopped
+ Container ld-m3bench-redis-c3  Removing
+ Container ld-m3bench-redis-c6  Removed
+ Container ld-m3bench-redis-c4  Removed
+ Container ld-m3bench-redis-c3  Removed
+2026-09-21 01:01:14 cleanup done; status: DONE
