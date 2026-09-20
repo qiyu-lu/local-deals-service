@@ -537,11 +537,11 @@ load_scenario() {
       S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
       S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
-      # The shape matters more than the size. The replica is blocked at KILL_AFTER + 0.5 s and
-      # the master dies 0.4 x SLEEP later, so the stock must still be selling then (or nothing
-      # is lost) and demand must outlast the promotion at about SLEEP + 8 s (or the stock that
-      # comes back is never asked for). 40000 at 2000/s sells out around 20 s: the window opens
-      # at 5.5 s, the promoted node is serving again by ~16 s, and 9 s of demand remain.
+      # The shape matters more than the size. The link is severed at KILL_AFTER + 0.3 s and the
+      # master dies REPLICA_GAP_S later, so the stock must still be selling then (or nothing is
+      # lost) and demand must outlast the promotion at about SLEEP + 8 s (or the stock that
+      # comes back from the dead is never asked for). 40000 at 2000/s sells out around 20 s:
+      # the gap runs 5.3–8.3 s, the promoted node serves again by ~16 s, 9 s of demand remain.
       S_WINDOW_ROUNDS=2; S_WINDOW_SLEEP=8
       S_KILL_STOCK=40000; S_KILL_RATE=2000; S_KILL_AFTER=5
       S_WARMUP_RATE=500; S_WARMUP_DURATION=20s

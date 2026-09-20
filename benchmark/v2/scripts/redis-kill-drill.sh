@@ -3,13 +3,17 @@
 #
 #   benchmark/v2/scripts/redis-kill-drill.sh [STOCK] [RATE] [KILL_AFTER_S]
 #
-# REPLICA_SLEEP_S=n first blocks the replica with DEBUG SLEEP, so it stops applying the
-# replication stream, and only then kills the master. M5 measured an RPO of 0 because the slots
-# of a dying master simply stop accepting writes — the buyer gets a 503 instead of a false yes,
-# and the replica was at most a millisecond behind. A blocked replica is promoted n seconds
-# stale instead, so it comes back believing in stock that was already sold: Redis over-admits,
-# and MySQL's conditional `stock = stock - n WHERE stock >= n` is the only thing left. That is
-# the defence the whole design rests on and it has never once been triggered.
+# REPLICA_SLEEP_S=n opens a replication gap before killing the master, so the node that is
+# promoted comes back believing in stock that was already sold. Redis then over-admits, and
+# MySQL's conditional `stock = stock - n WHERE stock >= n` is the only thing left — the defence
+# the whole design rests on, which M5 never managed to trigger.
+#
+# Blocking the replica with DEBUG SLEEP alone is not enough, and the first run of this drill
+# showed why: the replica stops *applying* the stream but the bytes are already in its socket
+# buffer, so on waking it applies everything and the RPO is still 0. The master has to stop
+# *sending*. So the drill sleeps the replica first — a sleeping replica cannot reconnect — and
+# then severs the link from the master with CLIENT KILL TYPE replica. Every write the master
+# takes after that reaches nobody, and that is the gap.
 #
 # Redis replication is asynchronous, so a master that dies takes its unreplicated writes with
 # it: reservations and stock decrements that the buyer was already told about. The promoted
@@ -35,6 +39,9 @@ FIXTURE="${PROJECT_DIR}/benchmark/v2/scripts/fixture.py"
 # back as a replica of its own promoted replica, and killing a replica proves nothing.
 KILL_NODE="${REDIS_KILL_NODE:-}"
 REPLICA_SLEEP_S="${REPLICA_SLEEP_S:-0}"
+# How long the master keeps taking writes after the replication link is severed. Everything it
+# accepts in this window is what the promoted replica will not know about.
+REPLICA_GAP_S="${REPLICA_GAP_S:-3}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 BUCKETS="${SECKILL_BUCKETS:?set SECKILL_BUCKETS to the bucket count of the application under test}"
 eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
@@ -141,13 +148,15 @@ replica=""
 if (( REPLICA_SLEEP_S > 0 )); then
   replica="$(replica_of "$MASTER_ADDR" || true)"
   if [[ -n "$replica" ]]; then
-    # Blocks the replica for the whole window: it keeps the connection but applies nothing, so
-    # every decrement the master takes in the meantime dies with the master.
+    # 1. Put the replica to sleep: it stops applying, and — the part that matters — it cannot
+    #    reconnect while it is asleep.
     redis_at "$replica" DEBUG SLEEP "$REPLICA_SLEEP_S" >/dev/null 2>&1 &
-    # Let the block take hold before the writes that must be lost.
-    sleep 0.5
-    # Let the master take decrements the replica will never see, then kill it mid-window.
-    sleep "$(python3 -c "print(max(0.5, ${REPLICA_SLEEP_S} * 0.4))")"
+    sleep 0.3
+    # 2. Sever the link from the master's side. From here the master's writes reach nobody.
+    killed_links="$(redis_at "$MASTER_ADDR" CLIENT KILL TYPE replica 2>/dev/null | tr -d '[:space:]')"
+    # 3. The gap: every decrement taken now dies with the master.
+    sleep "$REPLICA_GAP_S"
+    replica_link="$(redis_at "$MASTER_ADDR" INFO replication 2>/dev/null | tr -d '\r' | awk -F: '/^connected_slaves/ { print $2 }')"
   else
     echo "no replica found for ${KILL_NODE}; killing without a replication window" >&2
   fi
@@ -219,4 +228,4 @@ if (( REPLICA_SLEEP_S > 0 )); then
 fi
 docker start "$KILL_NODE" >/dev/null || true
 # stock_short degradations are the MySQL backstop refusing a batch Redis had already promised.
-echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},replica_sleep_s=${REPLICA_SLEEP_S},replica=${replica:-none},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},stock_short_degraded=$(( degraded_after - degraded_before )),window_effective=${window_effective},converge_s=${converge}"
+echo "voucher=${voucher},stock=${STOCK},killed_node=${KILL_NODE},replica_sleep_s=${REPLICA_SLEEP_S},replica=${replica:-none},reserved_at_kill=${reserved_at_kill},stock_at_kill=${stock_at_kill},noticed_s=${noticed},recovered_s=${recovered},accepted=${accepted},orders=${orders},reservations=${resv},redis_stock=${redis_stock},db_stock=${db_stock},processing_left=${left},lost_admissions=${lost},stock_gap=${stock_gap},oversold=${oversold},stock_short_degraded=$(( degraded_after - degraded_before )),window_effective=${window_effective},replica_links_killed=${killed_links:-0},replicas_connected_at_kill=${replica_link:-n/a},converge_s=${converge}"
