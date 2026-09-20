@@ -9,6 +9,7 @@
 #   scripts/bench.sh profile SECONDS NAME       async-profiler flame graph of the running app
 #
 #   scripts/bench.sh m3 | m3-smoke              unattended scenario (see "Scenarios" below): own stack,
+#   scripts/bench.sh m4 | m4-smoke              M4 scenario: drains A/B, consume-parameter sweep, drills
 #                                               builds, warm-up, ladder, drains, crash drills, cleanup;
 #                                               results in benchmark/v2/m3/<timestamp>-<scenario>/
 #
@@ -23,7 +24,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-  m3|m3-smoke)
+  m3|m3-smoke|m4|m4-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
     export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
       NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
@@ -271,6 +272,25 @@ load_scenario() {
       # only the smoke shortens reconciliation, so the drill converges within minutes
       S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
+    m4)
+      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
+      # M4 changes the consumer, not admission: a short ladder only proves no regression.
+      S_RATES="10000 20000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=3; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      # batch-size:threads pairs, one drain each; "1:16" is this build with batching switched off
+      S_SWEEP="1:16 32:16 64:16 64:32 256:32"
+      S_KILL_ROUNDS=1; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
+      S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m4-smoke)
+      S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3
+      S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+      S_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
+      S_SWEEP="1:8 64:16"
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
+      S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
+      S_USERS=20000 ;;
     *) fail "unknown scenario $1" ;;
   esac
 }
@@ -410,6 +430,24 @@ drain_round() { # which
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
 }
 
+# One drain with an explicit consume batch size and thread count. The commit column carries the
+# combination (e.g. 1aad214:b64t16) so the sweep rows stay in the same summary.csv schema.
+sweep_round() { # batch:threads
+  local batch="${1%%:*}" threads="${1##*:}"
+  local pool=$(( threads + 8 ))
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  APP_JAR="${RUN_DIR}/current.jar" \
+    APP_ARGS="${ARGS_CURRENT} --local-deals.seckill.consume.batch-size=${batch} --local-deals.seckill.consume.thread-count=${threads} --spring.datasource.hikari.maximum-pool-size=${pool}" \
+    "${PROJECT_DIR}/scripts/stack.sh" app-start
+  "$0" users "$S_USERS"
+  BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="sweep" DURATION="$S_WARMUP_DURATION" \
+    STOCK=1000 env "$(build_env current)" "$0" step "$S_WARMUP_RATE"
+  env "$(build_env current)" BENCH_OUT="$S_RESULT" \
+    BENCH_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD):b${batch}t${threads}" \
+    "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
 kill_round() { # mode: kill | broker
   start_build current
   local line broker_down=""
@@ -439,6 +477,7 @@ run_scenario() { # name
   export S_MILESTONE S_BASELINE_TAG S_WARMUP_RATE S_WARMUP_DURATION S_RATES S_STEP_DURATION S_STEP_STOCK \
     S_DRAIN_ROUNDS S_DRAIN_STOCK S_DRAIN_RATE S_KILL_ROUNDS S_BROKER_KILL_ROUNDS S_KILL_STOCK S_KILL_RATE \
     S_KILL_AFTER S_EXTRA_ARGS S_USERS STACK_NAME K6_IMAGE
+  S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
   export APP_CPUS="${APP_CPUS:-0-3,8-11}" DEPS_CPUS="${DEPS_CPUS:-4-5,12-13}" K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
   K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
@@ -466,6 +505,8 @@ run_scenario() { # name
     phase "drain-baseline-${i}" 1500 drain_round baseline
     phase "drain-current-${i}" 1500 drain_round current
   done
+  local combo
+  for combo in $S_SWEEP; do phase "sweep-${combo/:/x}" 1500 sweep_round "$combo"; done
   for (( i = 1; i <= S_KILL_ROUNDS; i++ )); do phase "kill-drill-${i}" 2400 kill_round kill; done
   for (( i = 1; i <= S_BROKER_KILL_ROUNDS; i++ )); do phase "broker-kill-drill-${i}" 2700 kill_round broker; done
   [[ -s "${S_RESULT}/summary.csv" ]] || s_fail "result: summary.csv is empty"
@@ -479,7 +520,7 @@ case "${1:-}" in
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  m3|m3-smoke) run_scenario "$1" ;;
+  m3|m3-smoke|m4|m4-smoke) run_scenario "$1" ;;
   _phase) shift; "$@" ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
