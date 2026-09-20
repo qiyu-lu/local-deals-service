@@ -1,5 +1,0 @@
-scenario,status,result_dir,started_at,finished_at
-m6-smoke,"FAILED: stack-up: exit 1 (see run.log)",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-022140-m6-smoke,2026-09-21 02:21:40,2026-09-21 02:25:20
-m8-fullchain-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022525-m8-fullchain-smoke,2026-09-21 02:25:25,2026-09-21 02:28:38
-m8-scale-smoke,"FAILED: scale-2-instances: exit 1 (see run.log)",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-022843-m8-scale-smoke,2026-09-21 02:28:43,2026-09-21 02:34:56
-m8-window-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-023501-m8-window-smoke,2026-09-21 02:35:01,2026-09-21 02:39:21
