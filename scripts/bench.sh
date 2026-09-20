@@ -555,6 +555,12 @@ start_build() { # which
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
   # the app first: on a fresh stack its Flyway migrations create the tables the fixture fills
   APP_JAR="${RUN_DIR}/${which}.jar" APP_ARGS="$(build_args "$which")" "${PROJECT_DIR}/scripts/stack.sh" app-start
+  # Two schemas mean two independent tb_voucher auto-increments, and the Redis both builds share
+  # is keyed by voucher id: without this the second build meets the first one's buyers and calls
+  # every request a duplicate. It reads as a throughput collapse and is not one.
+  if [[ "$which" == baseline && -n "${S_BASELINE_SCHEMA:-}" ]]; then
+    env $(build_db_env "$which") "$0" voucher-base "$BASELINE_VOUCHER_ID_BASE"
+  fi
   env $(build_redis_env "$which") $(build_db_env "$which") "$0" users "$S_USERS"
   # the warm-up needs the same k6 environment as the measured runs, or it only measures 403s
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="$(build_commit "$which")" DURATION="$S_WARMUP_DURATION" \
@@ -563,6 +569,9 @@ start_build() { # which
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
 # The stack's datasource URL pointed at another schema.
+# Where the baseline schema's voucher ids start, far from any the current build will mint.
+BASELINE_VOUCHER_ID_BASE="${BASELINE_VOUCHER_ID_BASE:-1000000}"
+
 datasource_url_for() { # schema
   local url="${LOCAL_DEALS_DATASOURCE_URL:?stack environment not loaded}"
   local head="${url%%\?*}" query=""
@@ -808,6 +817,7 @@ run_scenario() { # name
 
 case "${1:-}" in
   users) python3 "$FIXTURE" users "${2:?count}"; rm -f "$USER_CURSOR_FILE" ;;
+  voucher-base) python3 "$FIXTURE" voucher-base "${2:?first id}" ;;
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;

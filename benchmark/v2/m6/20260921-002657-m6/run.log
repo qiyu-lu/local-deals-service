@@ -1,0 +1,55 @@
+2026-09-21 00:26:57 scenario m6 -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-002657-m6
+2026-09-21 00:26:57 phase stack-up start (timeout 900s)
+ Network ld-m3bench_local-deals-net  Creating
+ Network ld-m3bench_local-deals-net  Created
+ Volume "ld-m3bench_mysql-data"  Creating
+ Volume "ld-m3bench_mysql-data"  Created
+ Volume "ld-m3bench_redis-data"  Creating
+ Volume "ld-m3bench_redis-data"  Created
+ Container ld-m3bench-es  Creating
+ Container ld-m3bench-mysql  Creating
+ Container ld-m3bench-namesrv  Creating
+ Container ld-m3bench-redis  Creating
+ Container ld-m3bench-namesrv  Created
+ Container ld-m3bench-mysql  Created
+ Container ld-m3bench-redis  Created
+ Container ld-m3bench-broker  Creating
+ Container ld-m3bench-es  Created
+ Container ld-m3bench-broker  Created
+ Container ld-m3bench-mysql  Starting
+ Container ld-m3bench-es  Starting
+ Container ld-m3bench-redis  Starting
+ Container ld-m3bench-namesrv  Starting
+ Container ld-m3bench-redis  Started
+ Container ld-m3bench-es  Started
+ Container ld-m3bench-mysql  Started
+Error response from daemon: failed to set up container networking: failed to add interface veth0265599 to sandbox: check bridge port state: bridge port not forwarding after 200ms
+2026-09-21 00:27:07 FAILED: stack-up: exit 1 (see run.log)
+ Container ld-m3bench-mysql  Stopping
+ Container ld-m3bench-redis  Stopping
+ Container ld-m3bench-broker  Stopping
+ Container ld-m3bench-es  Stopping
+ Container ld-m3bench-broker  Stopped
+ Container ld-m3bench-broker  Removing
+ Container ld-m3bench-broker  Removed
+ Container ld-m3bench-namesrv  Stopping
+ Container ld-m3bench-namesrv  Stopped
+ Container ld-m3bench-namesrv  Removing
+ Container ld-m3bench-namesrv  Removed
+ Container ld-m3bench-redis  Stopped
+ Container ld-m3bench-redis  Removing
+ Container ld-m3bench-redis  Removed
+ Container ld-m3bench-es  Stopped
+ Container ld-m3bench-es  Removing
+ Container ld-m3bench-es  Removed
+ Container ld-m3bench-mysql  Stopped
+ Container ld-m3bench-mysql  Removing
+ Container ld-m3bench-mysql  Removed
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Network ld-m3bench_local-deals-net  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+ Network ld-m3bench_local-deals-net  Removed
+time="2026-09-21T00:27:18+08:00" level=warning msg="Warning: No resource found to remove for project \"ld-m3bench-redis-cluster\"."
+2026-09-21 00:27:23 cleanup done; status: FAILED: stack-up: exit 1 (see run.log)

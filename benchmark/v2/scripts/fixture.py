@@ -8,6 +8,8 @@
                            (M5 and later); unset or 0 writes the single pre-M5 keys
   fixture.py orders  ID    print persisted order count for a voucher (table: ORDERS_TABLE,
                            default trade_order)
+  fixture.py voucher-base N  start this schema's voucher ids at N, so an A/B whose builds use
+                           different schemas cannot mint the same id into a shared Redis
 
 Only the stdlib plus the `mysql` and `redis-cli` binaries are used. Connection settings come
 from the variables printed by `scripts/stack.sh env`. BENCH_REDIS_CLUSTER (a comma-separated
@@ -212,7 +214,21 @@ def orders(voucher_id):
     print(mysql(f"SELECT COALESCE(SUM(c), 0) FROM ({union}) counted;").strip())
 
 
+def voucher_base(first_id):
+    """
+    Start this schema's voucher ids at first_id.
+
+    An A/B where the two builds migrate different schemas gives each of them its own
+    tb_voucher auto-increment, so both mint the same ids — while the Redis they share is keyed
+    by voucher id. The second build then meets the first one's buyers and answers "duplicate"
+    to every request, which looks exactly like a throughput collapse.
+    """
+    mysql(f"ALTER TABLE tb_voucher AUTO_INCREMENT = {int(first_id)};")
+    print(f"voucher ids start at {int(first_id)}")
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 3 or sys.argv[1] not in ('users', 'voucher', 'orders'):
+    commands = {'users': users, 'voucher': voucher, 'orders': orders, 'voucher-base': voucher_base}
+    if len(sys.argv) != 3 or sys.argv[1] not in commands:
         sys.exit(__doc__)
-    {'users': users, 'voucher': voucher, 'orders': orders}[sys.argv[1]](int(sys.argv[2]))
+    commands[sys.argv[1]](int(sys.argv[2]))

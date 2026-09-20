@@ -1,0 +1,65 @@
+{
+  "scenario": "m6",
+  "started_at": "2026-09-21T00:26:57+0800",
+  "commit": "6be81334c3d5014e6129e4f6eb664c93303dc0f8",
+  "commit_short": "6be8133",
+  "uncommitted_changes": "?? benchmark/v2/m6/20260921-002657-m6/",
+  "baseline": {
+    "tag": "v2.0-m5",
+    "commit": "043d86366a91c18e4371f998980c15a639209ca1"
+  },
+  "parameters": {
+    "sweep": "",
+    "rates": "10000 20000",
+    "drill_args": "",
+    "drain_rounds": "3",
+    "milestone": "m6",
+    "drain_stock": "20000",
+    "kill_stock": "20000",
+    "extra_args": "",
+    "baseline_schema": "local_deals_pre_m6",
+    "kill_rate": "2000",
+    "users": "100000",
+    "baseline_tag": "v2.0-m5",
+    "baseline_commit": "043d863",
+    "kill_rounds": "0",
+    "buckets": "16",
+    "broker_kill_rounds": "0",
+    "kill_after": "6",
+    "warmup_rate": "500",
+    "bucket_sweep": "",
+    "warmup_duration": "30s",
+    "baseline_flavour": "funnel",
+    "current_commit": "6be8133",
+    "step_stock": "1000",
+    "baseline_buckets": "16",
+    "redis_kill_rounds": "0",
+    "drain_rate": "2000",
+    "step_duration": "30s"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret --spring.datasource.url=jdbc:mysql://127.0.0.1:33306/local_deals_pre_m6?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true --local-deals.seckill.bucket.count=16 --spring.data.redis.cluster.nodes=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 --spring.data.redis.cluster.max-redirects=5",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret  --local-deals.seckill.bucket.count=16 --spring.data.redis.cluster.nodes=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 --spring.data.redis.cluster.max-redirects=5"
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "38083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "4.91 5.80 6.91 5/3432 1297594",
+    "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  }
+}
