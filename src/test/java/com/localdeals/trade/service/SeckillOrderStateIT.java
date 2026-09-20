@@ -131,6 +131,79 @@ class SeckillOrderStateIT {
     }
 
     @Test
+    void aBatchClaimLeasesTheOrderAwayFromEveryOtherWorker() {
+        assertThat(admit(USER_ID, ORDER_ID)).isZero();
+        SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
+        Double dueBefore = stringRedisTemplate.opsForZSet()
+                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString());
+
+        assertThat(stateService.claimForPersistence(List.of(message)))
+                .containsExactly(SeckillOrderStateService.PersistClaim.CLAIMED);
+
+        assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "claimOwner"))
+                .isEqualTo(stateService.claimOwner());
+        assertThat(stringRedisTemplate.opsForZSet()
+                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString()))
+                .isGreaterThan(dueBefore);
+
+        // Another instance must not take the same order while the lease holds.
+        SeckillOrderStateService otherInstance = new SeckillOrderStateService(
+                stringRedisTemplate, new SeckillProperties(),
+                new SeckillSoldOutRegistry(stringRedisTemplate, java.time.Duration.ofSeconds(1),
+                        System::currentTimeMillis));
+        assertThat(otherInstance.claimForPersistence(List.of(message)))
+                .containsExactly(SeckillOrderStateService.PersistClaim.CLAIM_BUSY);
+
+        // ... and neither must the reconciler, whatever the due score says.
+        assertThat(otherInstance.claimForReconciliation(message).getDecision())
+                .isEqualTo(SeckillOrderStateService.ReconciliationClaimDecision.NOT_DUE);
+
+        // The owner itself is re-entrant, so a redelivered batch is not blocked by its own lease.
+        assertThat(stateService.claimForPersistence(List.of(message)))
+                .containsExactly(SeckillOrderStateService.PersistClaim.CLAIMED);
+    }
+
+    @Test
+    void batchFinalizationEndsTheClaimAndTheDueMembership() {
+        assertThat(admit(USER_ID, ORDER_ID)).isZero();
+        assertThat(admit(USER_ID + 1, SECOND_ORDER_ID)).isZero();
+        List<SeckillOrderMessage> batch = List.of(
+                new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID),
+                new SeckillOrderMessage(VOUCHER_ID, USER_ID + 1, SECOND_ORDER_ID));
+
+        assertThat(stateService.claimForPersistence(batch)).containsExactly(
+                SeckillOrderStateService.PersistClaim.CLAIMED,
+                SeckillOrderStateService.PersistClaim.CLAIMED);
+        assertThat(stateService.markSuccessBatch(batch)).containsExactly(true, true);
+
+        for (Long orderId : List.of(ORDER_ID, SECOND_ORDER_ID)) {
+            assertThat(stringRedisTemplate.opsForHash().get(statusKey(orderId), "status"))
+                    .isEqualTo("SUCCESS");
+            assertThat(stringRedisTemplate.opsForHash().hasKey(statusKey(orderId), "claimOwner"))
+                    .isFalse();
+            assertThat(stringRedisTemplate.opsForZSet()
+                    .score(SECKILL_PROCESSING_INDEX_KEY, orderId.toString())).isNull();
+            assertThat(stringRedisTemplate.getExpire(statusKey(orderId))).isPositive();
+        }
+        // An idempotent replay of the whole batch is still an acknowledgement.
+        assertThat(stateService.claimForPersistence(batch)).containsExactly(
+                SeckillOrderStateService.PersistClaim.ALREADY_SUCCESS,
+                SeckillOrderStateService.PersistClaim.ALREADY_SUCCESS);
+    }
+
+    @Test
+    void aBatchClaimNeverResurrectsAFinalizedOrder() {
+        assertThat(admit(USER_ID, ORDER_ID)).isZero();
+        SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
+        assertThat(stateService.markSuccess(message)).isTrue();
+
+        assertThat(stateService.claimForPersistence(List.of(message)))
+                .containsExactly(SeckillOrderStateService.PersistClaim.ALREADY_SUCCESS);
+        assertThat(stringRedisTemplate.opsForZSet()
+                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
+    }
+
+    @Test
     void absentOrderStatusIsRetryableAndNeverEligibleForPersistence() {
         SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
 

@@ -49,6 +49,11 @@ public class SeckillProperties {
     public static class Consume {
         private static final int MAX_BATCH_SIZE = 1_000;
 
+        /**
+         * Master switch for the batch consumer. Spring tests that drive the processor directly
+         * turn it off so no cached ApplicationContext competes for real broker messages.
+         */
+        private boolean enabled = true;
         /** Messages handed to one consume call; one INSERT and one stock update per voucher. */
         private int batchSize = 64;
         /** Consumer threads; keep at or below the DB pool so a thread never waits for a connection. */

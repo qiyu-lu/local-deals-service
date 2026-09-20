@@ -41,6 +41,9 @@ local-deals:
       # Tests call OrderTimeoutScanner.scanOnce() explicitly.
       enabled: false
   seckill:
+    consume:
+      # Same reason as the listener switches above: tests drive the batch processor directly.
+      enabled: false
     reconciliation:
       # Tests opt in explicitly when exercising the worker.
       enabled: false

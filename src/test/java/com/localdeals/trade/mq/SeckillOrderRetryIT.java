@@ -43,7 +43,8 @@ import static org.mockito.Mockito.when;
  * StockExhaustedException (no stock row) and be ACKed — no orphan data.
  */
 @SpringBootTest(properties =
-        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true")
+        // The seckill topic is drained by the batch consumer since M4.
+        "local-deals.seckill.consume.enabled=true")
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SeckillOrderRetryIT {

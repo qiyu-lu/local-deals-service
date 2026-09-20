@@ -12,6 +12,7 @@ import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.common.consumer.ConsumeFromWhere;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -28,6 +29,11 @@ import java.util.List;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(
+        prefix = "local-deals.seckill.consume",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class SeckillOrderBatchConsumer {
 
     private final SeckillProperties seckillProperties;

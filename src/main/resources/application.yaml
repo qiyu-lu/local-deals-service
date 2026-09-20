@@ -167,6 +167,7 @@ local-deals:
       secret: "${LOCAL_DEALS_SECKILL_TOKEN_SECRET:local-dev-seckill-token-secret}"
       ttl: "${LOCAL_DEALS_SECKILL_TOKEN_TTL:10m}"
     consume:
+      enabled: "${LOCAL_DEALS_SECKILL_CONSUME_ENABLED:true}"
       # One consume call takes this many messages: one INSERT and one stock UPDATE per voucher.
       batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:64}"
       thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:16}"
