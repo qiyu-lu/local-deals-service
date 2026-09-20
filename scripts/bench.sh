@@ -328,8 +328,9 @@ scenario_cleanup() {
 
 preflight() {
   local dirty
-  # earlier result directories are untracked by design and do not count
-  dirty="$(git -C "$PROJECT_DIR" status --porcelain -- . ':(exclude)benchmark/v2/*/[0-9]*-*/')"
+  # earlier result directories are untracked by design and do not count; -uall lists their files
+  # individually, so the exclusion also works for a milestone directory that is new as a whole
+  dirty="$(git -C "$PROJECT_DIR" status --porcelain -uall -- . ':(exclude)benchmark/v2/*/[0-9]*-*/' ':(exclude)benchmark/v2/*/[0-9]*-*/**')"
   if [[ -n "$dirty" ]]; then
     # ALLOW_DIRTY=1 is for smoke runs only; the dirty files are kept in manifest.json.
     [[ -n "${ALLOW_DIRTY:-}" ]] ||
