@@ -16,6 +16,7 @@ import com.localdeals.marketing.service.MarketingAdminService;
 import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import com.localdeals.trade.testsupport.TradeFixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,10 +76,7 @@ class M6cRedisRecoveryIT {
         AdminPrincipalHolder.save(principal(accountId));
         Long userId = createUser();
         MarketingTag tag = createTag();
-        jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
-                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
-                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
-                IDS.incrementAndGet(), userId, VOUCHER_ID);
+        TradeFixture.insertPaidOrder(jdbcTemplate, IDS.incrementAndGet(), userId, VOUCHER_ID);
         marketingAdminService.addMember(tag.getId(), userId, new MarketingTagMemberRequest());
         VoucherCampaign campaign = createCampaign(tag.getId(), accountId);
         VoucherBatchJob job = batchJobService.create(campaign.getId(), batchRequest(campaign));

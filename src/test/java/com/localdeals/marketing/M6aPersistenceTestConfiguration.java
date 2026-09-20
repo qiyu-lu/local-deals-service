@@ -13,6 +13,7 @@ import com.localdeals.marketing.mapper.VoucherCampaignMapper;
 import com.localdeals.marketing.mapper.VoucherGrantMapper;
 import com.localdeals.marketing.mapper.VoucherGrantNotificationOutboxMapper;
 import com.localdeals.trade.mapper.VoucherMapper;
+import com.localdeals.trade.sharding.ShardingDataSourceConfiguration;
 import com.localdeals.marketing.service.MarketingAdminService;
 import com.localdeals.marketing.service.VoucherCampaignUserService;
 import com.localdeals.marketing.service.VoucherGrantService;
@@ -20,7 +21,6 @@ import com.localdeals.marketing.service.VoucherGrantTransactionService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.mapper.MapperFactoryBean;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
@@ -41,10 +41,13 @@ import org.springframework.context.annotation.Import;
         DataSourceAutoConfiguration.class,
         DataSourceTransactionManagerAutoConfiguration.class,
         JdbcTemplateAutoConfiguration.class,
-        FlywayAutoConfiguration.class,
         MybatisPlusAutoConfiguration.class
 })
-@Import({BusinessDateConfiguration.class, MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
+// The order tables are sharded, and this context writes to trade_order and user_coupon: without
+// the sharded data source it gets a plain connection to ds_0, where those names no longer exist.
+// It also replaces FlywayAutoConfiguration, because migrating is now per physical database.
+@Import({ShardingDataSourceConfiguration.class,
+        BusinessDateConfiguration.class, MybatisConfig.class, MarketingAdminService.class, VoucherGrantService.class,
         VoucherGrantTransactionService.class, VoucherCampaignUserService.class,
         com.localdeals.trade.service.CouponIssuer.class, com.localdeals.trade.service.VerifyCodeGenerator.class})
 public class M6aPersistenceTestConfiguration {

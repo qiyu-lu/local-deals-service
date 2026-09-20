@@ -3,6 +3,7 @@ package com.localdeals.trade.testsupport;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * One merchant, shop, seckill voucher and stock row with ids derived from {@code base}, so each
@@ -47,7 +48,27 @@ public final class TradeFixture {
      * that makes up an order number has to make up a real one.</p>
      */
     public static long orderNo(long seed, long userId) {
-        return (seed << 10) | Math.floorMod(userId, 1024L);
+        // The seed keeps its low 52 bits so that consecutive seeds stay distinct after the
+        // shift; fixtures that number their orders from 9e17 would otherwise overflow into a
+        // negative, which BIGINT UNSIGNED rejects.
+        return ((seed & ((1L << 52) - 1)) << 10) | Math.floorMod(userId, 1024L);
+    }
+
+    /**
+     * A PAID order for fixtures that only need one to exist. The insert cannot select from
+     * tb_voucher any more — trade_order is sharded and the voucher lives in one database — so
+     * the snapshot is read first, and the order number is derived so it carries the user's gene.
+     */
+    public static long insertPaidOrder(JdbcTemplate jdbc, long seed, long userId, long voucherId) {
+        Map<String, Object> voucher = jdbc.queryForMap(
+                "SELECT v.shop_id AS shopId, s.merchant_id AS merchantId, v.pay_value AS payValue " +
+                        "FROM tb_voucher v JOIN tb_shop s ON s.id = v.shop_id WHERE v.id = ?", voucherId);
+        long orderNo = orderNo(seed, userId);
+        jdbc.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount," +
+                        "status,expire_at) VALUES (?,?,?,?,?,?,'PAID',NOW(3))",
+                orderNo, userId, voucherId, voucher.get("shopId"), voucher.get("merchantId"),
+                voucher.get("payValue"));
+        return orderNo;
     }
 
     public int dbStock() {
