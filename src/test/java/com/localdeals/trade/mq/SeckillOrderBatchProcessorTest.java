@@ -1,6 +1,7 @@
 package com.localdeals.trade.mq;
 
 import com.localdeals.platform.observability.LocalDealsMetrics;
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.service.SeckillOrderBatchPersister;
@@ -144,8 +145,44 @@ class SeckillOrderBatchProcessorTest {
         // One announcement for the whole batch, and no broker round trip on the consume thread.
         // grouped by voucher, so the announcement follows the persistence order
         verify(webSocketNotifier).notifySeckillBatch(Arrays.asList(first, second, otherVoucher));
-        verify(orderTimeoutScheduler).scheduleCloseAsync(9001L);
+        verify(orderTimeoutScheduler).scheduleCloseAsync(9001L, null);
         verify(orderTimeoutScheduler, never()).scheduleClose(anyLong());
+    }
+
+    /**
+     * A batch merges the requests of many buyers into one transaction, so there is no single
+     * trace for the batch. Each order keeps its own, and the timer message that will close it
+     * an hour later carries the same one.
+     */
+    @Test
+    void eachOrdersOwnTraceTravelsOnToItsTimerMessage() {
+        SeckillOrderMessage traced = new SeckillOrderMessage(7L, 101L, 9001L);
+        traced.setTraceId("trace-of-101");
+        SeckillOrderMessage otherBuyer = new SeckillOrderMessage(7L, 102L, 9002L);
+        otherBuyer.setTraceId("trace-of-102");
+        List<SeckillOrderMessage> batch = Arrays.asList(traced, otherBuyer);
+        when(stateService.claimForPersistence(batch))
+                .thenReturn(Arrays.asList(PersistClaim.CLAIMED, PersistClaim.CLAIMED));
+        when(stateService.markSuccessBatch(anyList())).thenReturn(Arrays.asList(true, true));
+
+        assertThat(processor.process(batch)).isTrue();
+
+        verify(orderTimeoutScheduler).scheduleCloseAsync(9001L, "trace-of-101");
+        verify(orderTimeoutScheduler).scheduleCloseAsync(9002L, "trace-of-102");
+    }
+
+    /** The thread is pooled: a trace borrowed for one order must not stay on for the next batch. */
+    @Test
+    void theConsumeThreadIsGivenBackWithoutATrace() {
+        SeckillOrderMessage traced = new SeckillOrderMessage(7L, 101L, 9001L);
+        traced.setTraceId("trace-of-101");
+        List<SeckillOrderMessage> batch = List.of(traced);
+        when(stateService.claimForPersistence(batch)).thenReturn(List.of(PersistClaim.CLAIMED));
+        when(stateService.markSuccessBatch(anyList())).thenReturn(List.of(true));
+
+        assertThat(processor.process(batch)).isTrue();
+
+        assertThat(TraceContext.current()).isNull();
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.localdeals.trade.mq;
 
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.trade.config.SeckillProperties;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.client.producer.SendStatus;
@@ -8,6 +9,7 @@ import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
@@ -49,6 +51,53 @@ class SeckillOrderProducerTest {
 
         verify(rocketMQTemplate).syncSend(eq("seckill-order-topic"), any(Message.class));
         verify(rocketMQTemplate, never()).sendMessageInTransaction(anyString(), any(Message.class), any());
+    }
+
+    /**
+     * The buyer's trace has to reach whichever instance persists the order, and the only thing
+     * travelling between them is the message.
+     */
+    @Test
+    void publish_stampsTheRequestsTraceOnTheMessage() {
+        when(rocketMQTemplate.syncSend(eq("seckill-order-topic"), any(Message.class)))
+                .thenReturn(sendResult(SendStatus.SEND_OK));
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+
+        TraceContext.runWith("1f0c9a3b4d5e6f708192a3b4c5d6e7f8",
+                () -> producer.publish(new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID)));
+
+        verify(rocketMQTemplate).syncSend(eq("seckill-order-topic"), captor.capture());
+        assertThat(((SeckillOrderMessage) captor.getValue().getPayload()).getTraceId())
+                .isEqualTo("1f0c9a3b4d5e6f708192a3b4c5d6e7f8");
+    }
+
+    /** The reconciler republishes a message it did not create; its own trace must not overwrite. */
+    @Test
+    void publish_keepsATraceTheMessageAlreadyCarries() {
+        when(rocketMQTemplate.syncSend(eq("seckill-order-topic"), any(Message.class)))
+                .thenReturn(sendResult(SendStatus.SEND_OK));
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+        SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
+        message.setTraceId("original");
+
+        TraceContext.runWith("reconciler", () -> producer.publish(message));
+
+        verify(rocketMQTemplate).syncSend(eq("seckill-order-topic"), captor.capture());
+        assertThat(((SeckillOrderMessage) captor.getValue().getPayload()).getTraceId())
+                .isEqualTo("original");
+    }
+
+    /** Without a request there is nothing to carry, and null is not a trace. */
+    @Test
+    void publish_withoutATraceLeavesTheFieldEmpty() {
+        when(rocketMQTemplate.syncSend(eq("seckill-order-topic"), any(Message.class)))
+                .thenReturn(sendResult(SendStatus.SEND_OK));
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+
+        producer.publish(new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID));
+
+        verify(rocketMQTemplate).syncSend(eq("seckill-order-topic"), captor.capture());
+        assertThat(((SeckillOrderMessage) captor.getValue().getPayload()).getTraceId()).isNull();
     }
 
     @Test

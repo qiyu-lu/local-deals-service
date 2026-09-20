@@ -70,9 +70,31 @@ class SeckillOrderBatchPersisterTest {
         verify(seckillVoucherMapper).decrementStock(eq(7L), eq(3));
         verify(tradeOrderMapper).insertPendingBatch(
                 eq(Arrays.asList(
-                        new SeckillOrderRow(9001L, 101L),
-                        new SeckillOrderRow(9002L, 102L),
-                        new SeckillOrderRow(9003L, 103L))),
+                        new SeckillOrderRow(9001L, 101L, null),
+                        new SeckillOrderRow(9002L, 102L, null),
+                        new SeckillOrderRow(9003L, 103L, null))),
+                eq(VOUCHER), anyLong());
+    }
+
+    /**
+     * The row is the only place a finished order remembers which request created it: the log
+     * lines age out, the message is gone, and the batch that wrote it belongs to many buyers.
+     */
+    @Test
+    void eachRowKeepsTheTraceOfTheRequestThatWonIt() {
+        SeckillOrderMessage first = new SeckillOrderMessage(7L, 101L, 9001L);
+        first.setTraceId("trace-of-101");
+        SeckillOrderMessage second = new SeckillOrderMessage(7L, 102L, 9002L);
+        second.setTraceId("trace-of-102");
+        when(tradeOrderMapper.insertPendingBatch(anyList(), any(), anyLong())).thenReturn(2);
+        when(seckillVoucherMapper.decrementStock(7L, 2)).thenReturn(1);
+
+        persister.persistGroup(7L, Arrays.asList(first, second));
+
+        verify(tradeOrderMapper).insertPendingBatch(
+                eq(Arrays.asList(
+                        new SeckillOrderRow(9001L, 101L, "trace-of-101"),
+                        new SeckillOrderRow(9002L, 102L, "trace-of-102"))),
                 eq(VOUCHER), anyLong());
     }
 
