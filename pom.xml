@@ -102,15 +102,6 @@
                     <groupId>org.yaml</groupId>
                     <artifactId>snakeyaml</artifactId>
                 </exclusion>
-                <!-- The standalone metadata repository drags in jackson-dataformat-xml, and an
-                     XML codec on the classpath puts MappingJackson2XmlHttpMessageConverter ahead
-                     of the JSON one: every response to a request without an Accept header turns
-                     into XML. The API speaks JSON; a database library does not get to change
-                     that. -->
-                <exclusion>
-                    <groupId>com.fasterxml.jackson.dataformat</groupId>
-                    <artifactId>jackson-dataformat-xml</artifactId>
-                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
