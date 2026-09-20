@@ -3,13 +3,17 @@ The whole seckill admission in one round trip: rate limits, activity window, dup
 stock and the exact PROCESSING reservation. Nothing is written unless every check passes,
 except the rate-limit counters of a request that passed its limits.
 
-KEYS[1] stock String                    seckill:stock:{voucherId}
-KEYS[2] activity metadata Hash          seckill:meta:{voucherId}
-KEYS[3] exact reservation Hash          seckill:reservation:{voucherId}
-KEYS[4] order status Hash               seckill:order:status:{orderId}
-KEYS[5] global PROCESSING due-time ZSET  seckill:order:processing
-KEYS[6] user rate-window prefix         traffic:seckill:{voucherId}:user:{userId}:
-KEYS[7] IP rate-window prefix           traffic:seckill:{voucherId}:ip:{sha256(ip)}:
+Every key belongs to the buyer's stock bucket b = userId % K and carries its hash tag
+{sk:b<b>}, so the whole call lives in one Cluster slot. The stock this script reads and
+decrements is the bucket's share, not the voucher's total.
+
+KEYS[1] stock String                    sk:{sk:b<b>}:stock:<voucherId>
+KEYS[2] activity metadata Hash          sk:{sk:b<b>}:meta:<voucherId>     (replicated per bucket)
+KEYS[3] exact reservation Hash          sk:{sk:b<b>}:resv:<voucherId>
+KEYS[4] order status Hash               sk:{sk:b<b>}:status:<orderId>
+KEYS[5] bucket PROCESSING due-time ZSET  sk:{sk:b<b>}:processing
+KEYS[6] user rate-window prefix         sk:{sk:b<b>}:traffic:<voucherId>:user:<userId>:
+KEYS[7] IP rate-window prefix           sk:{sk:b<b>}:traffic:<voucherId>:ip:<sha256(ip)>:
 
 ARGV[1] userId
 ARGV[2] voucherId

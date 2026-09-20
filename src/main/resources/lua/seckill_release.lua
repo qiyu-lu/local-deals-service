@@ -3,8 +3,8 @@ Gives one closed or refunded order's unit back to the admission layer and lets t
 again. Idempotent without a marker: the user's reservation points at this order only until it
 is released, and a later purchase writes a different order id, so a replay finds nothing to do.
 
-KEYS[1] stock String          seckill:stock:{voucherId}
-KEYS[2] reservation Hash      seckill:reservation:{voucherId}  (userId -> orderId)
+KEYS[1] stock String          sk:{sk:b<b>}:stock:<voucherId>   (the buyer's own bucket)
+KEYS[2] reservation Hash      sk:{sk:b<b>}:resv:<voucherId>    (userId -> orderId)
 ARGV[1] userId
 ARGV[2] orderNo
 

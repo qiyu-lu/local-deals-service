@@ -15,8 +15,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.function.LongSupplier;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-
 /**
  * Short-lived seckill tokens bound to one user and one voucher, handed out only while the
  * activity is open. The purchase endpoint verifies them with an HMAC and no network IO, so a
@@ -30,9 +28,12 @@ public class SeckillTokenService {
     private final StringRedisTemplate redis;
     private final SeckillProperties.Token config;
     private final LongSupplier epochSeconds;
+    private final SeckillBucketRouter router;
     private final ThreadLocal<Mac> macs;
 
-    public SeckillTokenService(StringRedisTemplate redis, SeckillProperties.Token config, LongSupplier epochSeconds) {
+    public SeckillTokenService(StringRedisTemplate redis, SeckillProperties.Token config, LongSupplier epochSeconds,
+                               SeckillBucketRouter router) {
+        this.router = router;
         this.redis = redis;
         this.config = config;
         this.epochSeconds = epochSeconds;
@@ -54,7 +55,8 @@ public class SeckillTokenService {
 
     /** Issues a token only while the activity is ACTIVE and inside its window. */
     public Result issue(long userId, long voucherId) {
-        List<Object> meta = redis.opsForHash().multiGet(SECKILL_META_KEY + voucherId,
+        List<Object> meta = redis.opsForHash().multiGet(
+                router.metaKey(voucherId, router.bucketOfUser(userId)),
                 Arrays.asList("status", "beginAt", "endAt"));
         Long beginAt = meta == null ? null : parse(meta.get(1));
         Long endAt = meta == null ? null : parse(meta.get(2));

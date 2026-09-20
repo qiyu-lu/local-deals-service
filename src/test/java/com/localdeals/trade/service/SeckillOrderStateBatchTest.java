@@ -11,9 +11,6 @@ import org.springframework.data.redis.core.script.RedisScript;
 import java.util.Arrays;
 import java.util.List;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -23,22 +20,38 @@ import static org.mockito.Mockito.verify;
 
 /**
  * M4 replaces the per-message Redisson lock with an in-Redis claim: one round trip classifies a
- * whole batch and leases it away from the reconciler.
+ * whole batch and leases it away from the reconciler. M5 splits that round trip per stock
+ * bucket, because a Cluster call may only touch keys of one slot — the answers still come back
+ * in the caller's order.
  */
 class SeckillOrderStateBatchTest {
+
+    private static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(16);
+    /** Both buyers sit in the same bucket, so a plain batch stays one round trip. */
+    private static final long USER_A = 101L;
+    private static final long USER_B = 117L;
+    /** A third buyer, one bucket over. */
+    private static final long USER_C = 102L;
+    private static final int BUCKET = ROUTER.bucketOfUser(USER_A);
+    private static final int OTHER_BUCKET = ROUTER.bucketOfUser(USER_C);
+    private static final long ORDER_A = 9000L - (9000L & 1023L) + USER_A % 1024;
+    private static final long ORDER_B = 10240L + USER_B % 1024;
+    private static final long ORDER_C = 11264L + USER_C % 1024;
 
     private StringRedisTemplate redisTemplate;
     private SeckillOrderStateService service;
     private SeckillOrderMessage first;
     private SeckillOrderMessage second;
+    private SeckillOrderMessage other;
 
     @BeforeEach
     void setUp() {
         redisTemplate = mock(StringRedisTemplate.class);
         service = new SeckillOrderStateService(
-                redisTemplate, new SeckillProperties(), mock(SeckillSoldOutRegistry.class));
-        first = new SeckillOrderMessage(7L, 101L, 9001L);
-        second = new SeckillOrderMessage(8L, 102L, 9002L);
+                redisTemplate, new SeckillProperties(), mock(SeckillSoldOutRegistry.class), ROUTER);
+        first = new SeckillOrderMessage(7L, USER_A, ORDER_A);
+        second = new SeckillOrderMessage(8L, USER_B, ORDER_B);
+        other = new SeckillOrderMessage(8L, USER_C, ORDER_C);
     }
 
     @Test
@@ -58,14 +71,15 @@ class SeckillOrderStateBatchTest {
         ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
         verify(redisTemplate).execute(any(RedisScript.class), keys.capture(), args.capture());
         assertThat(keys.getValue()).containsExactly(
-                SECKILL_PROCESSING_INDEX_KEY,
-                SECKILL_ORDER_STATUS_KEY + 9001L, SECKILL_RESERVATION_KEY + 7L,
-                SECKILL_ORDER_STATUS_KEY + 9002L, SECKILL_RESERVATION_KEY + 8L);
+                ROUTER.processingKey(BUCKET),
+                ROUTER.statusKey(ORDER_A, BUCKET), ROUTER.reservationKey(7L, BUCKET),
+                ROUTER.statusKey(ORDER_B, BUCKET), ROUTER.reservationKey(8L, BUCKET));
         // owner, lease seconds, then one (userId, voucherId, orderId) triple per message
         assertThat(args.getValue()).hasSize(2 + 2 * 3);
         assertThat(args.getValue()[0]).isEqualTo(service.claimOwner());
         assertThat(Arrays.copyOfRange(args.getValue(), 2, 8)).containsExactly(
-                "101", "7", "9001", "102", "8", "9002");
+                Long.toString(USER_A), "7", Long.toString(ORDER_A),
+                Long.toString(USER_B), "8", Long.toString(ORDER_B));
     }
 
     @Test
@@ -96,9 +110,42 @@ class SeckillOrderStateBatchTest {
         ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
         verify(redisTemplate).execute(any(RedisScript.class), keys.capture(), any(Object[].class));
         assertThat(keys.getValue()).containsExactly(
-                SECKILL_PROCESSING_INDEX_KEY,
-                SECKILL_ORDER_STATUS_KEY + 9001L, SECKILL_RESERVATION_KEY + 7L,
-                SECKILL_ORDER_STATUS_KEY + 9002L, SECKILL_RESERVATION_KEY + 8L);
+                ROUTER.processingKey(BUCKET),
+                ROUTER.statusKey(ORDER_A, BUCKET), ROUTER.reservationKey(7L, BUCKET),
+                ROUTER.statusKey(ORDER_B, BUCKET), ROUTER.reservationKey(8L, BUCKET));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aBatchAcrossBucketsIsOneCallPerBucketAndKeepsTheCallerOrder() {
+        // Buyer order: other (bucket B), first (bucket A), second (bucket A).
+        doReturn(List.of(5L), Arrays.asList(1L, 2L)).when(redisTemplate)
+                .execute(any(RedisScript.class), anyList(), any(Object[].class));
+
+        assertThat(service.claimForPersistence(Arrays.asList(other, first, second)))
+                .containsExactly(
+                        SeckillOrderStateService.PersistClaim.CLAIM_BUSY,
+                        SeckillOrderStateService.PersistClaim.CLAIMED,
+                        SeckillOrderStateService.PersistClaim.ALREADY_SUCCESS);
+
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(redisTemplate, org.mockito.Mockito.times(2))
+                .execute(any(RedisScript.class), keys.capture(), any(Object[].class));
+        assertThat(keys.getAllValues().get(0)).containsExactly(
+                ROUTER.processingKey(OTHER_BUCKET),
+                ROUTER.statusKey(ORDER_C, OTHER_BUCKET), ROUTER.reservationKey(8L, OTHER_BUCKET));
+        assertThat(keys.getAllValues().get(1)).containsExactly(
+                ROUTER.processingKey(BUCKET),
+                ROUTER.statusKey(ORDER_A, BUCKET), ROUTER.reservationKey(7L, BUCKET),
+                ROUTER.statusKey(ORDER_B, BUCKET), ROUTER.reservationKey(8L, BUCKET));
+        // Each call stays inside one slot.
+        for (List<String> call : keys.getAllValues()) {
+            assertThat(call.stream().map(SeckillOrderStateBatchTest::hashTag).distinct()).hasSize(1);
+        }
+    }
+
+    private static String hashTag(String key) {
+        return key.substring(key.indexOf('{') + 1, key.indexOf('}'));
     }
 
     @Test

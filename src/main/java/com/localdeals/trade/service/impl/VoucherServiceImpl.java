@@ -22,9 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
-
 /**
  * <p>
  *  服务实现类
@@ -43,6 +40,8 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     private ISeckillVoucherService seckillVoucherService;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private com.localdeals.trade.service.SeckillBucketRouter seckillBucketRouter;
     @Override
     public Result queryVoucherOfShop(Long shopId) {
         // 查询优惠券信息
@@ -102,15 +101,20 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
             @Override
             public void afterCommit() {
                 try {
-                    stringRedisTemplate.opsForValue().set(
-                            SECKILL_STOCK_KEY + voucherId,
-                            stock.toString()
-                    );
                     Map<String, String> metadata = new LinkedHashMap<>();
                     metadata.put("status", "ACTIVE");
                     metadata.put("beginAt", Long.toString(beginAt));
                     metadata.put("endAt", Long.toString(endAt));
-                    stringRedisTemplate.opsForHash().putAll(SECKILL_META_KEY + voucherId, metadata);
+                    // The stock is split over the buckets and the metadata is replicated into
+                    // each of them: one admission call may only touch its own bucket's slot.
+                    for (int bucket = 0; bucket < seckillBucketRouter.count(); bucket++) {
+                        stringRedisTemplate.opsForValue().set(
+                                seckillBucketRouter.stockKey(voucherId, bucket),
+                                Long.toString(seckillBucketRouter.stockShare(stock, bucket))
+                        );
+                        stringRedisTemplate.opsForHash().putAll(
+                                seckillBucketRouter.metaKey(voucherId, bucket), metadata);
+                    }
                 } catch (RuntimeException e) {
                     // DB 已经提交：预热失败应由监控/补偿修复，不能把已成功的创建伪装成失败。
                     log.error("Failed to preheat seckill voucher in Redis after commit, voucherId={}", voucherId, e);

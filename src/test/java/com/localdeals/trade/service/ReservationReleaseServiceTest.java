@@ -17,6 +17,8 @@ import static org.mockito.Mockito.when;
 
 class ReservationReleaseServiceTest {
 
+    private static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(16);
+
     private StringRedisTemplate redis;
     private SeckillSoldOutRegistry soldOut;
     private ReservationReleaseService service;
@@ -27,8 +29,8 @@ class ReservationReleaseServiceTest {
         redis = mock(StringRedisTemplate.class);
         soldOut = mock(SeckillSoldOutRegistry.class);
         service = new ReservationReleaseService(redis, mock(TradeOrderMapper.class),
-                mock(ISeckillVoucherService.class), soldOut);
-        order.setOrderNo(1L << 58);
+                mock(ISeckillVoucherService.class), soldOut, ROUTER);
+        order.setOrderNo((1L << 58) + 23L);
         order.setUserId(23L);
         order.setVoucherId(17L);
     }
@@ -40,7 +42,7 @@ class ReservationReleaseServiceTest {
 
         assertThat(service.release(order)).isTrue();
 
-        verify(soldOut).clear(17L);
+        verify(soldOut).clear(17L, ROUTER.bucketOfUser(23L));
     }
 
     @Test

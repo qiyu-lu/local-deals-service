@@ -20,15 +20,9 @@ public class RedisConstants {
 
     public static final String EMPTY_PLACEHOLDER = "_NULL_PLACEHOLDER_";
 
-    public static final String SECKILL_STOCK_KEY = "seckill:stock:";
-    /** Activity metadata Hash: status, beginAt and endAt (epoch seconds). */
-    public static final String SECKILL_META_KEY = "seckill:meta:";
-    /** Per-voucher reservation Hash: userId -> exact orderId. */
-    public static final String SECKILL_RESERVATION_KEY = "seckill:reservation:";
-    /** Per-order status Hash: PROCESSING, SUCCESS or FAILED plus ownership metadata. */
-    public static final String SECKILL_ORDER_STATUS_KEY = "seckill:order:status:";
-    /** Global due-time index. Members are exact decimal order-id strings; scores are epoch seconds. */
-    public static final String SECKILL_PROCESSING_INDEX_KEY = "seckill:order:processing";
+    // Since M5 the seckill keys are per stock bucket and are built by SeckillBucketRouter:
+    // stock, activity metadata, the reservation Hash, one status Hash per order, the due-time
+    // index and the rate-limit windows all carry the bucket's hash tag.
     /** Per-order scheduler arbitration lock; losers must not move the winner's due score. */
     public static final String SECKILL_RECONCILIATION_LOCK_KEY = "lock:seckill:reconcile:";
     public static final Long SECKILL_ORDER_STATUS_TTL_SECONDS = 7 * 24 * 60 * 60L;

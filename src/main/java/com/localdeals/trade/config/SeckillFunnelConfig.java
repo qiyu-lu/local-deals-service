@@ -3,6 +3,7 @@ package com.localdeals.trade.config;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localdeals.trade.interceptor.SeckillSoldOutInterceptor;
+import com.localdeals.trade.service.SeckillBucketRouter;
 import com.localdeals.trade.service.SeckillLocalRateLimiter;
 import com.localdeals.trade.service.SeckillSoldOutRegistry;
 import com.localdeals.trade.service.SeckillTokenService;
@@ -20,9 +21,10 @@ public class SeckillFunnelConfig {
 
     @Bean
     public SeckillSoldOutRegistry seckillSoldOutRegistry(StringRedisTemplate redis, SeckillProperties properties,
+                                                         SeckillBucketRouter router,
                                                          ObjectProvider<RedisMessageListenerContainer> containers) {
         SeckillSoldOutRegistry registry = new SeckillSoldOutRegistry(redis,
-                properties.getFunnel().getSoldOutProbeInterval(), System::currentTimeMillis);
+                properties.getFunnel().getSoldOutProbeInterval(), System::currentTimeMillis, router);
         // Flags travel on the pub/sub container the WebSocket fan-out already runs.
         containers.ifAvailable(container ->
                 container.addMessageListener(registry, new ChannelTopic(SeckillSoldOutRegistry.CHANNEL)));
@@ -37,13 +39,17 @@ public class SeckillFunnelConfig {
     }
 
     @Bean
-    public SeckillTokenService seckillTokenService(StringRedisTemplate redis, SeckillProperties properties) {
-        return new SeckillTokenService(redis, properties.getToken(), () -> System.currentTimeMillis() / 1000);
+    public SeckillTokenService seckillTokenService(StringRedisTemplate redis, SeckillProperties properties,
+                                                   SeckillBucketRouter router) {
+        return new SeckillTokenService(redis, properties.getToken(), () -> System.currentTimeMillis() / 1000,
+                router);
     }
 
     @Bean
-    public SeckillLocalRateLimiter seckillLocalRateLimiter(SeckillProperties properties) {
+    public SeckillLocalRateLimiter seckillLocalRateLimiter(SeckillProperties properties,
+                                                           SeckillBucketRouter router) {
         SeckillProperties.Funnel funnel = properties.getFunnel();
-        return new SeckillLocalRateLimiter(funnel.getStockFactor(), funnel.getMinPermitsPerSecond(), System::nanoTime);
+        return new SeckillLocalRateLimiter(funnel.getStockFactor(), funnel.getMinPermitsPerSecond(),
+                System::nanoTime, router);
     }
 }

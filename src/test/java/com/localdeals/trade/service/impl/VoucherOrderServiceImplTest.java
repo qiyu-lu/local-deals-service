@@ -44,6 +44,10 @@ class VoucherOrderServiceImplTest {
     private SeckillSoldOutRegistry soldOut;
     private SeckillLocalRateLimiter bucket;
 
+    private static final com.localdeals.trade.service.SeckillBucketRouter ROUTER =
+            new com.localdeals.trade.service.SeckillBucketRouter(16);
+    private static final int BUCKET = ROUTER.bucketOfUser(23L);
+
     @BeforeEach
     void setUp() {
         service = new VoucherOrderServiceImpl();
@@ -53,7 +57,8 @@ class VoucherOrderServiceImplTest {
         stateService = mock(SeckillOrderStateService.class);
         soldOut = mock(SeckillSoldOutRegistry.class);
         bucket = mock(SeckillLocalRateLimiter.class);
-        when(bucket.tryAcquire(17L)).thenReturn(true);
+        when(bucket.tryAcquire(17L, BUCKET)).thenReturn(true);
+        ReflectionTestUtils.setField(service, "seckillBucketRouter", ROUTER);
 
         tradeOrderMapper = mock(TradeOrderMapper.class);
         MybatisPlusMocks.injectMapper(service, tradeOrderMapper, TradeOrder.class);
@@ -216,7 +221,7 @@ class VoucherOrderServiceImplTest {
 
     @Test
     void theLocalBucketTurnsExcessAwayBeforeAnyIdOrRedisCall() {
-        when(bucket.tryAcquire(17L)).thenReturn(false);
+        when(bucket.tryAcquire(17L, BUCKET)).thenReturn(false);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.seckillVoucher(17L, "203.0.113.9"))
@@ -233,7 +238,7 @@ class VoucherOrderServiceImplTest {
 
         service.seckillVoucher(17L, "203.0.113.9");
 
-        verify(bucket).observe(17L, 5L);
+        verify(bucket).observe(17L, BUCKET, 5L);
     }
 
     @Test
@@ -242,7 +247,7 @@ class VoucherOrderServiceImplTest {
 
         service.seckillVoucher(17L, "203.0.113.9");
 
-        verify(soldOut).markSoldOut(17L);
+        verify(soldOut).markSoldOut(17L, BUCKET);
     }
 
     @Test
@@ -252,18 +257,18 @@ class VoucherOrderServiceImplTest {
 
         service.seckillVoucher(17L, "203.0.113.9");
 
-        verify(soldOut).markSoldOut(17L);
+        verify(soldOut).markSoldOut(17L, BUCKET);
     }
 
     @Test
     void aProbeThatFindsStockClearsAStaleFlag() {
-        when(soldOut.isSoldOut(17L)).thenReturn(true);
+        when(soldOut.isSoldOut(17L, BUCKET)).thenReturn(true);
         admissionReturns(SeckillAdmissionService.ACCEPTED);
 
         service.seckillVoucher(17L, "203.0.113.9");
 
-        verify(soldOut).clear(17L);
-        verify(soldOut, org.mockito.Mockito.never()).markSoldOut(17L);
+        verify(soldOut).clear(17L, BUCKET);
+        verify(soldOut, org.mockito.Mockito.never()).markSoldOut(17L, BUCKET);
     }
 
     @Test

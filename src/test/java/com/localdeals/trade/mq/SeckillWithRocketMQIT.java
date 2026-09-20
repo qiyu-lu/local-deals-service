@@ -25,11 +25,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.awaitility.Awaitility.await;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(properties = {
@@ -50,6 +45,9 @@ class SeckillWithRocketMQIT {
     private SeckillAdmissionService seckillAdmissionService;
 
     @Resource
+    private com.localdeals.trade.service.SeckillBucketRouter router;
+
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @MockitoBean
@@ -66,16 +64,20 @@ class SeckillWithRocketMQIT {
     @BeforeEach
     void setup() {
         issuedOrderIds.clear();
-        stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + TEST_VOUCHER_ID, String.valueOf(STOCK));
-        stringRedisTemplate.delete(Arrays.asList(
-                SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID,
-                SECKILL_META_KEY + TEST_VOUCHER_ID));
         long now = java.time.Instant.now().getEpochSecond();
         Map<String, String> metadata = new HashMap<>();
         metadata.put("status", "ACTIVE");
         metadata.put("beginAt", Long.toString(now - 60));
         metadata.put("endAt", Long.toString(now + 600));
-        stringRedisTemplate.opsForHash().putAll(SECKILL_META_KEY + TEST_VOUCHER_ID, metadata);
+        // The stock is split over the buckets; 500 consecutive buyers fill every one of them.
+        for (int bucket = 0; bucket < router.count(); bucket++) {
+            stringRedisTemplate.delete(Arrays.asList(
+                    router.reservationKey(TEST_VOUCHER_ID, bucket),
+                    router.metaKey(TEST_VOUCHER_ID, bucket)));
+            stringRedisTemplate.opsForValue().set(router.stockKey(TEST_VOUCHER_ID, bucket),
+                    Long.toString(router.stockShare(STOCK, bucket)));
+            stringRedisTemplate.opsForHash().putAll(router.metaKey(TEST_VOUCHER_ID, bucket), metadata);
+        }
     }
 
     @AfterEach
@@ -83,19 +85,21 @@ class SeckillWithRocketMQIT {
         // Clear Redis test data so leftover state doesn't bleed into the next run.
         // This test isolates the Redis/RocketMQ admission gate: the DB service and
         // WebSocket notifier are mocks, so no persistent order or external push remains.
-        stringRedisTemplate.delete(Arrays.asList(
-                SECKILL_STOCK_KEY + TEST_VOUCHER_ID,
-                SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID,
-                SECKILL_META_KEY + TEST_VOUCHER_ID));
+        for (int bucket = 0; bucket < router.count(); bucket++) {
+            stringRedisTemplate.delete(Arrays.asList(
+                    router.stockKey(TEST_VOUCHER_ID, bucket),
+                    router.reservationKey(TEST_VOUCHER_ID, bucket),
+                    router.metaKey(TEST_VOUCHER_ID, bucket)));
+        }
         if (!issuedOrderIds.isEmpty()) {
             java.util.List<String> statusKeys = issuedOrderIds.stream()
-                    .map(id -> SECKILL_ORDER_STATUS_KEY + id)
+                    .map(router::statusKeyOfOrder)
                     .collect(java.util.stream.Collectors.toList());
             stringRedisTemplate.delete(statusKeys);
-            String[] orderIds = issuedOrderIds.stream()
-                    .map(String::valueOf)
-                    .toArray(String[]::new);
-            stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, (Object[]) orderIds);
+            for (Long orderId : issuedOrderIds) {
+                stringRedisTemplate.opsForZSet().remove(
+                        router.processingKey(router.bucketOfOrder(orderId)), String.valueOf(orderId));
+            }
         }
     }
 
@@ -134,7 +138,11 @@ class SeckillWithRocketMQIT {
         assertThat(acceptedOrderIds).doesNotHaveDuplicates();
 
         // The exact reservation Hash is the only purchased-user record in Redis.
-        Long reservations = stringRedisTemplate.opsForHash().size(SECKILL_RESERVATION_KEY + TEST_VOUCHER_ID);
+        long reservations = 0;
+        for (int bucket = 0; bucket < router.count(); bucket++) {
+            reservations += stringRedisTemplate.opsForHash()
+                    .size(router.reservationKey(TEST_VOUCHER_ID, bucket));
+        }
         assertThat(reservations).isEqualTo((long) acceptedOrderIds.size());
 
         // Do not tear down reservations while the real asynchronous consumer is still
@@ -145,7 +153,7 @@ class SeckillWithRocketMQIT {
                 .pollInterval(100, TimeUnit.MILLISECONDS)
                 .untilAsserted(() -> acceptedOrderIds.forEach(orderId ->
                         assertThat(stringRedisTemplate.opsForHash().get(
-                                SECKILL_ORDER_STATUS_KEY + orderId, "status"))
+                                router.statusKeyOfOrder(orderId), "status"))
                                 .isEqualTo("SUCCESS")));
 
         // SUCCESS and removal from the due index are one Lua transition. A status-only
@@ -153,7 +161,7 @@ class SeckillWithRocketMQIT {
         acceptedOrderIds.forEach(orderId -> {
             String member = String.valueOf(orderId);
             assertThat(stringRedisTemplate.opsForZSet().score(
-                    SECKILL_PROCESSING_INDEX_KEY, member)).isNull();
+                    router.processingKey(router.bucketOfOrder(orderId)), member)).isNull();
         });
 
         System.out.println("Accepted orders: " + acceptedOrderIds.size() + "/" + TOTAL_USERS);

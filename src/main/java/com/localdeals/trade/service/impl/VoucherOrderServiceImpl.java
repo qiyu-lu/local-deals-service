@@ -19,6 +19,7 @@ import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.trade.service.OrderStateMachine;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillAdmissionService;
+import com.localdeals.trade.service.SeckillBucketRouter;
 import com.localdeals.trade.service.SeckillLocalRateLimiter;
 import com.localdeals.trade.service.SeckillSoldOutRegistry;
 import com.localdeals.platform.observability.LocalDealsMetrics;
@@ -77,6 +78,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     private SeckillLocalRateLimiter seckillLocalRateLimiter;
 
     @Resource
+    private SeckillBucketRouter seckillBucketRouter;
+
+    @Resource
     private SeckillOrderStateService seckillOrderStateService;
 
 
@@ -127,8 +131,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     @Override
     public Result seckillVoucher(Long voucherId, String clientIp) {
         Long userId = UserHolder.getUser().getId();
+        // The buyer's stock bucket decides every Redis key and both local funnel layers.
+        int bucket = seckillBucketRouter.bucketOfUser(userId);
         // L2: more requests than the remaining stock can satisfy never cost a Redis round trip.
-        if (!seckillLocalRateLimiter.tryAcquire(voucherId)) {
+        if (!seckillLocalRateLimiter.tryAcquire(voucherId, bucket)) {
             requestBusyRejectedCounter.increment();
             localDealsMetrics.recordTraffic(SECKILL, REJECTED, ACTIVITY);
             throw new ApiStatusException(HttpStatus.TOO_MANY_REQUESTS,
@@ -142,8 +148,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
             orderId = allocateOrderId(voucherId, userId);
             admission = admit(voucherId, userId, orderId, clientIp);
         }
-        seckillLocalRateLimiter.observe(voucherId, admission.remainingStock());
-        updateSoldOutFlag(voucherId, admission);
+        seckillLocalRateLimiter.observe(voucherId, bucket, admission.remainingStock());
+        updateSoldOutFlag(voucherId, bucket, admission);
 
         switch (admission.code()) {
             case SeckillAdmissionService.ACCEPTED:
@@ -183,13 +189,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
     }
 
     /** L1 bookkeeping: Redis just told us whether this voucher still has stock. */
-    private void updateSoldOutFlag(Long voucherId, SeckillAdmissionService.Admission admission) {
+    private void updateSoldOutFlag(Long voucherId, int bucket, SeckillAdmissionService.Admission admission) {
         if (admission.code() == SeckillAdmissionService.OUT_OF_STOCK
                 || (admission.code() == SeckillAdmissionService.ACCEPTED && admission.remainingStock() == 0)) {
-            seckillSoldOutRegistry.markSoldOut(voucherId);
-        } else if (admission.code() == SeckillAdmissionService.ACCEPTED && seckillSoldOutRegistry.isSoldOut(voucherId)) {
+            // Only this bucket is empty; the other buyers of the voucher still reach Redis.
+            seckillSoldOutRegistry.markSoldOut(voucherId, bucket);
+        } else if (admission.code() == SeckillAdmissionService.ACCEPTED
+                && seckillSoldOutRegistry.isSoldOut(voucherId, bucket)) {
             // This request was the probe of a stale flag, and there was stock after all.
-            seckillSoldOutRegistry.clear(voucherId);
+            seckillSoldOutRegistry.clear(voucherId, bucket);
         }
     }
 

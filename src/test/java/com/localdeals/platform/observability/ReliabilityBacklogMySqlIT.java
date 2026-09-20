@@ -43,7 +43,8 @@ class ReliabilityBacklogMySqlIT {
         properties.setSamplingEnabled(true);
         collector = new ReliabilityBacklogCollector(properties, jdbcTemplate,
                 mock(StringRedisTemplate.class), mock(BlogHotRankService.class),
-                new LocalDealsMetrics(registry));
+                new LocalDealsMetrics(registry),
+                new com.localdeals.trade.service.SeckillBucketRouter(1));
     }
 
     @AfterEach

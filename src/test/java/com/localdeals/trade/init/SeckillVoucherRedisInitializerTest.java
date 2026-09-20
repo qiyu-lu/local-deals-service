@@ -13,8 +13,6 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +26,8 @@ import static org.mockito.Mockito.when;
 class SeckillVoucherRedisInitializerTest {
 
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final com.localdeals.trade.service.SeckillBucketRouter ROUTER =
+            new com.localdeals.trade.service.SeckillBucketRouter(4);
 
     private ISeckillVoucherService seckillVoucherService;
     private StringRedisTemplate stringRedisTemplate;
@@ -38,7 +38,7 @@ class SeckillVoucherRedisInitializerTest {
         seckillVoucherService = mock(ISeckillVoucherService.class);
         stringRedisTemplate = mock(StringRedisTemplate.class);
         initializer = new SeckillVoucherRedisInitializer(
-                seckillVoucherService, stringRedisTemplate);
+                seckillVoucherService, stringRedisTemplate, ROUTER);
     }
 
     @Test
@@ -54,17 +54,20 @@ class SeckillVoucherRedisInitializerTest {
         assertThat(initializer.initializeFromDatabase()).isEqualTo(1);
 
         verify(seckillVoucherService).list();
-        verify(stringRedisTemplate).execute(
-                any(RedisScript.class),
-                org.mockito.ArgumentMatchers.eq(Arrays.asList(
-                        SECKILL_STOCK_KEY + 101L,
-                        SECKILL_META_KEY + 101L)),
-                org.mockito.ArgumentMatchers.eq("25"),
-                org.mockito.ArgumentMatchers.eq(Long.toString(
-                        beginTime.atZone(BUSINESS_ZONE).toEpochSecond())),
-                org.mockito.ArgumentMatchers.eq(Long.toString(
-                        endTime.atZone(BUSINESS_ZONE).toEpochSecond()))
-        );
+        // 25 units over four buckets: 7, 6, 6, 6 — and the window is replicated into each.
+        for (int bucket = 0; bucket < ROUTER.count(); bucket++) {
+            verify(stringRedisTemplate).execute(
+                    any(RedisScript.class),
+                    org.mockito.ArgumentMatchers.eq(Arrays.asList(
+                            ROUTER.stockKey(101L, bucket),
+                            ROUTER.metaKey(101L, bucket))),
+                    org.mockito.ArgumentMatchers.eq(Long.toString(ROUTER.stockShare(25, bucket))),
+                    org.mockito.ArgumentMatchers.eq(Long.toString(
+                            beginTime.atZone(BUSINESS_ZONE).toEpochSecond())),
+                    org.mockito.ArgumentMatchers.eq(Long.toString(
+                            endTime.atZone(BUSINESS_ZONE).toEpochSecond()))
+            );
+        }
     }
 
     @Test
