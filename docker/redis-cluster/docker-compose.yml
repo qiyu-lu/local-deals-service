@@ -1,0 +1,87 @@
+# Three masters and three replicas for the M5 failure drill.
+#
+# The nodes share the host's network namespace. A Cluster node gossips the address it announces,
+# and clients follow MOVED to that same address: with a bridge network the nodes would have to
+# announce their container addresses, which the application and the benchmark, both running on
+# the host, cannot reach, while announcing 127.0.0.1 would point every node at itself. Host
+# networking makes one address true for everyone. Each node therefore owns a host port:
+# 2700x for clients, 3700x for the cluster bus.
+
+x-node: &node
+  image: redis:6.2
+  restart: ${STACK_RESTART:-no}
+  network_mode: host
+
+services:
+  redis-c1:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c1
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}1 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}1
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}1
+
+  redis-c2:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c2
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}2 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}2
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}2
+
+  redis-c3:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c3
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}3 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}3
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}3
+
+  redis-c4:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c4
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}4 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}4
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}4
+
+  redis-c5:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c5
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}5 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}5
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}5
+
+  redis-c6:
+    <<: *node
+    container_name: ${STACK_NAME:-local-deals}-redis-c6
+    command: >-
+      redis-server --port ${REDIS_CLUSTER_PORT_BASE:-27000}6 --cluster-enabled yes
+      --cluster-config-file nodes.conf --cluster-node-timeout 5000
+      --appendonly no --save ""
+      --requirepass ${LOCAL_DEALS_REDIS_PASSWORD:?} --masterauth ${LOCAL_DEALS_REDIS_PASSWORD:?}
+      --cluster-announce-ip 127.0.0.1
+      --cluster-announce-port ${REDIS_CLUSTER_PORT_BASE:-27000}6
+      --cluster-announce-bus-port ${REDIS_CLUSTER_BUS_BASE:-37000}6
+
