@@ -1,0 +1,102 @@
+2026-09-19 23:49:49 preflight: ALLOW_DIRTY set, running with uncommitted changes:  M README.md;  M benchmark/v2/scripts/kill-drill.sh;  M docs/guides/environment-setup.md;  M docs/plan/v2-high-concurrency-plan.md;  M scripts/bench.sh; ?? docs/adr/0004-m3-admission-funnel.md
+2026-09-19 23:49:50 scenario m3-smoke -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m3/20260919-234949-m3-smoke
+2026-09-19 23:49:50 phase stack-up start (timeout 900s)
+ Network ld-m3bench_local-deals-net  Creating
+ Network ld-m3bench_local-deals-net  Created
+ Volume "ld-m3bench_mysql-data"  Creating
+ Volume "ld-m3bench_mysql-data"  Created
+ Volume "ld-m3bench_redis-data"  Creating
+ Volume "ld-m3bench_redis-data"  Created
+ Container ld-m3bench-redis  Creating
+ Container ld-m3bench-namesrv  Creating
+ Container ld-m3bench-es  Creating
+ Container ld-m3bench-mysql  Creating
+ Container ld-m3bench-redis  Created
+ Container ld-m3bench-namesrv  Created
+ Container ld-m3bench-broker  Creating
+ Container ld-m3bench-es  Created
+ Container ld-m3bench-mysql  Created
+ Container ld-m3bench-broker  Created
+ Container ld-m3bench-namesrv  Starting
+ Container ld-m3bench-mysql  Starting
+ Container ld-m3bench-redis  Starting
+ Container ld-m3bench-es  Starting
+ Container ld-m3bench-mysql  Started
+ Container ld-m3bench-redis  Started
+ Container ld-m3bench-es  Started
+ Container ld-m3bench-namesrv  Started
+ Container ld-m3bench-broker  Starting
+ Container ld-m3bench-broker  Started
+dependency containers pinned to CPUs 4-5,12-13
+stack ld-m3bench ready: mysql=33306 redis=36379 namesrv=39876 broker=30911 es=39200
+2026-09-19 23:50:41 phase stack-up done
+2026-09-19 23:50:41 phase build start (timeout 1200s)
+准备工作区（分离头指针 033e7a8）
+HEAD 现在位于 033e7a8 Merge v2/m2-order-lifecycle: M2 order lifecycle, payment, timeout close, refund, coupon assets
+2026-09-19 23:50:50 phase build done
+2026-09-19 23:50:50 phase ladder-baseline start (timeout 960s)
+app started pid=454163 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=033e7a8, kind=step, target_rps=200, stock=1000, voucher=10, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=2.3, p95_ms=11.9, p99_ms=111.7, max_ms=160.1, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=0.0, persist_orders_per_s=220.1, app_cpu_cores=1.95, mysql_cpu_cores=0.17, redis_cpu_cores=0.06, broker_cpu_cores=0.64, half_msgs=1001, order_msgs=1000, k6_cpu_cores=0.09, raw=step-r200-s1000-235059.json
+commit=033e7a8, kind=step, target_rps=500, stock=200, voucher=11, achieved_rps=500.0, requests=5000, dropped=0, p50_ms=1.0, p95_ms=3.2, p99_ms=17.4, max_ms=92.1, http_fail_rate=0, accepted=200, outcomes=accepted=200;out_of_stock=4800, drain_s_after_load=0.0, persist_orders_per_s=, app_cpu_cores=0.83, mysql_cpu_cores=0.03, redis_cpu_cores=0.06, broker_cpu_cores=0.47, half_msgs=5000, order_msgs=200, k6_cpu_cores=0.13, raw=step-r500-s200-235121.json
+commit=033e7a8, kind=step, target_rps=2000, stock=200, voucher=12, achieved_rps=1999.9, requests=20000, dropped=0, p50_ms=0.6, p95_ms=3.0, p99_ms=20.8, max_ms=44.5, http_fail_rate=0, accepted=200, outcomes=accepted=200;out_of_stock=19800, drain_s_after_load=0.0, persist_orders_per_s=67.6, app_cpu_cores=1.04, mysql_cpu_cores=0.04, redis_cpu_cores=0.15, broker_cpu_cores=0.35, half_msgs=20000, order_msgs=200, k6_cpu_cores=0.36, raw=step-r2000-s200-235151.json
+app stopped
+2026-09-19 23:52:21 phase ladder-baseline done
+2026-09-19 23:52:21 phase ladder-current start (timeout 960s)
+app started pid=465091 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=f59d966, kind=step, target_rps=200, stock=1000, voucher=13, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=0.9, p95_ms=1.5, p99_ms=4.0, max_ms=37.5, http_fail_rate=1, accepted=0, outcomes=http_other=1001, drain_s_after_load=0.0, persist_orders_per_s=, app_cpu_cores=0.47, mysql_cpu_cores=0.01, redis_cpu_cores=0.01, broker_cpu_cores=0.06, half_msgs=0, order_msgs=0, k6_cpu_cores=0.08, raw=step-r200-s1000-235227.json
+commit=f59d966, kind=step, target_rps=500, stock=200, voucher=14, achieved_rps=500.0, requests=5001, dropped=0, p50_ms=0.2, p95_ms=0.3, p99_ms=2.6, max_ms=24.1, http_fail_rate=0, accepted=200, outcomes=accepted=200;out_of_stock=4801, drain_s_after_load=0.0, persist_orders_per_s=77.5, app_cpu_cores=0.47, mysql_cpu_cores=0.04, redis_cpu_cores=0.01, broker_cpu_cores=0.07, half_msgs=0, order_msgs=200, k6_cpu_cores=0.12, raw=step-r500-s200-235249.json
+commit=f59d966, kind=step, target_rps=2000, stock=200, voucher=15, achieved_rps=1999.8, requests=20000, dropped=0, p50_ms=0.1, p95_ms=0.2, p99_ms=17.4, max_ms=61.2, http_fail_rate=0, accepted=200, outcomes=accepted=200;out_of_stock=19800, drain_s_after_load=0.0, persist_orders_per_s=68.5, app_cpu_cores=0.44, mysql_cpu_cores=0.04, redis_cpu_cores=0.01, broker_cpu_cores=0.1, half_msgs=0, order_msgs=200, k6_cpu_cores=0.39, raw=step-r2000-s200-235317.json
+app stopped
+2026-09-19 23:53:48 phase ladder-current done
+2026-09-19 23:53:48 phase drain-baseline-1 start (timeout 1500s)
+app started pid=472856 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=033e7a8, kind=step, target_rps=200, stock=1000, voucher=16, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=1.8, p95_ms=5.0, p99_ms=24.6, max_ms=64.3, http_fail_rate=0, accepted=1000, outcomes=accepted=1000;out_of_stock=1, drain_s_after_load=5.3, persist_orders_per_s=87.2, app_cpu_cores=1.7, mysql_cpu_cores=0.15, redis_cpu_cores=0.05, broker_cpu_cores=0.25, half_msgs=1001, order_msgs=1000, k6_cpu_cores=0.09, raw=step-r200-s1000-235355.json
+commit=033e7a8, kind=drain, target_rps=1000, stock=2000, voucher=17, achieved_rps=1000.0, requests=3001, dropped=0, p50_ms=0.9, p95_ms=3.3, p99_ms=8.7, max_ms=17.0, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=16.8, persist_orders_per_s=107.0, app_cpu_cores=1.24, mysql_cpu_cores=0.07, redis_cpu_cores=0.07, broker_cpu_cores=0.22, half_msgs=3001, order_msgs=2000, k6_cpu_cores=0.19, raw=drain-r1000-s2000-235422.json
+app stopped
+2026-09-19 23:55:04 phase drain-baseline-1 done
+2026-09-19 23:55:04 phase drain-current-1 start (timeout 1500s)
+app started pid=487604 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+commit=f59d966, kind=step, target_rps=200, stock=1000, voucher=18, achieved_rps=200.1, requests=1001, dropped=0, p50_ms=0.9, p95_ms=1.5, p99_ms=3.3, max_ms=38.6, http_fail_rate=1, accepted=0, outcomes=http_other=1001, drain_s_after_load=0.0, persist_orders_per_s=, app_cpu_cores=0.49, mysql_cpu_cores=0.01, redis_cpu_cores=0.01, broker_cpu_cores=0.06, half_msgs=0, order_msgs=0, k6_cpu_cores=0.08, raw=step-r200-s1000-235510.json
+commit=f59d966, kind=drain, target_rps=1000, stock=2000, voucher=19, achieved_rps=999.8, requests=3001, dropped=0, p50_ms=0.9, p95_ms=9.3, p99_ms=34.1, max_ms=91.0, http_fail_rate=0, accepted=2000, outcomes=accepted=2000;out_of_stock=1001, drain_s_after_load=2.1, persist_orders_per_s=390.2, app_cpu_cores=3.34, mysql_cpu_cores=0.34, redis_cpu_cores=0.1, broker_cpu_cores=0.32, half_msgs=0, order_msgs=2000, k6_cpu_cores=0.24, raw=drain-r1000-s2000-235532.json
+app stopped
+2026-09-19 23:55:57 phase drain-current-1 done
+2026-09-19 23:55:57 phase broker-kill-drill-1 start (timeout 2700s)
+app started pid=497670 cpus=0-3,8-11 log=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/m3bench/app.log
+users=20000 tokens=/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/run/tokens.csv
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe
+commit=f59d966, kind=step, target_rps=200, stock=1000, voucher=20, achieved_rps=200.0, requests=1000, dropped=0, p50_ms=0.8, p95_ms=1.7, p99_ms=2.5, max_ms=43.8, http_fail_rate=1, accepted=0, outcomes=http_other=1000, drain_s_after_load=0.0, persist_orders_per_s=, app_cpu_cores=0.45, mysql_cpu_cores=0.01, redis_cpu_cores=0.01, broker_cpu_cores=0.06, half_msgs=0, order_msgs=0, k6_cpu_cores=0.09, raw=step-r200-s1000-235606.json
+app stopped
+2026-09-19 23:57:24 phase broker-kill-drill-1 done
+2026-09-19 23:57:24 scenario m3-smoke done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m3/20260919-234949-m3-smoke
+ Container ld-m3bench-mysql  Stopping
+ Container ld-m3bench-redis  Stopping
+ Container ld-m3bench-es  Stopping
+ Container ld-m3bench-broker  Stopping
+ Container ld-m3bench-redis  Stopped
+ Container ld-m3bench-redis  Removing
+ Container ld-m3bench-redis  Removed
+ Container ld-m3bench-mysql  Stopped
+ Container ld-m3bench-mysql  Removing
+ Container ld-m3bench-mysql  Removed
+ Container ld-m3bench-es  Stopped
+ Container ld-m3bench-es  Removing
+ Container ld-m3bench-es  Removed
+ Container ld-m3bench-broker  Stopped
+ Container ld-m3bench-broker  Removing
+ Container ld-m3bench-broker  Removed
+ Container ld-m3bench-namesrv  Stopping
+ Container ld-m3bench-namesrv  Stopped
+ Container ld-m3bench-namesrv  Removing
+ Container ld-m3bench-namesrv  Removed
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Network ld-m3bench_local-deals-net  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+ Network ld-m3bench_local-deals-net  Removed
+2026-09-19 23:57:51 cleanup done; status: DONE

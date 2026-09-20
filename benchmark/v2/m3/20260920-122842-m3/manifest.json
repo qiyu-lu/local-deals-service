@@ -1,0 +1,60 @@
+{
+  "scenario": "m3",
+  "started_at": "2026-09-20T12:28:42+0800",
+  "commit": "5639bc52b34d93ba1310dabcf1c9439f78b0415e",
+  "commit_short": "5639bc5",
+  "uncommitted_changes": "?? benchmark/v2/m3/20260919-234949-m3-smoke/\n?? benchmark/v2/m3/20260920-122842-m3/",
+  "baseline": {
+    "tag": "v2.0-m2",
+    "commit": "033e7a87bbcff8aabba35634b9ab1167d3f08e9a"
+  },
+  "parameters": {
+    "rates": "500 1000 2000 5000 10000 15000 20000 25000 30000",
+    "drain_rounds": "3",
+    "milestone": "m3",
+    "drain_stock": "20000",
+    "kill_stock": "20000",
+    "extra_args": "",
+    "kill_rate": "2000",
+    "users": "100000",
+    "baseline_tag": "v2.0-m2",
+    "kill_rounds": "2",
+    "broker_kill_rounds": "1",
+    "kill_after": "6",
+    "warmup_rate": "500",
+    "warmup_duration": "30s",
+    "step_stock": "1000",
+    "drain_rate": "2000",
+    "step_duration": "30s"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.activity-limit=100000 --local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret "
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "38083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "4.81 4.37 4.22 4/4245 1383073",
+    "other_containers": "ld-v2-broker ld-v2-es ld-v2-mysql ld-v2-namesrv ld-v2-redis local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  },
+  "finished_at": "2026-09-20T13:21:53+0800",
+  "load_at_end": {
+    "loadavg": "5.50 6.09 7.07 8/4979 2018742"
+  },
+  "status": "DONE"
+}

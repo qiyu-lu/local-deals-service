@@ -1,0 +1,6 @@
+commit,mode,stock,rate,kill_after_s,redriven,reserved_at_kill,reservations,orders,redis_stock,db_stock,processing_left,converge_s
+1873f58,kill -9,20000,2000,5,,9331,9331,9331,10669,10669,0,44.1
+1873f58,kill -9,20000,2000,5,,8982,8982,8982,11018,11018,0,89.0
+1873f58,broker paused 1 s then kill -9,20000,2000,5,0,7476,7476,7476,12524,12524,0,29.4
+1873f58,broker paused 1 s then kill -9,20000,2000,5,0,7662,7662,7662,12338,12338,0,44.1
+1873f58,broker killed 2 s then kill -9,20000,2000,6,4494,11588,11588,11588,8412,8412,0,589.2
