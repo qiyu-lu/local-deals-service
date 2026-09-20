@@ -1,0 +1,2 @@
+commit,mode,voucher,redriven,reserved_at_kill,reservations,orders,redis_stock,db_stock,processing_left,converge_s
+f5dfbae,kill,35,0,11005,11005,11005,8995,8995,0,56.8
