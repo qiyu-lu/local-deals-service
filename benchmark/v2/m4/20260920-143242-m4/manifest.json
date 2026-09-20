@@ -1,0 +1,65 @@
+{
+  "scenario": "m4",
+  "started_at": "2026-09-20T14:32:42+0800",
+  "commit": "cc1ab1ab63d97e2a0578dcc9a58cf3e1c79b9ca4",
+  "commit_short": "cc1ab1a",
+  "uncommitted_changes": "?? benchmark/v2/m4/20260920-143242-m4/",
+  "baseline": {
+    "tag": "v2.0-m3",
+    "commit": "7a2ac04cd26ddbd7313775b3d027aabc101cf310"
+  },
+  "parameters": {
+    "sweep": "1:16 32:16 64:16 64:32 256:32",
+    "rates": "10000 20000",
+    "drill_args": "",
+    "drain_rounds": "3",
+    "milestone": "m4",
+    "drain_stock": "20000",
+    "kill_stock": "20000",
+    "extra_args": "",
+    "kill_rate": "2000",
+    "users": "100000",
+    "baseline_tag": "v2.0-m3",
+    "baseline_commit": "7a2ac04",
+    "kill_rounds": "1",
+    "broker_kill_rounds": "1",
+    "kill_after": "6",
+    "warmup_rate": "500",
+    "warmup_duration": "30s",
+    "baseline_flavour": "funnel",
+    "current_commit": "cc1ab1a",
+    "step_stock": "1000",
+    "drain_rate": "2000",
+    "step_duration": "30s"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret "
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "38083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "4.55 6.07 7.15 5/3792 2287729",
+    "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  },
+  "finished_at": "2026-09-20T15:18:17+0800",
+  "load_at_end": {
+    "loadavg": "5.20 5.37 6.34 6/4284 3164666"
+  },
+  "status": "DONE"
+}
