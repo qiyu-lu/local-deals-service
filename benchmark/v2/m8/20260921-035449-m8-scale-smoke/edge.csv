@@ -1,0 +1,5 @@
+run,commit,edge_cpu_cores
+step-r2000-s200-035627,8c3420b:i1,0.05
+drain-r2000-s2000-035654,8c3420b:i1d,0.06
+step-r2000-s200-035810,8c3420b:i2,0.06
+drain-r2000-s2000-035837,8c3420b:i2d,0.07

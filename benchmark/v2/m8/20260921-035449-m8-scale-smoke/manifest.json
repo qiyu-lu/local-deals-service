@@ -1,9 +1,9 @@
 {
   "scenario": "m8-scale-smoke",
-  "started_at": "2026-09-21T03:07:39+0800",
-  "commit": "146d4e47f234e74ce8f86b52c0bd5ba6b3f7e75b",
-  "commit_short": "146d4e4",
-  "uncommitted_changes": "?? benchmark/v2/m6/20260921-025838-m6-smoke/\n?? benchmark/v2/m8/20260921-025602-m8-fullchain-smoke/\n?? benchmark/v2/m8/20260921-025607-m8-scale-smoke/\n?? benchmark/v2/m8/20260921-025613-m8-window-smoke/\n?? benchmark/v2/m8/20260921-025838-m8-smoke/\n?? benchmark/v2/m8/20260921-030435-m8-fullchain-smoke/\n?? benchmark/v2/m8/20260921-030739-m8-scale-smoke/",
+  "started_at": "2026-09-21T03:54:49+0800",
+  "commit": "8c3420b6765cd0957ecfc9c88064aacb4d27fe29",
+  "commit_short": "8c3420b",
+  "uncommitted_changes": "?? benchmark/v2/m8/20260921-035449-m8-scale-smoke/",
   "baseline": {
     "tag": "v2.0-m6",
     "commit": "6be81334c3d5014e6129e4f6eb664c93303dc0f8"
@@ -12,6 +12,7 @@
     "sweep": "",
     "instance_cpus": "0,8 1,9 2,10",
     "rates": "",
+    "scale_drain_stock": "2000",
     "drill_args": "",
     "scale": "1 2",
     "drain_rounds": "0",
@@ -25,8 +26,8 @@
     "baseline_schema": "",
     "fullchain_rate": "1",
     "kill_rate": "1",
-    "lb_access_log": "",
     "users": "8000",
+    "lb_access_log": "",
     "baseline_tag": "v2.0-m6",
     "baseline_commit": "6be8133",
     "scale_rates": "2000",
@@ -45,13 +46,15 @@
     "warmup_duration": "5s",
     "baseline_flavour": "funnel",
     "fullchain_users": "0",
-    "current_commit": "146d4e4",
+    "current_commit": "8c3420b",
     "step_stock": "200",
+    "scale_drain_rounds": "1",
+    "scale_drain_rate": "2000",
     "baseline_buckets": "",
     "redis_kill_rounds": "0",
     "lb_cpus": "3,11",
-    "step_duration": "10s",
     "drain_rate": "2000",
+    "step_duration": "10s",
     "fullchain_wave2_users": "0"
   },
   "cpu_pinning": {
@@ -76,12 +79,12 @@
     "kernel": "5.15.0-134-generic"
   },
   "load_at_start": {
-    "loadavg": "9.45 8.28 7.21 7/3463 2020425",
+    "loadavg": "5.47 6.69 7.70 5/3429 2449099",
     "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
   },
-  "finished_at": "2026-09-21T03:11:23+0800",
+  "finished_at": "2026-09-21T03:59:04+0800",
   "load_at_end": {
-    "loadavg": "7.47 7.98 7.35 6/4237 2043776"
+    "loadavg": "7.09 7.06 7.65 5/4240 2492587"
   },
   "status": "DONE"
 }
