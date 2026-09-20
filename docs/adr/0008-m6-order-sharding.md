@@ -145,6 +145,25 @@ ShardingSphere 的 LOCAL 事务逐个物理连接提交，**不保证跨库原�
 2. `OrderCloseTimerIT` 的订单号是 `BASE + currentTimeMillis() % 1000`，买家固定 `BASE + 1`——
    两者的低三位**八次里只对上一次**。它在第一轮全量 IT 里碰巧过了，第二轮挂了。
    分片把一个本来就存在的随机性变成了确定性失败。
+3. 关掉 `spring.flyway.enabled` 之后，`ShopIndexInitializer` 上的 `@DependsOn("flywayInitializer")`
+   指向了一个不再存在的 bean，**应用在正常配置下启动失败**。473 个单测和 94 个 IT 都没看见它：
+   那个 bean 标着 `@Profile("!test")`，唯一会创建它的是真实 jar，也就是压测脚本启动的那个。
+   这条是**冒烟抓到的，不是测试抓到的**——也是「合并前必须冒烟」这条规矩当天就兑现了一次。
+   `@DependsOn` 同时被删掉：迁移现在发生在构造数据源的过程中，任何持有数据源的 bean 本来就排在它之后。
+4. **`TIMESTAMPADD(SECOND, -?, CURRENT_TIMESTAMP(3))` 的单位参数被当成列名**，点赞 outbox 的清理
+   每次都抛 `Unknown column 'SECOND'`。注意这张表**从未分片**——ShardingSphere 解析每一条语句，
+   所以「只有分片表要小心」是错的判断。改成 `DATE_SUB(..., INTERVAL ? SECOND)`。
+   同样是冒烟抓到的：这条定时语句原本只有一个握着 mock `JdbcTemplate` 的单测，
+   而 mock 能检查「发出去的 SQL 长什么样」，永远不能回答「有没有人接受它」。
+   现在 `ScheduledStatementsIT` 与 `BlogLikeOutboxCleanupStatementIT` 把四条定时语句
+   真的对分片数据源各执行一次。
+5. **压测脚本自己也读订单表**：`fixture.py` 用裸 mysql 客户端数 `trade_order`，分片后那张表不在了。
+   它改成先问 `information_schema` 这个 schema 里是一张逻辑表还是四张物理表，
+   于是同一条命令能同时量 pre-M6 基线与分片构建——A/B 的两侧。
+
+顺带记一处**我自己的错误推断**：看到 `Unknown column 'SECOND'` 时我先去改了三个 mapper 里的
+`NOW(3) - INTERVAL ? SECOND`，以为是减法形式的问题。它不是——`OrderCloseIT` 一直在执行那条语句且是绿的。
+改动已撤回，只留真正的修复。
 
 **没有做的**：LOCAL 事务窗口的故障注入（决策 5）、商户侧 ES 订单读模型与其端到端延迟实测
 （计划 M6 的最后一项，见「代价与边界」第一条）。
