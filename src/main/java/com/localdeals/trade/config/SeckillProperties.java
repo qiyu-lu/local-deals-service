@@ -17,6 +17,7 @@ public class SeckillProperties {
     private String consumerGroup = "seckill-consumer-group";
     private Reconciliation reconciliation = new Reconciliation();
     private Funnel funnel = new Funnel();
+    private Consume consume = new Consume();
     private Token token = new Token();
 
     @PostConstruct
@@ -33,10 +34,50 @@ public class SeckillProperties {
             throw new IllegalStateException("local-deals.seckill.funnel must not be null");
         }
         funnel.validate();
+        if (consume == null) {
+            throw new IllegalStateException("local-deals.seckill.consume must not be null");
+        }
+        consume.validate();
         if (token == null) {
             throw new IllegalStateException("local-deals.seckill.token must not be null");
         }
         token.validate();
+    }
+
+    /** The batch consumer: how much of the broker's backlog one round of work takes. */
+    @Data
+    public static class Consume {
+        private static final int MAX_BATCH_SIZE = 1_000;
+
+        /**
+         * Master switch for the batch consumer. Spring tests that drive the processor directly
+         * turn it off so no cached ApplicationContext competes for real broker messages.
+         */
+        private boolean enabled = true;
+        /** Messages handed to one consume call; one INSERT and one stock update per voucher. */
+        private int batchSize = 64;
+        /** Consumer threads; keep at or below the DB pool so a thread never waits for a connection. */
+        private int threadCount = 16;
+        /**
+         * How long a claimed batch is leased away from the reconciler. It must outlast one
+         * persist round trip and is released as soon as the batch is finalized.
+         */
+        private Duration claimLease = Duration.ofSeconds(30);
+
+        void validate() {
+            if (batchSize < 1 || batchSize > MAX_BATCH_SIZE) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.consume.batch-size must be between 1 and " + MAX_BATCH_SIZE);
+            }
+            if (threadCount < 1 || threadCount > 256) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.consume.thread-count must be between 1 and 256");
+            }
+            if (claimLease == null || claimLease.getSeconds() < 5) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.consume.claim-lease must be at least five seconds");
+            }
+        }
     }
 
     /** Short-lived purchase tokens, issued only while an activity is open. */

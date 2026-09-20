@@ -1,8 +1,11 @@
 package com.localdeals.trade.mq;
 
 import com.localdeals.trade.config.OrderProperties;
+import org.apache.rocketmq.client.producer.DefaultMQProducer;
+import org.apache.rocketmq.client.producer.SendCallback;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.client.producer.SendStatus;
+import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -50,5 +53,39 @@ class OrderTimeoutSchedulerTest {
                 .thenThrow(new IllegalStateException("no route"));
 
         assertThat(scheduler.scheduleClose(78L)).isFalse();
+    }
+
+    @Test
+    void aBatchSchedulesItsClosesWithoutWaitingForTheBroker() throws Exception {
+        properties.setPayTimeout(Duration.ofMinutes(15));
+        DefaultMQProducer producer = mock(DefaultMQProducer.class);
+        when(template.getProducer()).thenReturn(producer);
+        long before = System.currentTimeMillis();
+
+        scheduler.scheduleCloseAsync(77L);
+
+        ArgumentCaptor<Message> sent = ArgumentCaptor.forClass(Message.class);
+        verify(producer).send(sent.capture(), any(SendCallback.class));
+        // A timer message carries its delivery time on the message itself.
+        assertThat(sent.getValue().getTopic()).isEqualTo("order-close-topic");
+        assertThat(sent.getValue().getDeliverTimeMs())
+                .isBetween(before + Duration.ofMinutes(15).toMillis(),
+                        System.currentTimeMillis() + Duration.ofMinutes(15).toMillis() + 2000);
+        assertThat(new String(sent.getValue().getBody(), java.nio.charset.StandardCharsets.UTF_8))
+                .contains("77");
+        verify(template, org.mockito.Mockito.never())
+                .syncSendDeliverTimeMills(any(String.class), any(Object.class), anyLong());
+    }
+
+    @Test
+    void aBrokerThatRefusesTheTimerMessageNeverBreaksTheBatch() throws Exception {
+        properties.setPayTimeout(Duration.ofMinutes(15));
+        DefaultMQProducer producer = mock(DefaultMQProducer.class);
+        when(template.getProducer()).thenReturn(producer);
+        org.mockito.Mockito.doThrow(new IllegalStateException("broker down"))
+                .when(producer).send(any(Message.class), any(SendCallback.class));
+
+        // The order is committed; OrderTimeoutScanner closes it if no timer message exists.
+        scheduler.scheduleCloseAsync(77L);
     }
 }

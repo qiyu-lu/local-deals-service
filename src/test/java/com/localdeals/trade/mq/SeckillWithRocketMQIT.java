@@ -33,7 +33,8 @@ import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(properties = {
-        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true",
+        // The seckill topic is drained by the batch consumer since M4, not by a rocketmq-spring listener.
+        "local-deals.seckill.consume.enabled=true",
         "local-deals.traffic.seckill.ip-limit=100000"})
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)

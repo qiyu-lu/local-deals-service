@@ -56,7 +56,8 @@ public class LocalDealsMetrics {
         ALREADY_SUCCESS,
         ALREADY_FAILED,
         MALFORMED,
-        LOCK_BUSY,
+        /** Another worker (a second consumer, or the reconciler) holds the Redis claim. */
+        CLAIM_BUSY,
         RESERVATION_MISMATCH,
         STATE_MISSING,
         COMPENSATED,

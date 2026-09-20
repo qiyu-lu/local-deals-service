@@ -157,7 +157,7 @@ class SeckillOrderStateServiceTest {
     void claimReturnsServerTimesAndAttemptCount() {
         doReturn(Arrays.asList("1", "1770000100", "1770000000", "2"))
                 .when(redisTemplate).execute(
-                        any(RedisScript.class), anyList(), any(), any(), any(), any());
+                        any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
 
         SeckillOrderStateService.ReconciliationClaim claim = service.claimForReconciliation(message);
 
@@ -175,7 +175,9 @@ class SeckillOrderStateServiceTest {
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
-                eq("60"));
+                eq("60"),
+                // The reconciler claims under the same owner field the consumer batch uses.
+                eq(service.claimOwner()));
     }
 
     @Test

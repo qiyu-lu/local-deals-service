@@ -34,7 +34,8 @@ import static org.awaitility.Awaitility.await;
  * MySQL through the real broker and consumer.
  */
 @SpringBootTest(properties = {
-        "rocketmq.consumer.listeners[seckill-consumer-group][seckill-order-topic]=true",
+        // The seckill topic is drained by the batch consumer since M4, not by a rocketmq-spring listener.
+        "local-deals.seckill.consume.enabled=true",
         "local-deals.seckill.reconciliation.enabled=true",
         "local-deals.seckill.reconciliation.initial-delay=1h",
         "local-deals.seckill.reconciliation.stale-after=1s",

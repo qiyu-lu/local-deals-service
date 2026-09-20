@@ -29,8 +29,6 @@ public class RedisConstants {
     public static final String SECKILL_ORDER_STATUS_KEY = "seckill:order:status:";
     /** Global due-time index. Members are exact decimal order-id strings; scores are epoch seconds. */
     public static final String SECKILL_PROCESSING_INDEX_KEY = "seckill:order:processing";
-    /** Shared lock namespace used by both the MQ consumer and the reconciliation worker. */
-    public static final String SECKILL_ORDER_LOCK_KEY = "lock:order:";
     /** Per-order scheduler arbitration lock; losers must not move the winner's due score. */
     public static final String SECKILL_RECONCILIATION_LOCK_KEY = "lock:seckill:reconcile:";
     public static final Long SECKILL_ORDER_STATUS_TTL_SECONDS = 7 * 24 * 60 * 60L;

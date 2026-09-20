@@ -18,7 +18,6 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_LOCK_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_RECONCILIATION_LOCK_KEY;
 
 /**
@@ -160,26 +159,10 @@ public class SeckillOrderReconciler {
         // inside the Hash here would hide an order-id ownership mismatch instead of detecting it.
         SeckillOrderMessage message = new SeckillOrderMessage(
                 snapshot.getVoucherId(), snapshot.getUserId(), candidateOrderId);
-        reconcileUnderUserLock(message, config);
-    }
-
-    private void reconcileUnderUserLock(SeckillOrderMessage message,
-                                        SeckillProperties.Reconciliation config) {
-        RLock userLock = redissonClient.getLock(SECKILL_ORDER_LOCK_KEY + message.getUserId());
-        boolean userLocked = false;
-        try {
-            userLocked = userLock.tryLock();
-            if (!userLocked) {
-                increment(Outcome.LOCK_BUSY);
-                deferScheduling(message.getOrderId(), "shared user lock is busy");
-                return;
-            }
-            reconcileClaimed(message, config);
-        } finally {
-            if (userLocked && userLock.isHeldByCurrentThread()) {
-                userLock.unlock();
-            }
-        }
+        // Since M4 the consumer no longer takes a Redisson lock per message: it claims the
+        // reservation in Redis instead (claimOwner + lease). The claim script below sees that
+        // claim and answers NOT_DUE, so a persisting order is never reconciled underneath.
+        reconcileClaimed(message, config);
     }
 
     private void reconcileClaimed(SeckillOrderMessage message,
@@ -384,7 +367,6 @@ public class SeckillOrderReconciler {
         REDRIVE_FAILED("redrive_failed"),
         CLAIM_SKIPPED("claim_skipped"),
         SCHEDULER_BUSY("scheduler_busy"),
-        LOCK_BUSY("lock_busy"),
         SCAN_ERROR("scan_error"),
         DATABASE_ERROR("database_error"),
         STATE_ERROR("state_error"),

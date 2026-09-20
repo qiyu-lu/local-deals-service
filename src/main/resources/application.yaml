@@ -5,9 +5,15 @@ spring:
     name: local-deals-service
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: "${LOCAL_DEALS_DATASOURCE_URL:jdbc:mysql://localhost:3306/local_deals?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true}"
+    # rewriteBatchedStatements lets the driver send a batch as one packet; the seckill consumer
+    # persists a whole batch per voucher in one round trip.
+    url: "${LOCAL_DEALS_DATASOURCE_URL:jdbc:mysql://localhost:3306/local_deals?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&rewriteBatchedStatements=true}"
     username: "${LOCAL_DEALS_DATASOURCE_USERNAME:root}"
     password: "${LOCAL_DEALS_DATASOURCE_PASSWORD}"
+    hikari:
+      # Sized above the seckill consume threads so a consumer never waits for a connection.
+      maximum-pool-size: "${LOCAL_DEALS_DB_POOL_SIZE:24}"
+      minimum-idle: "${LOCAL_DEALS_DB_POOL_MIN_IDLE:8}"
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -160,6 +166,13 @@ local-deals:
       # Override outside local development.
       secret: "${LOCAL_DEALS_SECKILL_TOKEN_SECRET:local-dev-seckill-token-secret}"
       ttl: "${LOCAL_DEALS_SECKILL_TOKEN_TTL:10m}"
+    consume:
+      enabled: "${LOCAL_DEALS_SECKILL_CONSUME_ENABLED:true}"
+      # One consume call takes this many messages: one INSERT and one stock UPDATE per voucher.
+      batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:64}"
+      thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:16}"
+      # How long a claimed batch is leased away from the reconciler.
+      claim-lease: "${LOCAL_DEALS_SECKILL_CONSUME_CLAIM_LEASE:30s}"
     funnel:
       # L2: per-instance permits/s = remaining stock x factor (never below the floor).
       stock-factor: "${LOCAL_DEALS_SECKILL_STOCK_FACTOR:2.0}"

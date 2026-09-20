@@ -9,38 +9,31 @@ import com.localdeals.platform.observability.LocalDealsMetrics;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
-import org.apache.rocketmq.common.consumer.ConsumeFromWhere;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
-import org.apache.rocketmq.spring.core.RocketMQListener;
-import org.apache.rocketmq.spring.core.RocketMQPushConsumerLifecycleListener;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_LOCK_KEY;
-
 /**
- * Consumes seckill order messages produced after a successful Redis Lua admission check and
- * persists them to MySQL.
+ * Persists one seckill order message.
+ *
+ * <p>Since M4 the broker is drained by {@link SeckillOrderBatchConsumer}, which persists a whole
+ * batch with one INSERT and one stock update per voucher. This single-message path stays as the
+ * degraded path: it owns the classification, compensation and notification rules for a message
+ * the batch could not take as-is (a redelivery the INSERT IGNORE skipped, a DB conflict, or not
+ * enough DB stock for the slice).</p>
+ *
+ * <p>Mutual exclusion with the reconciler is no longer a Redisson lock: the caller has already
+ * claimed the reservation in Redis (claimOwner + lease), which is both cheaper and the same
+ * mechanism the reconciler itself uses.</p>
  */
 @Slf4j
 @Service
-@RocketMQMessageListener(
-        topic = "${local-deals.seckill.topic:seckill-order-topic}",
-        consumerGroup = "${local-deals.seckill.consumer-group:seckill-consumer-group}")
-public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessage>,
-        RocketMQPushConsumerLifecycleListener {
+public class SeckillOrderConsumer {
 
     @Resource
     private IVoucherOrderService voucherOrderService;
-
-    @Resource
-    private RedissonClient redissonClient;
 
     @Resource
     private MeterRegistry meterRegistry;
@@ -60,15 +53,6 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
     private Counter consumeSuccessCounter;
     private Counter consumeFailureCounter;
 
-    @Override
-    public void prepareStart(DefaultMQPushConsumer consumer) {
-        // A brand-new deployment may start before the topic is provisioned. If orders are
-        // committed while the consumer has no offset yet, RocketMQ's LAST_OFFSET default can
-        // skip those first messages when the topic later becomes visible. Existing offsets are
-        // still authoritative; this only changes the no-offset bootstrap position.
-        consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
-    }
-
     @PostConstruct
     private void registerMetrics() {
         consumeSuccessCounter = Counter.builder("local_deals.seckill.mq.consume")
@@ -77,28 +61,13 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
                 .tag("result", "failure").register(meterRegistry);
     }
 
-    @Override
+    /** @throws RuntimeException for anything the broker should redeliver */
     public void onMessage(SeckillOrderMessage msg) {
         if (msg == null || msg.getUserId() == null || msg.getVoucherId() == null || msg.getOrderId() == null) {
             localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.MALFORMED);
             consumeFailureCounter.increment();
             log.error("Rejecting malformed seckill message without touching MySQL. message={}", msg);
             throw new IllegalArgumentException("Malformed seckill message, will retry and eventually enter DLQ.");
-        }
-        final RLock lock;
-        final boolean locked;
-        try {
-            lock = redissonClient.getLock(SECKILL_ORDER_LOCK_KEY + msg.getUserId());
-            locked = lock.tryLock();
-        } catch (RuntimeException lockFailure) {
-            localDealsMetrics.recordMqConsumeOutcome(
-                    LocalDealsMetrics.MqConsumeOutcome.TRANSIENT_ERROR);
-            throw lockFailure;
-        }
-        if (!locked) {
-            localDealsMetrics.recordMqConsumeOutcome(LocalDealsMetrics.MqConsumeOutcome.LOCK_BUSY);
-            log.warn("Seckill order lock busy. userId={}, orderId={}", msg.getUserId(), msg.getOrderId());
-            throw new IllegalStateException("Order lock busy, will retry.");
         }
         boolean detailedOutcomeRecorded = false;
         try {
@@ -164,8 +133,6 @@ public class SeckillOrderConsumer implements RocketMQListener<SeckillOrderMessag
             consumeFailureCounter.increment();
             log.error("Transient failure processing seckill order, will retry. orderId={}", msg.getOrderId(), e);
             throw e;
-        } finally {
-            lock.unlock();
         }
     }
 

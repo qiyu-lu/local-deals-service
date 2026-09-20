@@ -38,8 +38,6 @@ class SeckillOrderReconcilerTest {
     @Mock
     private RedissonClient redissonClient;
     @Mock
-    private RLock lock;
-    @Mock
     private RLock schedulingLock;
     @Mock
     private WebSocketNotifier webSocketNotifier;
@@ -66,13 +64,10 @@ class SeckillOrderReconcilerTest {
                 new SeckillOrderStateService.Snapshot(
                         ORDER_ID, USER_ID, VOUCHER_ID,
                         SeckillOrderStateService.STATUS_PROCESSING, null));
-        lenient().when(redissonClient.getLock("lock:order:" + USER_ID)).thenReturn(lock);
         lenient().when(redissonClient.getLock("lock:seckill:reconcile:" + ORDER_ID))
                 .thenReturn(schedulingLock);
         lenient().when(schedulingLock.tryLock()).thenReturn(true);
         lenient().when(schedulingLock.isHeldByCurrentThread()).thenReturn(true);
-        lenient().when(lock.tryLock()).thenReturn(true);
-        lenient().when(lock.isHeldByCurrentThread()).thenReturn(true);
         lenient().when(stateService.claimForReconciliation(any())).thenReturn(
                 claim(REDIS_NOW - 60, 1));
     }
@@ -94,16 +89,15 @@ class SeckillOrderReconcilerTest {
 
         reconciler.reconcileDueOrders();
 
-        InOrder order = inOrder(schedulingLock, lock, stateService, voucherOrderService);
+        InOrder order = inOrder(schedulingLock, stateService, voucherOrderService);
         order.verify(schedulingLock).tryLock();
-        order.verify(lock).tryLock();
         order.verify(stateService).claimForReconciliation(message());
         order.verify(voucherOrderService).classifyPersistence(ORDER_ID, USER_ID, VOUCHER_ID);
         order.verify(stateService).markSuccess(message());
-        order.verify(lock).isHeldByCurrentThread();
-        order.verify(lock).unlock();
         order.verify(schedulingLock).isHeldByCurrentThread();
         order.verify(schedulingLock).unlock();
+        // M4: no per-user Redisson lock anywhere on this path.
+        verify(redissonClient, never()).getLock("lock:order:" + USER_ID);
         verify(stateService, never()).compensate(any(), anyString());
         verify(webSocketNotifier).notify(USER_ID, true, ORDER_ID, VOUCHER_ID);
     }
@@ -218,16 +212,18 @@ class SeckillOrderReconcilerTest {
     }
 
     @Test
-    void busyConsumerLockSkipsClaimAndDatabase() {
-        when(lock.tryLock()).thenReturn(false);
-        when(stateService.deferProcessingOrder(ORDER_ID)).thenReturn(true);
+    void anOrderAConsumerBatchIsPersistingIsLeftAlone() {
+        // The claim script answers NOT_DUE while the consumer's claim lease holds.
+        when(stateService.claimForReconciliation(message())).thenReturn(
+                new SeckillOrderStateService.ReconciliationClaim(
+                        SeckillOrderStateService.ReconciliationClaimDecision.NOT_DUE,
+                        REDIS_NOW, REDIS_NOW - 10, 0L));
 
         reconciler.reconcileDueOrders();
 
-        verify(stateService, never()).claimForReconciliation(any());
-        verify(stateService).deferProcessingOrder(ORDER_ID);
         verifyNoInteractions(voucherOrderService);
-        verify(lock, never()).unlock();
+        verify(stateService, never()).compensate(any(), anyString());
+        verify(stateService, never()).markSuccess(any());
         verify(schedulingLock).unlock();
     }
 
@@ -240,7 +236,6 @@ class SeckillOrderReconcilerTest {
         verify(stateService, never()).deferProcessingOrder(anyLong());
         verify(stateService, never()).claimForReconciliation(any());
         verifyNoInteractions(voucherOrderService);
-        verify(lock, never()).tryLock();
         verify(schedulingLock, never()).unlock();
     }
 
@@ -287,7 +282,6 @@ class SeckillOrderReconcilerTest {
         reconciler.reconcileDueOrders();
 
         verify(stateService).markSuccess(message());
-        verify(lock).unlock();
     }
 
     private static SeckillOrderStateService.ReconciliationClaim claim(long createdAt, long attempts) {

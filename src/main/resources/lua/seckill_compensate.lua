@@ -67,6 +67,7 @@ redis.call('HSET', orderStatusKey,
         'status', 'FAILED',
         'reason', reason,
         'updatedAt', now)
+redis.call('HDEL', orderStatusKey, 'claimOwner', 'claimExpireAt')
 redis.call('ZREM', processingIndexKey, orderId)
 if statusTtlSeconds and statusTtlSeconds > 0 then
     redis.call('EXPIRE', orderStatusKey, statusTtlSeconds)
