@@ -1,5 +1,6 @@
 package com.localdeals.trade.mq;
 
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.trade.config.SeckillProperties;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.client.producer.SendStatus;
@@ -27,6 +28,12 @@ public class SeckillOrderProducer {
 
     /** @throws RuntimeException when the broker did not store the message */
     public void publish(SeckillOrderMessage message) {
+        // The winner's trace leaves the request thread here: from now on it lives in the body.
+        // A message that already carries one was rebuilt by the reconciler from a reservation
+        // the original request wrote, and that request's id is the truer one.
+        if (message.getTraceId() == null) {
+            message.setTraceId(TraceContext.current());
+        }
         SendResult result = rocketMQTemplate.syncSend(
                 seckillProperties.getTopic(), MessageBuilder.withPayload(message).build());
         if (result == null || result.getSendStatus() != SendStatus.SEND_OK) {

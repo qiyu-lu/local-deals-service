@@ -1,0 +1,3 @@
+run,commit,edge_cpu_cores
+step-r2000-s200-030915,146d4e4:i1,0.05
+step-r2000-s200-031041,146d4e4:i2,0.07

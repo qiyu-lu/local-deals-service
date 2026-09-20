@@ -1,0 +1,5 @@
+scenario,status,result_dir,started_at,finished_at
+m6-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-025838-m6-smoke,2026-09-21 02:58:38,2026-09-21 03:04:30
+m8-fullchain-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-030435-m8-fullchain-smoke,2026-09-21 03:04:35,2026-09-21 03:07:34
+m8-scale-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-030739-m8-scale-smoke,2026-09-21 03:07:39,2026-09-21 03:11:50
+m8-window-smoke,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-031155-m8-window-smoke,2026-09-21 03:11:55,2026-09-21 03:16:20

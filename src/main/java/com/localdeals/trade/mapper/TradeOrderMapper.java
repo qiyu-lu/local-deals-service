@@ -18,12 +18,13 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
      * classify, exactly as it did when this was an INSERT ... SELECT.
      */
     @Insert("INSERT INTO trade_order (order_no, user_id, voucher_id, shop_id, merchant_id, amount, " +
-            "status, expire_at) VALUES (#{orderNo}, #{userId}, #{voucher.voucherId}, #{voucher.shopId}, " +
+            "status, expire_at, trace_id) VALUES (#{orderNo}, #{userId}, #{voucher.voucherId}, #{voucher.shopId}, " +
             "#{voucher.merchantId}, #{voucher.payValue}, 'PENDING_PAY', " +
-            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND))")
+            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND), #{traceId})")
     int insertPending(@Param("orderNo") long orderNo, @Param("userId") long userId,
                       @Param("voucher") VoucherMapper.VoucherSnapshot voucher,
-                      @Param("payTimeoutSeconds") long payTimeoutSeconds);
+                      @Param("payTimeoutSeconds") long payTimeoutSeconds,
+                      @Param("traceId") String traceId);
 
     /**
      * The batch form: one statement for the whole slice of a consumer batch that belongs to one
@@ -33,18 +34,21 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
      * single-message path when they differ.
      */
     @Insert("<script>INSERT IGNORE INTO trade_order (order_no, user_id, voucher_id, shop_id, " +
-            "merchant_id, amount, status, expire_at) VALUES " +
+            "merchant_id, amount, status, expire_at, trace_id) VALUES " +
             "<foreach collection=\"rows\" item=\"row\" separator=\",\">" +
             "(#{row.orderNo}, #{row.userId}, #{voucher.voucherId}, #{voucher.shopId}, " +
             "#{voucher.merchantId}, #{voucher.payValue}, 'PENDING_PAY', " +
-            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND))" +
+            "DATE_ADD(NOW(3), INTERVAL #{payTimeoutSeconds} SECOND), #{row.traceId})" +
             "</foreach></script>")
     int insertPendingBatch(@Param("rows") List<SeckillOrderRow> rows,
                            @Param("voucher") VoucherMapper.VoucherSnapshot voucher,
                            @Param("payTimeoutSeconds") long payTimeoutSeconds);
 
-    /** One order of a batch insert. user_id is what routes the row to its shard. */
-    record SeckillOrderRow(long orderNo, long userId) {
+    /**
+     * One order of a batch insert. user_id is what routes the row to its shard; trace_id is
+     * the request that won it, which the batch it travels in no longer has one of.
+     */
+    record SeckillOrderRow(long orderNo, long userId, String traceId) {
     }
 
     /**

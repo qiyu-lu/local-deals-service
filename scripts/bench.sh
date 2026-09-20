@@ -17,6 +17,19 @@
 #                                               builds, warm-up, ladder, drains, crash drills, cleanup;
 #                                               results in benchmark/v2/m3/<timestamp>-<scenario>/
 #
+#   scripts/bench.sh m8 | m8-smoke              the M8 suite: one command, four scenarios, each on a
+#                                               fresh stack, each with its own result directory and
+#                                               its own status. One that fails does not stop the
+#                                               ones after it.
+#                                                 m6             the sharding A/B M6 still owes
+#                                                 m8-fullchain   100k buyers, 1000 units, 3 instances
+#                                                                behind nginx, 30% never pay, and the
+#                                                                returned units are taken again
+#                                                 m8-scale       1 -> 2 -> 3 instances, each with its
+#                                                                own cores: the scaling curve
+#                                                 m8-window      a replication gap, then the master
+#                                                                dies: the MySQL backstop at last
+#
 # Every run writes raw k6 JSON/logs under benchmark/v2/<MILESTONE>/raw/ (gitignored) and appends
 # one row per run to benchmark/v2/<MILESTONE>/summary.csv. The commit column is HEAD unless
 # BENCH_COMMIT names the build under test (e.g. a jar built from an older tag).
@@ -28,14 +41,27 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke)
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke|\
+  m8|m8-smoke|m8-fullchain|m8-fullchain-smoke|m8-scale|m8-scale-smoke|m8-window|m8-window-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
-    export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
-      NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
-      APP_PORT="${APP_PORT:-38083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-38184}" \
+    #
+    # Every port here is below 32768, and that is not cosmetic. This host's ephemeral range is
+    # 32768-60999, a benchmark holds around five hundred connections in it, and a Redis node or
+    # an application instance binds its port directly on the host network. A run that had taken
+    # one of these as an outbound source port left the next process unable to bind: the M8 suite
+    # smoke lost two of four scenarios that way, once a cluster node ("timed out waiting for
+    # Redis node") and once a second instance (BindException on the API port). Both read as
+    # something wrong with multiple instances and were nothing of the kind.
+    #
+    # The cluster pair is 2100x/3100x rather than anything tidier because Redis 6.2 binds the
+    # bus at the client port + 10000 and only the announcement is configurable: the client base
+    # must therefore stay under 22768 for its bus to stay under 32768 as well.
+    export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-24306}" REDIS_PORT="${REDIS_PORT:-24379}" \
+      NAMESRV_PORT="${NAMESRV_PORT:-24876}" BROKER_PORT="${BROKER_PORT:-20912}" ES_PORT="${ES_PORT:-24200}" \
+      APP_PORT="${APP_PORT:-24083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-24184}" \
       STACK_SUBNET="${STACK_SUBNET:-172.30.58.0/24}" \
-      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-3800}" \
-      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-4800}" ;;
+      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2100}" \
+      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3100}" ;;
 esac
 MILESTONE="${MILESTONE:-m0}"
 OUT_DIR="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE}}"
@@ -67,8 +93,35 @@ app_pid() {
   cat "${RUN_DIR}/app.pid"
 }
 
+# Every running instance. One instance prints one pid, so the CPU column means what it meant
+# before M8: the application's cores, however many processes that now is.
+app_pids() {
+  local file found=0
+  for file in "${RUN_DIR}"/app.pid "${RUN_DIR}"/app-i*.pid; do
+    [[ -f "$file" ]] || continue
+    cat "$file"; found=1
+  done
+  (( found == 1 )) || fail "app is not running (scripts/stack.sh app-start)"
+}
+
+# The management port of each running instance, in the same order.
+management_ports() {
+  local file n
+  for file in "${RUN_DIR}"/app.pid "${RUN_DIR}"/app-i*.pid; do
+    [[ -f "$file" ]] || continue
+    n="$(basename "$file")"; n="${n#app}"; n="${n#-i}"; n="${n%.pid}"
+    echo $(( MANAGEMENT_PORT + ${n:-1} - 1 ))
+  done
+}
+
 # utime+stime of a pid in clock ticks
-proc_ticks() { awk '{print $14 + $15}' "/proc/$1/stat"; }
+proc_ticks() { awk '{print $14 + $15}' "/proc/$1/stat" 2>/dev/null || echo 0; }
+# ... summed over every instance, which is what app_cpu_cores reports.
+proc_ticks_total() {
+  local pid total=0
+  for pid in $(app_pids); do total=$(( total + $(proc_ticks "$pid") )); done
+  echo "$total"
+}
 container_ns() {
   local id
   id="$(docker inspect -f '{{.Id}}' "$1")"
@@ -121,7 +174,7 @@ run_k6() { # name voucher rate duration
     -v "${PROJECT_DIR}/benchmark/v2/run:/data:ro" \
     -v "${RAW_DIR}:/out" \
     "$K6_IMAGE" run --quiet \
-    -e BASE_URL="$STACK_APP" -e VOUCHER_ID="$voucher" -e RATE="$rate" -e DURATION="$duration" \
+    -e BASE_URL="${BENCH_TARGET:-$STACK_APP}" -e VOUCHER_ID="$voucher" -e RATE="$rate" -e DURATION="$duration" \
     -e TOKENS=/data/tokens.csv -e USER_OFFSET="$offset" \
     ${SECKILL_TOKEN_SECRET:+-e SECKILL_TOKEN_SECRET="$SECKILL_TOKEN_SECRET"} \
     --summary-export "/out/${name}.json" /scripts/seckill.js >"${RAW_DIR}/${name}.log" 2>&1 || true
@@ -158,20 +211,26 @@ sample_orders() { # voucher file -> "epoch_seconds,count" once per second while 
 # after a measured run so the row can carry the mean batch size of that run alone: the number
 # that decides whether a batch consumer is batching anything at all.
 batch_counters() {
-  curl -fsS --max-time 10 "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/prometheus" 2>/dev/null |
-    awk '/^local_deals_seckill_consume_batch_size_orders_(count|sum)\{stage="delivered"\}/ {
-           if ($1 ~ /_count/) c = $2; else s = $2
-         } END { printf "%d %d", c + 0, s + 0 }' || echo "0 0"
+  local port count=0 sum=0 pair
+  for port in $(management_ports); do
+    pair="$(curl -fsS --max-time 10 "http://127.0.0.1:${port}/actuator/prometheus" 2>/dev/null |
+      awk '/^local_deals_seckill_consume_batch_size_orders_(count|sum)\{stage="delivered"\}/ {
+             if ($1 ~ /_count/) c = $2; else s = $2
+           } END { printf "%d %d", c + 0, s + 0 }')" || pair="0 0"
+    count=$(( count + ${pair%% *} )); sum=$(( sum + ${pair##* } ))
+  done
+  printf "%d %d" "$count" "$sum"
 }
 
 one_run() { # kind rate stock duration
   local kind="$1" rate="$2" stock="$3" duration="$4"
-  local voucher name pid t0 t1 ticks0 ticks1 hz ns0 ns1 svc started ended
+  local voucher name t0 t1 ticks0 ticks1 hz ns0 ns1 svc started ended
   local -A dep0 dep1
   voucher="$(python3 "$FIXTURE" voucher "$stock")"  # honours BENCH_REDIS_CLUSTER/SECKILL_BUCKETS
   name="${kind}-r${rate}-s${stock}-$(date +%H%M%S)"
-  pid="$(app_pid)"
   hz="$(getconf CLK_TCK)"
+  local edge0=0 edge1=0
+  [[ -z "${BENCH_EDGE_CONTAINER:-}" ]] || edge0="$(container_ns "$BENCH_EDGE_CONTAINER" 2>/dev/null || echo 0)"
   local half0 half1 msg0 msg1
   half0="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg0="$(topic_offset seckill-order-topic)"
   for svc in mysql broker; do dep0[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
@@ -180,9 +239,10 @@ one_run() { # kind rate stock duration
   local sampler=$!
   local batch0 batch1
   batch0="$(batch_counters)"
-  ticks0="$(proc_ticks "$pid")"; started="$(date +%s.%N)"
+  ticks0="$(proc_ticks_total)"; started="$(date +%s.%N)"
   run_k6 "$name" "$voucher" "$rate" "$duration"
-  ticks1="$(proc_ticks "$pid")"; ended="$(date +%s.%N)"
+  ticks1="$(proc_ticks_total)"; ended="$(date +%s.%N)"
+  [[ -z "${BENCH_EDGE_CONTAINER:-}" ]] || edge1="$(container_ns "$BENCH_EDGE_CONTAINER" 2>/dev/null || echo 0)"
   for svc in mysql broker; do dep1[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
   dep1[redis]="$(redis_ns)"
   local total
@@ -199,6 +259,12 @@ PY
   sleep 1; kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
   half1="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg1="$(topic_offset seckill-order-topic)"
   batch1="$(batch_counters)"
+  if [[ -n "${BENCH_EDGE_CONTAINER:-}" ]]; then
+    # Beside summary.csv, not inside it: that schema is shared with every earlier milestone.
+    local edge_csv="${OUT_DIR}/edge.csv"
+    [[ -f "$edge_csv" ]] || echo "run,commit,edge_cpu_cores" >"$edge_csv"
+    echo "${name},${BENCH_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)},$(python3 -c "print(round((${edge1}-${edge0})/1e9/($ended-$started), 2))")" >>"$edge_csv"
+  fi
   python3 - "$SUMMARY" "${RAW_DIR}/${name}.json" "$kind" "$rate" "$stock" "$voucher" "$drain" \
     "$(python3 -c "print(round(($ticks1-$ticks0)/$hz/($ended-$started),2))")" \
     "$(python3 -c "print(round(($ended-$started),1))")" \
@@ -304,6 +370,11 @@ M3_LIMITS_CURRENT="--local-deals.traffic.seckill.ip-limit=100000"
 M3_TOKEN_SECRET="bench-seckill-token-secret"
 
 load_scenario() {
+  # Reset first: a suite exports its own S_* and then runs scenarios in child processes.
+  S_SUITE=""; S_INSTANCES=""; S_INSTANCE_CPUS=""; S_LB_CPUS=""; S_LB_ACCESS_LOG=""
+  S_FULLCHAIN=""; S_SCALE=""; S_SCALE_RATES=""; S_WINDOW_ROUNDS=0; S_WINDOW_TAIL=""; S_PAY_TIMEOUT=""
+  S_SWEEP=""; S_BUCKET_SWEEP=""; S_BASELINE_SCHEMA=""; S_DRILL_ARGS=""; S_BASELINE_BUCKETS=""
+  S_BUCKETS=""; S_REDIS_KILL_ROUNDS=0
   case "$1" in
     m3)
       S_MILESTONE=m3; S_BASELINE_TAG=v2.0-m2; S_BASELINE_FLAVOUR=pre-funnel
@@ -414,6 +485,89 @@ load_scenario() {
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
       S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
+    m8|m8-smoke)
+      # The suite is not itself a scenario: it runs the four below, each on its own fresh stack,
+      # and reports which finished. The rest of these values only exist because run_scenario
+      # refuses to start without them, and because preflight should refuse a long night for the
+      # same reasons it refuses a single run.
+      S_MILESTONE=m8; S_BASELINE_TAG=v2.0-m6; S_BASELINE_FLAVOUR=funnel
+      S_SUITE="m6 m8-fullchain m8-scale m8-window"
+      [[ "$1" == m8 ]] || S_SUITE="m6-smoke m8-fullchain-smoke m8-scale-smoke m8-window-smoke"
+      S_WARMUP_RATE=0; S_WARMUP_DURATION=0s; S_RATES=""; S_STEP_DURATION=0s; S_STEP_STOCK=0
+      S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=0; S_DRAIN_RATE=1
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=0; S_KILL_RATE=1; S_KILL_AFTER=0
+      S_EXTRA_ARGS=""; S_USERS=0 ;;
+    m8-fullchain|m8-fullchain-smoke)
+      # The whole lifecycle at once, through nginx, on three instances: admission, persistence,
+      # payment, the timeout close that gives the stock back, and a second wave that takes it.
+      # What this scenario measures is not throughput but the reconciliation at the end.
+      S_MILESTONE=m8; S_BASELINE_TAG=v2.0-m6; S_BASELINE_FLAVOUR=funnel
+      S_INSTANCES=3; S_INSTANCE_CPUS="0,8 1,9 2,10"; S_LB_CPUS="3,11"; S_LB_ACCESS_LOG=1
+      S_BUCKETS=16
+      # No ladder and no drains: m8-scale measures throughput, this one measures correctness.
+      S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=0; S_KILL_RATE=1; S_KILL_AFTER=0
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=20s
+      S_FULLCHAIN=1; S_FULLCHAIN_STOCK=1000; S_FULLCHAIN_RATE=20000; S_FULLCHAIN_USERS=100000
+      S_FULLCHAIN_WAVE2_USERS=25000; S_PAY_RATIO=0.7; S_PAY_TIMEOUT=60s
+      S_USERS=125000; S_EXTRA_ARGS=""
+      if [[ "$1" == *-smoke ]]; then
+        S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+        S_FULLCHAIN_STOCK=50; S_FULLCHAIN_RATE=2000; S_FULLCHAIN_USERS=4000
+        S_FULLCHAIN_WAVE2_USERS=2000; S_PAY_TIMEOUT=20s
+        S_INSTANCES=2; S_INSTANCE_CPUS="0,8 1,9"; S_BUCKETS=8; S_USERS=6000
+      fi ;;
+    m8-scale|m8-scale-smoke)
+      # One instance, then two, then three, each with its own pair of CPUs, so an added instance
+      # adds capacity instead of dividing one budget. Everything they share — Redis Cluster, the
+      # broker, both order databases, nginx, and k6 itself — stays exactly as it was, which is
+      # what makes a curve that bends worth reading rather than an artefact.
+      S_MILESTONE=m8; S_BASELINE_TAG=v2.0-m6; S_BASELINE_FLAVOUR=funnel
+      S_SCALE="1 2 3"; S_INSTANCE_CPUS="0,8 1,9 2,10"; S_LB_CPUS="3,11"; S_LB_ACCESS_LOG=""
+      S_SCALE_RATES="5000 10000 20000 30000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_BUCKETS=16
+      S_RATES=""; S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      S_KILL_STOCK=0; S_KILL_RATE=1; S_KILL_AFTER=0
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=20s
+      S_USERS=100000; S_EXTRA_ARGS=""
+      if [[ "$1" == *-smoke ]]; then
+        S_SCALE="1 2"; S_SCALE_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+        S_WARMUP_RATE=200; S_WARMUP_DURATION=5s; S_BUCKETS=8; S_USERS=8000
+      fi ;;
+    m8-window|m8-window-smoke)
+      # M5 killed a master and lost nothing: the dying slots stop accepting writes, so a buyer
+      # gets a 503 rather than a false yes. This one blocks the replica first, so the node that
+      # is promoted comes back seconds stale and believes in stock that was already sold. Redis
+      # over-admits; MySQL's conditional update is the only thing between that and an oversell,
+      # and it has never once been triggered.
+      S_MILESTONE=m8; S_BASELINE_TAG=v2.0-m6; S_BASELINE_FLAVOUR=funnel
+      S_BUCKETS=16
+      S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=0; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
+      # Three things have to line up, and the third is the one the first two runs got wrong.
+      # (1) The stock must still be selling when the link is severed at KILL_AFTER + 0.3 s, or
+      # nothing is lost. (2) The promoted node must be serving again — about SLEEP + 8 s — with
+      # demand still arriving, or the stock that came back from the dead is never asked for.
+      # (3) There must be more buyers than stock, or Redis never over-admits and MySQL is never
+      # asked to refuse a batch, which is the whole point. 30000 at 2000/s with a 15 s tail is
+      # 60000 buyers for 30000 units: gap 5.3–8.3 s, promoted by ~16 s, 14 s of demand left.
+      S_WINDOW_ROUNDS=2; S_WINDOW_SLEEP=8; S_WINDOW_TAIL=15
+      S_KILL_STOCK=30000; S_KILL_RATE=2000; S_KILL_AFTER=5
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=20s
+      S_USERS=100000; S_EXTRA_ARGS=""
+      S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=10s --local-deals.seckill.reconciliation.fixed-delay=5s --local-deals.seckill.reconciliation.stale-after=20s --local-deals.seckill.reconciliation.retry-delay=10s --local-deals.seckill.reconciliation.batch-size=1000"
+      if [[ "$1" == *-smoke ]]; then
+        # Same three conditions, a fraction of the size: 10000 buyers for 4000 units, gap at
+        # 3.3 s, promoted by ~10 s, 10 s of demand left.
+        S_WINDOW_ROUNDS=1; S_WINDOW_SLEEP=4; S_WINDOW_TAIL=12
+        S_KILL_STOCK=4000; S_KILL_RATE=500; S_KILL_AFTER=3
+        S_WARMUP_RATE=200; S_WARMUP_DURATION=5s; S_BUCKETS=8; S_USERS=20000
+      fi ;;
     *) fail "unknown scenario $1" ;;
   esac
 }
@@ -426,9 +580,13 @@ s_fail() { echo "FAILED: $*" >"${S_RESULT}/status"; s_log "FAILED: $*"; exit 1; 
 # with "the batches were probably not full" and no way to check: the batch-size distribution and
 # the degradation counters live in this scrape.
 snapshot_app() { # label
-  local out="${S_RESULT}/raw/${1}-$(date +%H%M%S).prom"
-  curl -fsS --max-time 20 "http://127.0.0.1:${MANAGEMENT_PORT}/actuator/prometheus" -o "$out" ||
-    echo "actuator snapshot failed for ${1}" >&2
+  local port index=1 out
+  for port in $(management_ports); do
+    out="${S_RESULT}/raw/${1}-i${index}-$(date +%H%M%S).prom"
+    curl -fsS --max-time 20 "http://127.0.0.1:${port}/actuator/prometheus" -o "$out" ||
+      echo "actuator snapshot failed for ${1} instance ${index}" >&2
+    index=$(( index + 1 ))
+  done
 }
 
 # Stop the app, but keep what it can still tell us. Every measured round ends here.
@@ -440,7 +598,7 @@ stop_app() { # label
 # app.log is rotated by stack.sh app-start, so every run of the scenario left one behind.
 archive_app_logs() {
   local log
-  for log in "${RUN_DIR}"/app.log "${RUN_DIR}"/app-*.log; do
+  for log in "${RUN_DIR}"/app.log "${RUN_DIR}"/app-*.log "${RUN_DIR}"/access.log "${RUN_DIR}"/error.log; do
     [[ -f "$log" ]] || continue
     cp "$log" "${S_RESULT}/raw/$(basename "$log")" 2>/dev/null || true
   done
@@ -538,14 +696,31 @@ PY
 
 stack_up() { "${PROJECT_DIR}/scripts/stack.sh" up; }
 
+# A jar already built from this exact commit. Four scenarios in one night would otherwise
+# package the same two builds four times.
+jar_is_current() { # which commit
+  [[ -f "${RUN_DIR}/$1.jar" && -f "${RUN_DIR}/$1.commit" && "$(<"${RUN_DIR}/$1.commit")" == "$2" ]]
+}
+
+# Only a scenario that measures a baseline build needs one packaged.
+needs_baseline() {
+  [[ -n "${S_RATES// /}" ]] || (( S_DRAIN_ROUNDS > 0 ))
+}
+
 build_jars() {
   local src="${RUN_DIR}/baseline-src"
-  git -C "$PROJECT_DIR" worktree remove --force "$src" >/dev/null 2>&1 || true
-  git -C "$PROJECT_DIR" worktree add --detach "$src" "$S_BASELINE_TAG"
-  (cd "$src" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
-  cp "$src"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/baseline.jar"
-  (cd "$PROJECT_DIR" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
-  cp "$PROJECT_DIR"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/current.jar"
+  if needs_baseline && ! jar_is_current baseline "$S_BASELINE_COMMIT"; then
+    git -C "$PROJECT_DIR" worktree remove --force "$src" >/dev/null 2>&1 || true
+    git -C "$PROJECT_DIR" worktree add --detach "$src" "$S_BASELINE_TAG"
+    (cd "$src" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
+    cp "$src"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/baseline.jar"
+    echo "$S_BASELINE_COMMIT" >"${RUN_DIR}/baseline.commit"
+  fi
+  if ! jar_is_current current "$S_CURRENT_COMMIT"; then
+    (cd "$PROJECT_DIR" && JAVA_HOME="${APP_JAVA_HOME:-${HOME}/.jdks/temurin-21.0.12.1}" mvn -q package -DskipTests)
+    cp "$PROJECT_DIR"/target/local-deals-service-*-SNAPSHOT.jar "${RUN_DIR}/current.jar"
+    echo "$S_CURRENT_COMMIT" >"${RUN_DIR}/current.commit"
+  fi
 }
 
 # A fresh app for every measurement, fresh login tokens (they expire ~30 min after last use)
@@ -726,6 +901,142 @@ PY
   stop_app "kill-$1"
 }
 
+# ---------------------------------------------------------------------------------------------
+# M8: several instances behind nginx.
+# ---------------------------------------------------------------------------------------------
+
+# One CSV row per drill, from the "k=v,k=v" line the drill prints.
+append_drill_row() { # file line
+  local line="$2"
+  python3 - "$1" "$S_CURRENT_COMMIT" "$line" <<'CSVROW'
+import csv, os, sys
+path, commit, line = sys.argv[1:]
+row = {'commit': commit, **dict(kv.split('=', 1) for kv in line.split(','))}
+new = not os.path.exists(path)
+with open(path, 'a', newline='') as f:
+    w = csv.DictWriter(f, fieldnames=list(row))
+    if new:
+        w.writeheader()
+    w.writerow(row)
+CSVROW
+}
+
+# Every instance under its own cpuset, then the edge in front of exactly those.
+start_instances() { # count
+  local count="$1" n sets
+  read -ra sets <<<"${S_INSTANCE_CPUS:-}"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  "${PROJECT_DIR}/scripts/stack.sh" lb-stop
+  for (( n = 1; n <= count; n++ )); do
+    INSTANCE="$n" APP_CPUS="${sets[n-1]:-$APP_CPUS}" \
+      APP_JAR="${RUN_DIR}/current.jar" APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS:-}" \
+      "${PROJECT_DIR}/scripts/stack.sh" app-start
+  done
+  APP_INSTANCES="$count" LB_CPUS="${S_LB_CPUS:-}" LB_ACCESS_LOG="${S_LB_ACCESS_LOG:-}" \
+    "${PROJECT_DIR}/scripts/stack.sh" lb-start
+}
+
+stop_instances() { # label
+  snapshot_app "$1"
+  "${PROJECT_DIR}/scripts/stack.sh" lb-stop
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+# Fresh tokens and a warm-up through the edge, so the first measured request is not also the
+# first request each instance's JIT and connection pools ever saw.
+warm_instances() {
+  env $(build_redis_env current) "$0" users "$S_USERS"
+  BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT=warmup DURATION="$S_WARMUP_DURATION" \
+    STOCK=1000 BENCH_TARGET="$STACK_LB" env "$(build_env current)" $(build_redis_env current) \
+    "$0" step "$S_WARMUP_RATE"
+}
+
+fullchain_round() {
+  start_instances "$S_INSTANCES"
+  warm_instances
+  local line
+  line="$(env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
+    APP_INSTANCES="$S_INSTANCES" PAY_SECRET="$M8_PAY_SECRET" PAY_RATIO="$S_PAY_RATIO" \
+    PAY_TIMEOUT_S="${S_PAY_TIMEOUT%s}" WAVE2_USERS="$S_FULLCHAIN_WAVE2_USERS" \
+    DRILL_TIMEOUT=2400 \
+    "${PROJECT_DIR}/benchmark/v2/scripts/fullchain-drill.sh" \
+    "$S_FULLCHAIN_STOCK" "$S_FULLCHAIN_RATE" "$S_FULLCHAIN_USERS" | tail -1)"
+  [[ "$line" == voucher=* ]] || { echo "full-chain drill printed no result: ${line}"; return 1; }
+  append_drill_row "${S_RESULT}/fullchain.csv" "$line"
+  stop_instances "fullchain"
+}
+
+# One rung of the scaling ladder: N instances, the same rates, everything else unchanged.
+scale_round() { # instances
+  local count="$1"
+  start_instances "$count"
+  warm_instances
+  env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
+    BENCH_COMMIT="${S_CURRENT_COMMIT}:i${count}" BENCH_TARGET="$STACK_LB" \
+    BENCH_EDGE_CONTAINER="${STACK_NAME}-nginx" \
+    DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_SCALE_RATES
+  stop_instances "scale-i${count}"
+}
+
+# A replication gap, then the master dies: M5's drill with the replica blocked first.
+window_round() {
+  start_build current
+  local line
+  line="$(env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
+    APP_JAR="${RUN_DIR}/current.jar" APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" DRILL_TIMEOUT=1800 \
+    REPLICA_SLEEP_S="$S_WINDOW_SLEEP" DRILL_TAIL_S="$S_WINDOW_TAIL" \
+    MANAGEMENT_PORT="$MANAGEMENT_PORT" \
+    "${PROJECT_DIR}/benchmark/v2/scripts/redis-kill-drill.sh" \
+    "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
+  [[ "$line" == voucher=* ]] || { echo "replication-window drill printed no result: ${line}"; return 1; }
+  append_drill_row "${S_RESULT}/redis-window-drill.csv" "$line"
+  stop_app "redis-window"
+  wait_cluster_ok
+}
+
+# One command for a whole night. Each scenario runs as its own process on its own fresh stack,
+# so a failure is contained: the suite records it and starts the next one. The suite holds the
+# scenario lock for all of them, which is why the children are told not to take it.
+run_suite() {
+  local sub rc started finished dir status failed=0 done_count=0
+  local results="${S_RESULT}/child-results"
+  : >"$results"
+  echo "scenario,status,result_dir,started_at,finished_at" >"${S_RESULT}/scenarios.csv"
+  s_log "suite of ${S_SUITE}"
+  for sub in $S_SUITE; do
+    s_log "suite: ${sub} starting"
+    started="$(date '+%F %T')"
+    : >"$results"
+    rc=0
+    SCENARIO_LOCK_HELD=1 SUITE_RESULT_FILE="$results" "$0" "$sub" >>"${S_RESULT}/run.log" 2>&1 || rc=$?
+    finished="$(date '+%F %T')"
+    dir="$(tail -1 "$results" 2>/dev/null || true)"
+    status="NOT STARTED"
+    [[ -z "$dir" || ! -f "${dir}/status" ]] || status="$(<"${dir}/status")"
+    [[ "$status" != "NOT STARTED" ]] || status="refused before it started (exit ${rc})"
+    echo "${sub},\"${status}\",${dir:-none},${started},${finished}" >>"${S_RESULT}/scenarios.csv"
+    s_log "suite: ${sub} -> ${status}"
+    if [[ "$status" == DONE ]]; then
+      done_count=$(( done_count + 1 ))
+    else
+      failed=$(( failed + 1 ))
+    fi
+    # The child tore its own stack down; give the ports a moment before the next one claims them.
+    sleep 5
+  done
+  rm -f "$results"
+  if (( done_count == 0 )); then
+    s_fail "suite: none of ${S_SUITE} finished"
+  fi
+  if (( failed > 0 )); then
+    echo "DONE with ${failed} failed scenario(s); see scenarios.csv" >"${S_RESULT}/status"
+  else
+    echo DONE >"${S_RESULT}/status"
+  fi
+  write_manifest end
+  s_log "suite done: ${done_count} finished, ${failed} not -> ${S_RESULT}"
+}
+
 run_scenario() { # name
   cd "$PROJECT_DIR"
   export S_NAME="$1"
@@ -740,6 +1051,25 @@ run_scenario() { # name
   S_REDIS_KILL_ROUNDS="${S_REDIS_KILL_ROUNDS:-0}"; export S_REDIS_KILL_ROUNDS
   S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
   S_BASELINE_SCHEMA="${S_BASELINE_SCHEMA:-}"; export S_BASELINE_SCHEMA
+  S_SUITE="${S_SUITE:-}"; export S_SUITE
+  S_INSTANCES="${S_INSTANCES:-1}"; export S_INSTANCES
+  S_INSTANCE_CPUS="${S_INSTANCE_CPUS:-}"; export S_INSTANCE_CPUS
+  S_LB_CPUS="${S_LB_CPUS:-}"; export S_LB_CPUS
+  S_LB_ACCESS_LOG="${S_LB_ACCESS_LOG:-}"; export S_LB_ACCESS_LOG
+  S_FULLCHAIN="${S_FULLCHAIN:-}"; export S_FULLCHAIN
+  S_FULLCHAIN_STOCK="${S_FULLCHAIN_STOCK:-0}"; export S_FULLCHAIN_STOCK
+  S_FULLCHAIN_RATE="${S_FULLCHAIN_RATE:-1}"; export S_FULLCHAIN_RATE
+  S_FULLCHAIN_USERS="${S_FULLCHAIN_USERS:-0}"; export S_FULLCHAIN_USERS
+  S_FULLCHAIN_WAVE2_USERS="${S_FULLCHAIN_WAVE2_USERS:-0}"; export S_FULLCHAIN_WAVE2_USERS
+  S_PAY_RATIO="${S_PAY_RATIO:-0.7}"; export S_PAY_RATIO
+  S_PAY_TIMEOUT="${S_PAY_TIMEOUT:-24h}"; export S_PAY_TIMEOUT
+  S_SCALE="${S_SCALE:-}"; export S_SCALE
+  S_SCALE_RATES="${S_SCALE_RATES:-}"; export S_SCALE_RATES
+  S_WINDOW_ROUNDS="${S_WINDOW_ROUNDS:-0}"; export S_WINDOW_ROUNDS
+  S_WINDOW_SLEEP="${S_WINDOW_SLEEP:-0}"; export S_WINDOW_SLEEP
+  S_WINDOW_TAIL="${S_WINDOW_TAIL:-5}"; export S_WINDOW_TAIL
+  # Shared between the application and the load generator, which plays the payment channel.
+  export M8_PAY_SECRET="${M8_PAY_SECRET:-bench-payment-callback-secret}"
   export S_CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
   export S_BASELINE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}")"
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
@@ -751,7 +1081,9 @@ run_scenario() { # name
   else
     export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
   fi
-  export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
+  # 24h keeps a drain from closing the orders it is measuring; the full-chain scenario wants a
+  # timeout it can wait out, so it sets its own.
+  export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=${S_PAY_TIMEOUT} --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} --local-deals.payment.callback-secret=${M8_PAY_SECRET} ${S_EXTRA_ARGS}"
   # A baseline from before M6 has no V16 and cannot share a schema with a build that has it:
   # Flyway finds an applied migration it cannot resolve and refuses to start. Give it its own.
   # An argument, not the environment variable, because stack.sh app-start re-exports that one.
@@ -779,16 +1111,26 @@ run_scenario() { # name
   # Take the scenario lock before anything that touches the shared stack, and arm the cleanup
   # trap only once it is ours: a refused run must never tear down the running one's containers.
   mkdir -p "${PROJECT_DIR}/benchmark/v2/run"
-  exec 9>"${PROJECT_DIR}/benchmark/v2/run/.scenario.lock"
-  flock -n 9 || fail "preflight: another scenario is running"
+  # A suite already holds the lock and runs its scenarios as children; they must not try again.
+  if [[ -z "${SCENARIO_LOCK_HELD:-}" ]]; then
+    exec 9>"${PROJECT_DIR}/benchmark/v2/run/.scenario.lock"
+    flock -n 9 || fail "preflight: another scenario is running"
+  fi
   export S_RESULT="${PROJECT_DIR}/benchmark/v2/${S_MILESTONE}/$(date +%Y%m%d-%H%M%S)-$1"
   mkdir -p "${S_RESULT}/raw"
+  # Tell the suite where this scenario's results went, whatever happens to it afterwards.
+  [[ -z "${SUITE_RESULT_FILE:-}" ]] || echo "$S_RESULT" >>"$SUITE_RESULT_FILE"
   echo RUNNING >"${S_RESULT}/status"
   : >"${S_RESULT}/run.log"
   trap scenario_cleanup EXIT
   preflight
   write_manifest start
   s_log "scenario $1 -> ${S_RESULT}"
+
+  if [[ -n "$S_SUITE" ]]; then
+    run_suite
+    return
+  fi
 
   phase stack-up 900 stack_up
   phase build 1200 build_jars
@@ -809,7 +1151,13 @@ run_scenario() { # name
   for (( i = 1; i <= S_KILL_ROUNDS; i++ )); do phase "kill-drill-${i}" 2400 kill_round kill; done
   for (( i = 1; i <= S_BROKER_KILL_ROUNDS; i++ )); do phase "broker-kill-drill-${i}" 2700 kill_round broker; done
   for (( i = 1; i <= ${S_REDIS_KILL_ROUNDS:-0}; i++ )); do phase "redis-kill-drill-${i}" 2700 redis_kill_round; done
-  [[ -s "${S_RESULT}/summary.csv" ]] || s_fail "result: summary.csv is empty"
+  local count
+  for count in ${S_SCALE:-}; do phase "scale-${count}-instances" 2400 scale_round "$count"; done
+  [[ -z "$S_FULLCHAIN" ]] || phase full-chain 3600 fullchain_round
+  for (( i = 1; i <= ${S_WINDOW_ROUNDS:-0}; i++ )); do phase "redis-window-drill-${i}" 2700 window_round; done
+  # A scenario whose whole output is a drill has no summary rows; it has the drill's CSV instead.
+  [[ -s "${S_RESULT}/summary.csv" || -s "${S_RESULT}/fullchain.csv" ||
+     -s "${S_RESULT}/redis-window-drill.csv" ]] || s_fail "result: no measurements were recorded"
   echo DONE >"${S_RESULT}/status"
   write_manifest end
   s_log "scenario $1 done -> ${S_RESULT}"
@@ -821,7 +1169,9 @@ case "${1:-}" in
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke) run_scenario "$1" ;;
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke|m6|m6-smoke|m6-consume|m6-consume-smoke|\
+  m8|m8-smoke|m8-fullchain|m8-fullchain-smoke|m8-scale|m8-scale-smoke|m8-window|m8-window-smoke)
+    run_scenario "$1" ;;
   _phase) shift; "$@" ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac

@@ -24,6 +24,7 @@ import com.localdeals.trade.service.SeckillBucketRouter;
 import com.localdeals.trade.service.SeckillLocalRateLimiter;
 import com.localdeals.trade.service.SeckillSoldOutRegistry;
 import com.localdeals.platform.observability.LocalDealsMetrics;
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.trade.utils.SnowflakeOrderIdGenerator;
 import com.localdeals.platform.utils.UserHolder;
 import io.micrometer.core.instrument.Counter;
@@ -397,7 +398,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
         }
         try {
             if (getBaseMapper().insertPending(orderNo, userId, voucher,
-                    orderProperties.getPayTimeout().getSeconds()) != 1) {
+                    orderProperties.getPayTimeout().getSeconds(),
+                    TraceContext.accept(message.getTraceId())) != 1) {
                 throw new IllegalStateException("Voucher or its shop is missing. voucherId=" + voucherId);
             }
         } catch (DuplicateKeyException e) {

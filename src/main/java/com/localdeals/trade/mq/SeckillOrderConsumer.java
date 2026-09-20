@@ -6,6 +6,7 @@ import com.localdeals.trade.exception.StockExhaustedException;
 import com.localdeals.trade.service.IVoucherOrderService;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.platform.observability.LocalDealsMetrics;
+import com.localdeals.platform.observability.TraceContext;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -175,7 +176,8 @@ public class SeckillOrderConsumer {
 
     private void scheduleCloseBestEffort(SeckillOrderMessage msg) {
         try {
-            orderTimeoutScheduler.scheduleClose(msg.getOrderId());
+            orderTimeoutScheduler.scheduleClose(msg.getOrderId(),
+                    TraceContext.accept(msg.getTraceId()));
         } catch (RuntimeException e) {
             // The order is committed; OrderTimeoutScanner closes it if no timer message exists.
             log.warn("Order timeout scheduling failed. orderId={}", msg.getOrderId(), e);
