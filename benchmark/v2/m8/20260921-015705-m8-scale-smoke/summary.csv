@@ -1,0 +1,3 @@
+commit,kind,target_rps,stock,voucher,achieved_rps,requests,dropped,p50_ms,p95_ms,p99_ms,max_ms,http_fail_rate,accepted,outcomes,drain_s_after_load,persist_orders_per_s,app_cpu_cores,mysql_cpu_cores,redis_cpu_cores,broker_cpu_cores,half_msgs,order_msgs,k6_cpu_cores,batch_mean,raw
+60d3ae4:i1,step,2000,200,11,1999.7,19999,0,0.1,4.5,155.7,303.9,0.0154,200,accepted=200;http_429=308;out_of_stock=19491,0.1,138.2,0.5,0.03,0.02,0.1,0,200,0.33,3.85,step-r2000-s200-015858.json
+60d3ae4:i2,step,2000,200,13,1999.7,20001,0,0.2,2.0,58.1,195.2,0.0004,200,accepted=200;http_429=8;out_of_stock=19793,0.1,76.4,0.87,0.03,0.02,0.09,0,200,0.37,5.71,step-r2000-s200-020026.json
