@@ -1,6 +1,7 @@
 package com.localdeals.trade.service;
 
 import com.localdeals.trade.config.SeckillProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,6 +29,7 @@ public class SeckillBucketRouter {
     private final int count;
     private final int mask;
 
+    @Autowired
     public SeckillBucketRouter(SeckillProperties seckillProperties) {
         this(seckillProperties.getBucket().getCount());
     }
