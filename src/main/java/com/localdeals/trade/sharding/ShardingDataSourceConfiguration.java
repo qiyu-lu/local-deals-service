@@ -16,6 +16,7 @@ import org.springframework.core.io.ClassPathResource;
 
 import javax.sql.DataSource;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -61,7 +62,7 @@ public class ShardingDataSourceConfiguration {
     @Bean
     @Primary
     public DataSource dataSource(HikariDataSource orderDatabase0, HikariDataSource orderDatabase1,
-                                 DataSourceProperties properties) throws IOException {
+                                 DataSourceProperties properties, Environment environment) throws IOException {
         migrate(orderDatabase0, PRIMARY_LOCATION, Map.of());
         migrate(orderDatabase1, SECOND_LOCATION,
                 Map.of(LEGACY_SCHEMA_PLACEHOLDER, JdbcUrls.schemaOf(properties.getUrl())));
@@ -69,9 +70,15 @@ public class ShardingDataSourceConfiguration {
         Map<String, DataSource> nodes = new LinkedHashMap<>();
         nodes.put("ds_0", orderDatabase0);
         nodes.put("ds_1", orderDatabase1);
+        // The attached tables' Snowflake needs an id nobody else on this deployment is using,
+        // and it only reads it from the rules, so it goes in before they are parsed.
+        int workerId = ShardingWorkerId.resolve(environment);
+        log.info("Sharded data source: two databases, sharding worker id {}", workerId);
+        String rules = ShardingWorkerId.applyTo(
+                new ClassPathResource(RULES).getContentAsString(StandardCharsets.UTF_8), workerId);
         try {
             return YamlShardingSphereDataSourceFactory.createDataSource(
-                    nodes, new ClassPathResource(RULES).getContentAsByteArray());
+                    nodes, rules.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             throw new IllegalStateException("Failed to build the sharded data source from " + RULES, e);
         }

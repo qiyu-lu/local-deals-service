@@ -246,8 +246,10 @@ def order_stats(voucher_id):
 def one_trace(voucher_id):
     """One persisted order and the request that created it, for the end-to-end trace check."""
     voucher_id = int(voucher_id)
+    # Parenthesised branches: MySQL refuses a bare LIMIT inside a UNION arm, and without one
+    # this would read every order of the voucher out of all eight tables.
     union = " UNION ALL ".join(
-        "SELECT order_no, trace_id FROM {} WHERE voucher_id = {} AND trace_id IS NOT NULL LIMIT 1"
+        "(SELECT order_no, trace_id FROM {} WHERE voucher_id = {} AND trace_id IS NOT NULL LIMIT 1)"
         .format(name, voucher_id) for name in order_tables())
     row = mysql(f"SELECT order_no, trace_id FROM ({union}) o LIMIT 1;").split()
     print(','.join(row) if len(row) == 2 else '')

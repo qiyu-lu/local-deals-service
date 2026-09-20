@@ -85,9 +85,15 @@ rules:
 
     # The attached tables' primary key used to be AUTO_INCREMENT, which repeats itself in every
     # physical table. Nothing routes by it, so any collision-free value will do.
+    #
+    # worker-id is not optional once there is more than one instance: it defaults to 0, and two
+    # instances on 0 mint the same id in the same millisecond. ShardingWorkerId fills the
+    # placeholder before this file is parsed; see it for where the number comes from.
     keyGenerators:
       order_row_id:
         type: SNOWFLAKE
+        props:
+          worker-id: @workerId@
 
   # Everything else — vouchers, shops, users, marketing, RBAC — stays whole in ds_0. Writes to
   # tb_seckill_voucher.stock in particular must not be duplicated across databases, so these are
