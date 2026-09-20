@@ -18,14 +18,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 
-/** Owns the Redis state transitions which follow seckill admission. */
+/**
+ * Owns the Redis state transitions which follow seckill admission.
+ *
+ * <p>Every script runs inside one stock bucket, so its keys share a hash tag and one Cluster
+ * slot. A batch may carry buyers of different buckets, so it is split per bucket and each part
+ * is one round trip; the answers are stitched back into the caller's order.</p>
+ */
 @Slf4j
 @Service
 public class SeckillOrderStateService {
@@ -59,15 +60,18 @@ public class SeckillOrderStateService {
     private final StringRedisTemplate stringRedisTemplate;
     private final SeckillProperties seckillProperties;
     private final SeckillSoldOutRegistry soldOutRegistry;
+    private final SeckillBucketRouter router;
     /** Identifies this JVM's claims; a crashed owner's claims simply expire. */
     private final String claimOwner = "p:" + UUID.randomUUID();
 
     public SeckillOrderStateService(StringRedisTemplate stringRedisTemplate,
                                     SeckillProperties seckillProperties,
-                                    SeckillSoldOutRegistry soldOutRegistry) {
+                                    SeckillSoldOutRegistry soldOutRegistry,
+                                    SeckillBucketRouter router) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.seckillProperties = seckillProperties;
         this.soldOutRegistry = soldOutRegistry;
+        this.router = router;
     }
 
     /**
@@ -78,8 +82,8 @@ public class SeckillOrderStateService {
         Long result = stringRedisTemplate.execute(
                 VALIDATE_RESERVATION_SCRIPT,
                 Arrays.asList(
-                        orderStatusKey(message.getOrderId()),
-                        reservationKey(message.getVoucherId())),
+                        statusKey(message),
+                        reservationKey(message)),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString()
@@ -106,9 +110,9 @@ public class SeckillOrderStateService {
         Long result = stringRedisTemplate.execute(
                 MARK_SUCCESS_SCRIPT,
                 Arrays.asList(
-                        orderStatusKey(message.getOrderId()),
-                        reservationKey(message.getVoucherId()),
-                        SECKILL_PROCESSING_INDEX_KEY),
+                        statusKey(message),
+                        reservationKey(message),
+                        processingKey(message)),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString(),
@@ -125,10 +129,10 @@ public class SeckillOrderStateService {
         Long result = stringRedisTemplate.execute(
                 COMPENSATE_SCRIPT,
                 Arrays.asList(
-                        SECKILL_STOCK_KEY + message.getVoucherId(),
-                        reservationKey(message.getVoucherId()),
-                        orderStatusKey(message.getOrderId()),
-                        SECKILL_PROCESSING_INDEX_KEY),
+                        router.stockKey(message.getVoucherId(), bucketOf(message)),
+                        reservationKey(message),
+                        statusKey(message),
+                        processingKey(message)),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString(),
@@ -136,8 +140,8 @@ public class SeckillOrderStateService {
                 SECKILL_ORDER_STATUS_TTL_SECONDS.toString()
         );
         if (Long.valueOf(1L).equals(result)) {
-            // A unit went back to Redis: every instance may admit again.
-            soldOutRegistry.clear(message.getVoucherId());
+            // A unit went back to this bucket: every instance may admit its buyers again.
+            soldOutRegistry.clear(message.getVoucherId(), bucketOf(message));
             return true;
         }
         if (Long.valueOf(2L).equals(result)) {
@@ -161,53 +165,73 @@ public class SeckillOrderStateService {
         if (messages == null || messages.isEmpty()) {
             return Collections.emptyList();
         }
-        List<String> keys = new ArrayList<>(1 + 2 * messages.size());
-        keys.add(SECKILL_PROCESSING_INDEX_KEY);
-        List<Object> args = new ArrayList<>(2 + 3 * messages.size());
-        args.add(claimOwner);
-        args.add(Long.toString(seckillProperties.getConsume().getClaimLease().getSeconds()));
-        for (SeckillOrderMessage message : messages) {
-            requireCompleteMessage(message);
-            keys.add(orderStatusKey(message.getOrderId()));
-            keys.add(reservationKey(message.getVoucherId()));
-            args.add(message.getUserId().toString());
-            args.add(message.getVoucherId().toString());
-            args.add(message.getOrderId().toString());
+        PersistClaim[] claims = new PersistClaim[messages.size()];
+        for (Map.Entry<Integer, List<Integer>> part : groupByBucket(messages).entrySet()) {
+            List<Integer> positions = part.getValue();
+            List<String> keys = new ArrayList<>(1 + 2 * positions.size());
+            keys.add(router.processingKey(part.getKey()));
+            List<Object> args = new ArrayList<>(2 + 3 * positions.size());
+            args.add(claimOwner);
+            args.add(Long.toString(seckillProperties.getConsume().getClaimLease().getSeconds()));
+            for (int position : positions) {
+                SeckillOrderMessage message = messages.get(position);
+                keys.add(statusKey(message));
+                keys.add(reservationKey(message));
+                args.add(message.getUserId().toString());
+                args.add(message.getVoucherId().toString());
+                args.add(message.getOrderId().toString());
+            }
+            List<?> response = stringRedisTemplate.execute(BATCH_CLAIM_SCRIPT, keys, args.toArray());
+            List<Long> codes = requireOneResultPerMessage(response, positions.size(), "claim");
+            for (int i = 0; i < positions.size(); i++) {
+                claims[positions.get(i)] = persistClaim(codes.get(i));
+            }
         }
-        List<?> response = stringRedisTemplate.execute(BATCH_CLAIM_SCRIPT, keys, args.toArray());
-        List<Long> codes = requireOneResultPerMessage(response, messages.size(), "claim");
-        List<PersistClaim> claims = new ArrayList<>(codes.size());
-        for (Long code : codes) {
-            claims.add(persistClaim(code));
-        }
-        return claims;
+        return Arrays.asList(claims);
     }
 
-    /** Finalizes every committed order of a batch, releasing its claim, in one round trip. */
+    /** Finalizes every committed order of a batch, releasing its claim, one round trip per bucket. */
     public List<Boolean> markSuccessBatch(List<SeckillOrderMessage> messages) {
         if (messages == null || messages.isEmpty()) {
             return Collections.emptyList();
         }
-        List<String> keys = new ArrayList<>(1 + 2 * messages.size());
-        keys.add(SECKILL_PROCESSING_INDEX_KEY);
-        List<Object> args = new ArrayList<>(1 + 3 * messages.size());
-        args.add(SECKILL_ORDER_STATUS_TTL_SECONDS.toString());
-        for (SeckillOrderMessage message : messages) {
+        Boolean[] finalized = new Boolean[messages.size()];
+        for (Map.Entry<Integer, List<Integer>> part : groupByBucket(messages).entrySet()) {
+            List<Integer> positions = part.getValue();
+            List<String> keys = new ArrayList<>(1 + 2 * positions.size());
+            keys.add(router.processingKey(part.getKey()));
+            List<Object> args = new ArrayList<>(1 + 3 * positions.size());
+            args.add(SECKILL_ORDER_STATUS_TTL_SECONDS.toString());
+            for (int position : positions) {
+                SeckillOrderMessage message = messages.get(position);
+                keys.add(statusKey(message));
+                keys.add(reservationKey(message));
+                args.add(message.getUserId().toString());
+                args.add(message.getVoucherId().toString());
+                args.add(message.getOrderId().toString());
+            }
+            List<?> response = stringRedisTemplate.execute(
+                    BATCH_MARK_SUCCESS_SCRIPT, keys, args.toArray());
+            List<Long> codes = requireOneResultPerMessage(response, positions.size(), "mark-success");
+            for (int i = 0; i < positions.size(); i++) {
+                finalized[positions.get(i)] = Long.valueOf(1L).equals(codes.get(i));
+            }
+        }
+        return Arrays.asList(finalized);
+    }
+
+    /**
+     * Splits a batch into the buckets it touches, keeping each message's position so the answers
+     * can be stitched back together. A batch of one bucket stays a single round trip.
+     */
+    private Map<Integer, List<Integer>> groupByBucket(List<SeckillOrderMessage> messages) {
+        Map<Integer, List<Integer>> byBucket = new LinkedHashMap<>();
+        for (int position = 0; position < messages.size(); position++) {
+            SeckillOrderMessage message = messages.get(position);
             requireCompleteMessage(message);
-            keys.add(orderStatusKey(message.getOrderId()));
-            keys.add(reservationKey(message.getVoucherId()));
-            args.add(message.getUserId().toString());
-            args.add(message.getVoucherId().toString());
-            args.add(message.getOrderId().toString());
+            byBucket.computeIfAbsent(bucketOf(message), bucket -> new ArrayList<>()).add(position);
         }
-        List<?> response = stringRedisTemplate.execute(
-                BATCH_MARK_SUCCESS_SCRIPT, keys, args.toArray());
-        List<Long> codes = requireOneResultPerMessage(response, messages.size(), "mark-success");
-        List<Boolean> finalized = new ArrayList<>(codes.size());
-        for (Long code : codes) {
-            finalized.add(Long.valueOf(1L).equals(code));
-        }
-        return finalized;
+        return byBucket;
     }
 
     private static List<Long> requireOneResultPerMessage(List<?> response, int expected, String what) {
@@ -274,27 +298,32 @@ public class SeckillOrderStateService {
             throw new IllegalArgumentException("reconciliation due-query limit must be positive");
         }
         int boundedLimit = Math.min(limit, seckillProperties.getReconciliation().getBatchSize());
-        List<?> rawMembers = stringRedisTemplate.execute(
-                RECONCILE_DUE_SCRIPT,
-                Collections.singletonList(SECKILL_PROCESSING_INDEX_KEY),
-                Integer.toString(boundedLimit));
-        if (rawMembers == null || rawMembers.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<Long> orderIds = new ArrayList<>(rawMembers.size());
-        for (Object rawMember : rawMembers) {
-            String member = redisString(rawMember);
-            Long orderId = parseCanonicalPositiveLong(member);
-            if (orderId != null) {
-                orderIds.add(orderId);
-            } else {
-                log.error("Dropping malformed PROCESSING index member. member={}", member);
-                try {
-                    stringRedisTemplate.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, member);
-                } catch (RuntimeException removeFailure) {
-                    log.error("Unable to drop malformed PROCESSING index member. member={}",
-                            member, removeFailure);
+        // The index is per bucket, so one cycle asks every bucket for its share of the batch.
+        int perBucket = Math.max(1, (boundedLimit + router.count() - 1) / router.count());
+        List<Long> orderIds = new ArrayList<>(boundedLimit);
+        for (int bucket = 0; bucket < router.count() && orderIds.size() < boundedLimit; bucket++) {
+            String processingKey = router.processingKey(bucket);
+            List<?> rawMembers = stringRedisTemplate.execute(
+                    RECONCILE_DUE_SCRIPT,
+                    Collections.singletonList(processingKey),
+                    Integer.toString(Math.min(perBucket, boundedLimit - orderIds.size())));
+            if (rawMembers == null || rawMembers.isEmpty()) {
+                continue;
+            }
+            for (Object rawMember : rawMembers) {
+                String member = redisString(rawMember);
+                Long orderId = parseCanonicalPositiveLong(member);
+                if (orderId != null) {
+                    orderIds.add(orderId);
+                } else {
+                    log.error("Dropping malformed PROCESSING index member. bucket={} member={}",
+                            bucket, member);
+                    try {
+                        stringRedisTemplate.opsForZSet().remove(processingKey, member);
+                    } catch (RuntimeException removeFailure) {
+                        log.error("Unable to drop malformed PROCESSING index member. member={}",
+                                member, removeFailure);
+                    }
                 }
             }
         }
@@ -307,9 +336,9 @@ public class SeckillOrderStateService {
         List<?> response = stringRedisTemplate.execute(
                 RECONCILE_CLAIM_SCRIPT,
                 Arrays.asList(
-                        orderStatusKey(message.getOrderId()),
-                        reservationKey(message.getVoucherId()),
-                        SECKILL_PROCESSING_INDEX_KEY),
+                        statusKey(message),
+                        reservationKey(message),
+                        processingKey(message)),
                 message.getUserId().toString(),
                 message.getVoucherId().toString(),
                 message.getOrderId().toString(),
@@ -338,8 +367,8 @@ public class SeckillOrderStateService {
         Long result = stringRedisTemplate.execute(
                 RECONCILE_DEFER_UNRESOLVED_SCRIPT,
                 Arrays.asList(
-                        orderStatusKey(orderId),
-                        SECKILL_PROCESSING_INDEX_KEY),
+                        router.statusKeyOfOrder(orderId),
+                        router.processingKey(router.bucketOfOrder(orderId))),
                 orderId.toString(),
                 Long.toString(seckillProperties.getReconciliation().getRetryDelay().getSeconds()));
         return Long.valueOf(1L).equals(result) || Long.valueOf(2L).equals(result);
@@ -351,11 +380,16 @@ public class SeckillOrderStateService {
         values.put("status", "SUSPENDED");
         values.put("suspendReason", reason);
         values.put("updatedAt", Long.toString(Instant.now().getEpochSecond()));
-        stringRedisTemplate.opsForHash().putAll(SECKILL_META_KEY + voucherId, values);
+        // The activity metadata is replicated into every bucket, because the admission script
+        // may only read keys of the buyer's own slot.
+        for (int bucket = 0; bucket < router.count(); bucket++) {
+            stringRedisTemplate.opsForHash().putAll(router.metaKey(voucherId, bucket), values);
+        }
     }
 
     public Snapshot find(Long orderId) {
-        Map<Object, Object> values = stringRedisTemplate.opsForHash().entries(orderStatusKey(orderId));
+        Map<Object, Object> values =
+                stringRedisTemplate.opsForHash().entries(router.statusKeyOfOrder(orderId));
         if (values == null || values.isEmpty()) {
             return null;
         }
@@ -371,12 +405,20 @@ public class SeckillOrderStateService {
                 reason == null || reason.trim().isEmpty() ? null : reason);
     }
 
-    private static String reservationKey(Long voucherId) {
-        return SECKILL_RESERVATION_KEY + voucherId;
+    private int bucketOf(SeckillOrderMessage message) {
+        return router.bucketOfUser(message.getUserId());
     }
 
-    private static String orderStatusKey(Long orderId) {
-        return SECKILL_ORDER_STATUS_KEY + orderId;
+    private String reservationKey(SeckillOrderMessage message) {
+        return router.reservationKey(message.getVoucherId(), bucketOf(message));
+    }
+
+    private String statusKey(SeckillOrderMessage message) {
+        return router.statusKey(message.getOrderId(), bucketOf(message));
+    }
+
+    private String processingKey(SeckillOrderMessage message) {
+        return router.processingKey(bucketOf(message));
     }
 
     private static DefaultRedisScript<Long> script(String location) {

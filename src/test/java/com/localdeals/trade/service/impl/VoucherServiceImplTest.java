@@ -20,8 +20,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -61,9 +59,13 @@ class VoucherServiceImplTest {
         MybatisPlusMocks.injectMapper(service, voucherMapper, Voucher.class);
         ReflectionTestUtils.setField(service, "seckillVoucherService", seckillVoucherService);
         ReflectionTestUtils.setField(service, "stringRedisTemplate", redisTemplate);
+        ReflectionTestUtils.setField(service, "seckillBucketRouter", ROUTER);
 
         TransactionSynchronizationManager.initSynchronization();
     }
+
+    private static final com.localdeals.trade.service.SeckillBucketRouter ROUTER =
+            new com.localdeals.trade.service.SeckillBucketRouter(4);
 
     @AfterEach
     void tearDown() {
@@ -88,10 +90,17 @@ class VoucherServiceImplTest {
         assertThat(synchronizations).hasSize(1);
         synchronizations.get(0).afterCommit();
 
-        verify(valueOperations).set(SECKILL_STOCK_KEY + 101L, "25");
+        // 25 units over four buckets, and the window replicated into each of them.
+        long preheated = 0;
+        for (int bucket = 0; bucket < ROUTER.count(); bucket++) {
+            verify(valueOperations).set(ROUTER.stockKey(101L, bucket),
+                    Long.toString(ROUTER.stockShare(25, bucket)));
+            preheated += ROUTER.stockShare(25, bucket);
+        }
+        assertThat(preheated).isEqualTo(25L);
         ArgumentCaptor<Map<Object, Object>> metadataCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(hashOperations).putAll(org.mockito.ArgumentMatchers.eq(SECKILL_META_KEY + 101L),
-                metadataCaptor.capture());
+        verify(hashOperations, org.mockito.Mockito.times(ROUTER.count()))
+                .putAll(org.mockito.ArgumentMatchers.startsWith("sk:{sk:b"), metadataCaptor.capture());
         assertThat(metadataCaptor.getValue()).containsOnly(
                 org.assertj.core.api.Assertions.entry("status", "ACTIVE"),
                 org.assertj.core.api.Assertions.entry("beginAt",
@@ -111,7 +120,7 @@ class VoucherServiceImplTest {
         );
         doThrow(new IllegalStateException("redis unavailable"))
                 .when(valueOperations)
-                .set(SECKILL_STOCK_KEY + 102L, "10");
+                .set(ROUTER.stockKey(102L, 0), Long.toString(ROUTER.stockShare(10, 0)));
 
         service.addSeckillVoucher(voucher);
         TransactionSynchronization synchronization =

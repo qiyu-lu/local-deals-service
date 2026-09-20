@@ -1,6 +1,7 @@
 package com.localdeals.platform.observability;
 
 import com.localdeals.platform.config.ObservabilityProperties;
+import com.localdeals.trade.service.SeckillBucketRouter;
 import com.localdeals.content.service.BlogHotRankService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
@@ -15,8 +16,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
-
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
 
 /** Low-frequency, read-only sampling of reliability backlogs. */
 @Component
@@ -47,12 +46,15 @@ public class ReliabilityBacklogCollector {
     private final StringRedisTemplate redisTemplate;
     private final BlogHotRankService hotRankService;
     private final LocalDealsMetrics metrics;
+    private final SeckillBucketRouter bucketRouter;
 
     public ReliabilityBacklogCollector(ObservabilityProperties properties,
                                        JdbcTemplate jdbcTemplate,
                                        StringRedisTemplate redisTemplate,
                                        BlogHotRankService hotRankService,
-                                       LocalDealsMetrics metrics) {
+                                       LocalDealsMetrics metrics,
+                                       SeckillBucketRouter bucketRouter) {
+        this.bucketRouter = bucketRouter;
         this.properties = properties;
         this.jdbcTemplate = jdbcTemplate;
         this.redisTemplate = redisTemplate;
@@ -107,15 +109,21 @@ public class ReliabilityBacklogCollector {
 
     public void collectSeckill() {
         try {
-            String sample = redisTemplate.execute(
-                    SECKILL_BACKLOG_SCRIPT,
-                    Collections.singletonList(SECKILL_PROCESSING_INDEX_KEY));
-            String[] fields = sample == null ? new String[0] : sample.split("\\|", -1);
-            if (fields.length != 2) {
-                throw new IllegalStateException("Malformed seckill backlog sample");
+            // The PROCESSING index is per bucket: the backlog is their sum and the oldest
+            // overdue reservation is the worst of them.
+            long due = 0;
+            long oldest = 0;
+            for (int bucket = 0; bucket < bucketRouter.count(); bucket++) {
+                String sample = redisTemplate.execute(
+                        SECKILL_BACKLOG_SCRIPT,
+                        Collections.singletonList(bucketRouter.processingKey(bucket)));
+                String[] fields = sample == null ? new String[0] : sample.split("\\|", -1);
+                if (fields.length != 2) {
+                    throw new IllegalStateException("Malformed seckill backlog sample");
+                }
+                due += nonNegativeLong(fields[0]);
+                oldest = Math.max(oldest, nonNegativeLong(fields[1]));
             }
-            long due = nonNegativeLong(fields[0]);
-            long oldest = nonNegativeLong(fields[1]);
             metrics.updateSeckillBacklog(due, oldest);
         } catch (RuntimeException failure) {
             metrics.failSeckillCollector();

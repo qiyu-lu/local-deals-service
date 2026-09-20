@@ -19,6 +19,7 @@ public class SeckillProperties {
     private Funnel funnel = new Funnel();
     private Consume consume = new Consume();
     private Token token = new Token();
+    private Bucket bucket = new Bucket();
 
     @PostConstruct
     public void validate() {
@@ -42,6 +43,24 @@ public class SeckillProperties {
             throw new IllegalStateException("local-deals.seckill.token must not be null");
         }
         token.validate();
+        if (bucket == null) {
+            throw new IllegalStateException("local-deals.seckill.bucket must not be null");
+        }
+        bucket.validate();
+    }
+
+    /** How many stock buckets one voucher is split into; see {@code SeckillBucketRouter}. */
+    @Data
+    public static class Bucket {
+        /** A power of two, at most 1024: the order number's user gene is ten bits wide. */
+        private int count = 16;
+
+        void validate() {
+            if (count < 1 || count > 1024 || Integer.bitCount(count) != 1) {
+                throw new IllegalStateException(
+                        "local-deals.seckill.bucket.count must be a power of two between 1 and 1024");
+            }
+        }
     }
 
     /** The batch consumer: how much of the broker's backlog one round of work takes. */

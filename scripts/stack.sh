@@ -10,6 +10,10 @@
 #   scripts/stack.sh app-start|app-stop start/stop the jar (pinned with taskset when APP_CPUS set;
 #                                       APP_JAR runs another build, e.g. an older tag)
 #   scripts/stack.sh pin                pin dependency containers to DEPS_CPUS
+#
+#   REDIS_MODE=cluster                  run Redis as 3 masters + 3 replicas (ports 2700x/3700x)
+#                                       instead of the single node; 'env' then exports
+#                                       SPRING_DATA_REDIS_CLUSTER_NODES for tests and the app.
 #   scripts/stack.sh status|down
 set -euo pipefail
 
@@ -23,6 +27,9 @@ REDIS_PORT="${REDIS_PORT:-26379}"
 NAMESRV_PORT="${NAMESRV_PORT:-29876}"
 BROKER_PORT="${BROKER_PORT:-20911}"
 ES_PORT="${ES_PORT:-29200}"
+REDIS_MODE="${REDIS_MODE:-single}"
+REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-2700}"
+REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-3700}"
 APP_PORT="${APP_PORT:-28083}"
 MANAGEMENT_PORT="${MANAGEMENT_PORT:-28184}"
 STACK_SUBNET="${STACK_SUBNET:-172.30.56.0/24}"
@@ -51,11 +58,71 @@ fail() { echo "stack: $*" >&2; exit 1; }
 check_isolation() {
   [[ "$STACK_ID" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || fail "STACK_ID must match [a-z0-9-]{2,31}"
   local port forbidden
-  for port in "$MYSQL_PORT" "$REDIS_PORT" "$NAMESRV_PORT" "$BROKER_PORT" "$ES_PORT" "$APP_PORT" "$MANAGEMENT_PORT"; do
+  local cluster_ports=()
+  # Both the client and the bus ports: another stack's bus range is just as fatal a collision.
+  [[ "$REDIS_MODE" != cluster ]] || mapfile -t cluster_ports < <(redis_cluster_ports; redis_cluster_bus_ports)
+  for port in "$MYSQL_PORT" "$REDIS_PORT" "$NAMESRV_PORT" "$BROKER_PORT" "$ES_PORT" "$APP_PORT" \
+      "$MANAGEMENT_PORT" ${cluster_ports[@]+"${cluster_ports[@]}"}; do
     for forbidden in "${FORBIDDEN_PORTS[@]}"; do
       [[ "$port" != "$forbidden" ]] || fail "port ${port} belongs to the dev stack"
     done
   done
+}
+
+redis_cluster_ports() { # 1..6
+  local i
+  for i in 1 2 3 4 5 6; do echo "${REDIS_CLUSTER_PORT_BASE}${i}"; done
+}
+
+redis_cluster_bus_ports() { # 1..6
+  local i
+  for i in 1 2 3 4 5 6; do echo "${REDIS_CLUSTER_BUS_BASE}${i}"; done
+}
+
+redis_cluster_nodes() {
+  local port list=""
+  for port in $(redis_cluster_ports); do list="${list}${list:+,}127.0.0.1:${port}"; done
+  echo "$list"
+}
+
+cluster_compose() {
+  env STACK_NAME="$STACK_NAME" STACK_RESTART=no \
+    LOCAL_DEALS_REDIS_PASSWORD="$REDIS_PASSWORD" \
+    REDIS_CLUSTER_PORT_BASE="$REDIS_CLUSTER_PORT_BASE" REDIS_CLUSTER_BUS_BASE="$REDIS_CLUSTER_BUS_BASE" \
+    docker compose --project-name "${STACK_NAME}-redis-cluster" --project-directory "$PROJECT_DIR" \
+    --env-file /dev/null --file "${PROJECT_DIR}/docker/redis-cluster/docker-compose.yml" "$@"
+}
+
+cluster_cli() { # port, then redis-cli arguments
+  local port="$1"; shift
+  redis-cli -h 127.0.0.1 -p "$port" -a "$REDIS_PASSWORD" --no-auth-warning "$@"
+}
+
+cluster_node_ready() { cluster_cli "$1" PING | grep -qx PONG; }
+cluster_state_ok() { cluster_cli "${REDIS_CLUSTER_PORT_BASE}1" CLUSTER INFO | grep -q '^cluster_state:ok'; }
+
+start_redis_cluster() {
+  # The nodes share the host network, so a busy port is a hard failure the container reports
+  # only in its log. Say it here instead of timing out on a node that never started.
+  local port
+  for port in $(redis_cluster_ports) $(redis_cluster_bus_ports); do
+    ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN &&
+      fail "port ${port} is already in use; another cluster is running (REDIS_CLUSTER_PORT_BASE/REDIS_CLUSTER_BUS_BASE)"
+  done
+  cluster_compose up -d
+  local port
+  for port in $(redis_cluster_ports); do
+    wait_for "Redis node ${port}" cluster_node_ready "$port"
+  done
+  if cluster_state_ok; then
+    echo "redis cluster already formed"
+    return 0
+  fi
+  local addresses=()
+  for port in $(redis_cluster_ports); do addresses+=("127.0.0.1:${port}"); done
+  redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --cluster create "${addresses[@]}" \
+    --cluster-replicas 1 --cluster-yes >/dev/null
+  wait_for "redis cluster state" cluster_state_ok
 }
 
 compose() {
@@ -89,6 +156,15 @@ export STACK_REDIS="redis-cli -h 127.0.0.1 -p ${REDIS_PORT} -a ${REDIS_PASSWORD}
 export STACK_APP=http://127.0.0.1:${APP_PORT}
 export STACK_MANAGEMENT=http://127.0.0.1:${MANAGEMENT_PORT}
 EOF
+  # Cluster additions last, so STACK_REDIS ends up pointing at the cluster. The node list gets a
+  # neutral name: whether a process should talk to the cluster is its caller's decision (tests
+  # do; a build from before the buckets cannot).
+  if [[ "$REDIS_MODE" == cluster ]]; then
+    cat <<EOF
+export STACK_REDIS_CLUSTER_NODES='$(redis_cluster_nodes)'
+export STACK_REDIS="redis-cli -c -h 127.0.0.1 -p ${REDIS_CLUSTER_PORT_BASE}1 -a ${REDIS_PASSWORD} --no-auth-warning"
+EOF
+  fi
 }
 
 wait_for() {
@@ -124,9 +200,12 @@ up() {
   check_isolation
   prepare_broker_store
   prepare_es_data
+  # Cluster mode keeps the single node running as well: a benchmark compares a build that
+  # predates the buckets, which cannot run on a cluster, against one that does.
   compose up -d mysql redis namesrv broker elasticsearch
-  wait_for MySQL mysql_ready
   wait_for Redis redis_ready
+  [[ "$REDIS_MODE" != cluster ]] || start_redis_cluster
+  wait_for MySQL mysql_ready
   wait_for Elasticsearch es_ready
   wait_for RocketMQ rmq_ready
   local topic group
@@ -137,7 +216,9 @@ up() {
     docker exec "${STACK_NAME}-broker" sh mqadmin updateSubGroup -n namesrv:9876 -c "$STACK_NAME" -g "$group" >/dev/null
   done
   [[ -z "$DEPS_CPUS" ]] || pin
-  echo "stack ${STACK_NAME} ready: mysql=${MYSQL_PORT} redis=${REDIS_PORT} namesrv=${NAMESRV_PORT} broker=${BROKER_PORT} es=${ES_PORT}"
+  local redis_where="redis=${REDIS_PORT}"
+  [[ "$REDIS_MODE" != cluster ]] || redis_where="redis-cluster=$(redis_cluster_nodes)"
+  echo "stack ${STACK_NAME} ready: mysql=${MYSQL_PORT} ${redis_where} namesrv=${NAMESRV_PORT} broker=${BROKER_PORT} es=${ES_PORT}"
 }
 
 pin() {
@@ -153,6 +234,7 @@ down() {
   check_isolation
   app_stop
   compose down --volumes --remove-orphans
+  cluster_compose down --volumes --remove-orphans
   if [[ "$BROKER_STORE" == /* && -d "$BROKER_STORE" ]]; then
     docker run --rm -u 0 -v "$(dirname "$BROKER_STORE"):/root-store" --entrypoint rm apache/rocketmq:5.3.2 \
       -rf "/root-store/$(basename "$BROKER_STORE")"
@@ -165,6 +247,7 @@ down() {
 
 status() {
   compose ps
+  [[ "$REDIS_MODE" != cluster ]] || cluster_compose ps
   if [[ -f "${RUN_DIR}/app.pid" ]] && kill -0 "$(<"${RUN_DIR}/app.pid")" 2>/dev/null; then
     echo "app running pid=$(<"${RUN_DIR}/app.pid") port=${APP_PORT}"
   else
@@ -176,6 +259,11 @@ run_tests() {
   check_isolation
   local pattern="${2:?usage: stack.sh it <surefire -Dtest pattern>}"
   eval "$(print_env)"
+  # Tests always follow the mode the stack was started in.
+  if [[ "$REDIS_MODE" == cluster ]]; then
+    export SPRING_DATA_REDIS_CLUSTER_NODES="$STACK_REDIS_CLUSTER_NODES"
+    export SPRING_DATA_REDIS_CLUSTER_MAX_REDIRECTS=5
+  fi
   (cd "$PROJECT_DIR" && JAVA_HOME="$APP_JAVA_HOME" mvn -o -q test -Dtest="$pattern" -DfailIfNoTests=false)
 }
 

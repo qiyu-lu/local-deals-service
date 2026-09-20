@@ -28,6 +28,9 @@ class SeckillSoldOutRegistryIT {
     @Resource
     private StringRedisTemplate redis;
 
+    /** Two buckets: a flag has to travel per bucket, and one bucket alone never rejects. */
+    private static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(2);
+
     private final List<RedisMessageListenerContainer> containers = new ArrayList<>();
 
     @AfterEach
@@ -37,7 +40,7 @@ class SeckillSoldOutRegistryIT {
 
     private SeckillSoldOutRegistry instance() {
         SeckillSoldOutRegistry registry = new SeckillSoldOutRegistry(redis, Duration.ofMinutes(1),
-                System::currentTimeMillis);
+                System::currentTimeMillis, ROUTER);
         RedisMessageListenerContainer container = new RedisMessageListenerContainer();
         container.setConnectionFactory(redis.getConnectionFactory());
         container.addMessageListener(registry, new ChannelTopic(SeckillSoldOutRegistry.CHANNEL));
@@ -53,10 +56,14 @@ class SeckillSoldOutRegistryIT {
         SeckillSoldOutRegistry second = instance();
         await().atMost(5, TimeUnit.SECONDS).until(() -> containers.stream().allMatch(c -> c.isRunning()));
 
-        first.markSoldOut(VOUCHER);
+        first.markSoldOut(VOUCHER, 0);
+        await().atMost(5, TimeUnit.SECONDS).until(() -> second.isSoldOut(VOUCHER, 0));
+        assertThat(second.rejectLocally(VOUCHER)).isFalse();
+
+        first.markSoldOut(VOUCHER, 1);
         await().atMost(5, TimeUnit.SECONDS).until(() -> second.rejectLocally(VOUCHER));
 
-        second.clear(VOUCHER);
+        second.clear(VOUCHER, 1);
         await().atMost(5, TimeUnit.SECONDS).until(() -> !first.rejectLocally(VOUCHER));
         assertThat(second.rejectLocally(VOUCHER)).isFalse();
     }

@@ -4,11 +4,15 @@
   fixture.py users  N      create N users (ids 10_000_001..) and write their login tokens to
                            Redis and to benchmark/v2/run/tokens.csv
   fixture.py voucher STOCK create one ACTIVE seckill voucher (MySQL + Redis) and print its id
+                           SECKILL_BUCKETS=K writes the K bucket shares of a build with buckets
+                           (M5 and later); unset or 0 writes the single pre-M5 keys
   fixture.py orders  ID    print persisted order count for a voucher (table: ORDERS_TABLE,
                            default trade_order)
 
 Only the stdlib plus the `mysql` and `redis-cli` binaries are used. Connection settings come
-from the variables printed by `scripts/stack.sh env`.
+from the variables printed by `scripts/stack.sh env`. BENCH_REDIS_CLUSTER (a comma-separated
+node list) switches every write to a Cluster: commands are grouped by the slot of their key and
+each group is piped to the node that owns it, because a pipe cannot follow a redirect.
 """
 import os
 import subprocess
@@ -41,21 +45,96 @@ def mysql(sql):
     return out.stdout
 
 
-def redis_pipe(commands):
-    """Feeds RESP-encoded commands to redis-cli --pipe."""
-    def resp(args):
-        parts = [f"*{len(args)}\r\n"]
-        for arg in args:
-            data = str(arg)
-            parts.append(f"${len(data.encode())}\r\n{data}\r\n")
-        return ''.join(parts)
-    payload = ''.join(resp(c) for c in commands)
-    out = subprocess.run(
-        ['redis-cli', '-h', env('LOCAL_DEALS_REDIS_HOST'), '-p', env('LOCAL_DEALS_REDIS_PORT'),
-         '-a', env('LOCAL_DEALS_REDIS_PASSWORD'), '--no-auth-warning', '--pipe'],
-        input=payload, capture_output=True, text=True)
+CRC16_TABLE = []
+for _byte in range(256):
+    _crc = _byte << 8
+    for _ in range(8):
+        _crc = ((_crc << 1) ^ 0x1021) & 0xFFFF if _crc & 0x8000 else (_crc << 1) & 0xFFFF
+    CRC16_TABLE.append(_crc)
+
+
+def key_slot(key):
+    """The Cluster slot of a key, hash tag included."""
+    start = key.find('{')
+    if start != -1:
+        end = key.find('}', start + 1)
+        if end > start + 1:
+            key = key[start + 1:end]
+    crc = 0
+    for byte in key.encode():
+        crc = ((crc << 8) & 0xFFFF) ^ CRC16_TABLE[((crc >> 8) ^ byte) & 0xFF]
+    return crc % 16384
+
+
+def cluster_nodes():
+    return [node.strip() for node in os.environ.get('BENCH_REDIS_CLUSTER', '').split(',')
+            if node.strip()]
+
+
+def redis_cli(host, port, *args, stdin=None):
+    return subprocess.run(
+        ['redis-cli', '-h', host, '-p', str(port), '-a', env('LOCAL_DEALS_REDIS_PASSWORD'),
+         '--no-auth-warning', *args],
+        input=stdin, capture_output=True, text=True)
+
+
+def slot_owners():
+    """slot range -> (host, port) of the master that serves it."""
+    host, port = cluster_nodes()[0].split(':')
+    out = redis_cli(host, port, 'CLUSTER', 'SLOTS')
+    if out.returncode != 0:
+        sys.exit(out.stderr)
+    # redis-cli prints the nested reply one value per line, indented; parse it positionally.
+    fields = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    owners, index = [], 0
+    while index + 3 < len(fields):
+        start, end, owner_host, owner_port = fields[index:index + 4]
+        if not (start.isdigit() and end.isdigit() and owner_port.isdigit()):
+            index += 1
+            continue
+        owners.append((int(start), int(end), owner_host, int(owner_port)))
+        # skip this master's id and every replica entry until the next slot range
+        index += 4
+        while index + 1 < len(fields) and not (
+                fields[index].isdigit() and fields[index + 1].isdigit()
+                and int(fields[index]) <= 16383 and int(fields[index + 1]) <= 16383
+                and int(fields[index]) <= int(fields[index + 1])):
+            index += 1
+    if not owners:
+        sys.exit('could not read CLUSTER SLOTS')
+    return owners
+
+
+def resp(args):
+    parts = [f"*{len(args)}\r\n"]
+    for arg in args:
+        data = str(arg)
+        parts.append(f"${len(data.encode())}\r\n{data}\r\n")
+    return ''.join(parts)
+
+
+def pipe_to(host, port, commands):
+    out = redis_cli(host, port, '--pipe', stdin=''.join(resp(c) for c in commands))
     if out.returncode != 0 or 'errors: 0' not in out.stdout:
         sys.exit(out.stdout + out.stderr)
+
+
+def redis_pipe(commands):
+    """Feeds RESP-encoded commands to redis-cli --pipe, one pipe per owning node."""
+    nodes = cluster_nodes()
+    if not nodes:
+        pipe_to(env('LOCAL_DEALS_REDIS_HOST'), env('LOCAL_DEALS_REDIS_PORT'), commands)
+        return
+    owners = slot_owners()
+    grouped = {}
+    for command in commands:
+        slot = key_slot(str(command[1]))
+        owner = next(((h, p) for start, end, h, p in owners if start <= slot <= end), None)
+        if owner is None:
+            sys.exit(f"no cluster node owns slot {slot}")
+        grouped.setdefault(owner, []).append(command)
+    for (host, port), group in grouped.items():
+        pipe_to(host, port, group)
 
 
 def users(count):
@@ -89,10 +168,21 @@ def voucher(stock):
         "SELECT LAST_INSERT_ID();").strip())
     mysql(f"INSERT INTO tb_seckill_voucher (voucher_id, stock, begin_time, end_time) "
           f"VALUES ({voucher_id}, {stock}, FROM_UNIXTIME({begin}), FROM_UNIXTIME({end}));")
-    redis_pipe([
-        ['SET', f"seckill:stock:{voucher_id}", stock],
-        ['HSET', f"seckill:meta:{voucher_id}", 'status', 'ACTIVE', 'beginAt', begin, 'endAt', end],
-    ])
+    buckets = int(os.environ.get('SECKILL_BUCKETS', '0'))
+    commands = []
+    if buckets > 0:
+        # Same split as SeckillBucketRouter: the shares add up to the total.
+        for bucket in range(buckets):
+            share = stock // buckets + (1 if bucket < stock % buckets else 0)
+            prefix = f"sk:{{sk:b{bucket}}}:"
+            commands.append(['SET', f"{prefix}stock:{voucher_id}", share])
+            commands.append(['HSET', f"{prefix}meta:{voucher_id}",
+                             'status', 'ACTIVE', 'beginAt', begin, 'endAt', end])
+    else:
+        commands.append(['SET', f"seckill:stock:{voucher_id}", stock])
+        commands.append(['HSET', f"seckill:meta:{voucher_id}",
+                         'status', 'ACTIVE', 'beginAt', begin, 'endAt', end])
+    redis_pipe(commands)
     print(voucher_id)
 
 

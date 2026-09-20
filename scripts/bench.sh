@@ -10,6 +10,8 @@
 #
 #   scripts/bench.sh m3 | m3-smoke              unattended scenario (see "Scenarios" below): own stack,
 #   scripts/bench.sh m4 | m4-smoke              M4 scenario: drains A/B, consume-parameter sweep, drills
+#   scripts/bench.sh m5 | m5-smoke              M5 scenario: buckets + Redis Cluster A/B, bucket sweep,
+#                                               app kill drill and the Redis master kill drill
 #                                               builds, warm-up, ladder, drains, crash drills, cleanup;
 #                                               results in benchmark/v2/m3/<timestamp>-<scenario>/
 #
@@ -24,12 +26,14 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-  m3|m3-smoke|m4|m4-smoke)
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke)
     # Scenarios own a separate stack, so they never touch the stack used for integration tests.
     export STACK_ID="${STACK_ID:-m3bench}" MYSQL_PORT="${MYSQL_PORT:-33306}" REDIS_PORT="${REDIS_PORT:-36379}" \
       NAMESRV_PORT="${NAMESRV_PORT:-39876}" BROKER_PORT="${BROKER_PORT:-30911}" ES_PORT="${ES_PORT:-39200}" \
       APP_PORT="${APP_PORT:-38083}" MANAGEMENT_PORT="${MANAGEMENT_PORT:-38184}" \
-      STACK_SUBNET="${STACK_SUBNET:-172.30.57.0/24}" ;;
+      STACK_SUBNET="${STACK_SUBNET:-172.30.58.0/24}" \
+      REDIS_CLUSTER_PORT_BASE="${REDIS_CLUSTER_PORT_BASE:-3800}" \
+      REDIS_CLUSTER_BUS_BASE="${REDIS_CLUSTER_BUS_BASE:-4800}" ;;
 esac
 MILESTONE="${MILESTONE:-m0}"
 OUT_DIR="${BENCH_OUT:-${PROJECT_DIR}/benchmark/v2/${MILESTONE}}"
@@ -63,6 +67,20 @@ container_ns() {
   local id
   id="$(docker inspect -f '{{.Id}}' "$1")"
   cat "/sys/fs/cgroup/cpu,cpuacct/docker/${id}/cpuacct.usage"
+}
+
+# The Redis column is the whole Redis layer: one node, or the six of a cluster when the run
+# under measurement talks to it (BENCH_REDIS_CLUSTER).
+redis_ns() {
+  local total=0 i
+  if [[ -n "${BENCH_REDIS_CLUSTER:-}" ]]; then
+    for i in 1 2 3 4 5 6; do
+      total=$(( total + $(container_ns "${STACK_NAME}-redis-c${i}" 2>/dev/null || echo 0) ))
+    done
+    echo "$total"
+  else
+    container_ns "${STACK_NAME}-redis"
+  fi
 }
 
 # Sum of max offsets over all queues of a topic: messages ever written to it.
@@ -134,19 +152,21 @@ one_run() { # kind rate stock duration
   local kind="$1" rate="$2" stock="$3" duration="$4"
   local voucher name pid t0 t1 ticks0 ticks1 hz ns0 ns1 svc started ended
   local -A dep0 dep1
-  voucher="$(python3 "$FIXTURE" voucher "$stock")"
+  voucher="$(python3 "$FIXTURE" voucher "$stock")"  # honours BENCH_REDIS_CLUSTER/SECKILL_BUCKETS
   name="${kind}-r${rate}-s${stock}-$(date +%H%M%S)"
   pid="$(app_pid)"
   hz="$(getconf CLK_TCK)"
   local half0 half1 msg0 msg1
   half0="$(topic_offset RMQ_SYS_TRANS_HALF_TOPIC)"; msg0="$(topic_offset seckill-order-topic)"
-  for svc in mysql redis broker; do dep0[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
+  for svc in mysql broker; do dep0[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
+  dep0[redis]="$(redis_ns)"
   sample_orders "$voucher" "${RAW_DIR}/${name}-orders.csv" &
   local sampler=$!
   ticks0="$(proc_ticks "$pid")"; started="$(date +%s.%N)"
   run_k6 "$name" "$voucher" "$rate" "$duration"
   ticks1="$(proc_ticks "$pid")"; ended="$(date +%s.%N)"
-  for svc in mysql redis broker; do dep1[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
+  for svc in mysql broker; do dep1[$svc]="$(container_ns "${STACK_NAME}-${svc}")"; done
+  dep1[redis]="$(redis_ns)"
   local total
   total="$(python3 -c "import json;print(int(json.load(open('${RAW_DIR}/${name}.json'))['metrics']['iterations']['count']))")"
   advance_user_cursor "$total"
@@ -283,6 +303,29 @@ load_scenario() {
       S_SWEEP="1:16 32:16 64:16 64:32 256:32"
       S_KILL_ROUNDS=1; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
       S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m5)
+      S_MILESTONE=m5; S_BASELINE_TAG=v2.0-m4; S_BASELINE_FLAVOUR=funnel
+      S_WARMUP_RATE=500; S_WARMUP_DURATION=30s
+      # M5 moves the keys, not the funnel: a short ladder only proves no regression.
+      S_RATES="10000 20000"; S_STEP_DURATION=30s; S_STEP_STOCK=1000
+      S_DRAIN_ROUNDS=3; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
+      S_BUCKETS=16
+      # bucket counts to sweep on the cluster; 1 is this build with the split switched off
+      S_BUCKET_SWEEP="1 8 64"
+      S_KILL_ROUNDS=1; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=2
+      S_KILL_STOCK=20000; S_KILL_RATE=2000; S_KILL_AFTER=6
+      S_EXTRA_ARGS=""; S_USERS=100000 ;;
+    m5-smoke)
+      S_MILESTONE=m5; S_BASELINE_TAG=v2.0-m4; S_BASELINE_FLAVOUR=funnel
+      S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
+      S_RATES="2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
+      S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
+      S_BUCKETS=8
+      S_BUCKET_SWEEP="1"
+      S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=1
+      S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
+      S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
+      S_USERS=20000 ;;
     m4-smoke)
       S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3; S_BASELINE_FLAVOUR=funnel
       S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
@@ -408,12 +451,21 @@ start_build() { # which
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
   # the app first: on a fresh stack its Flyway migrations create the tables the fixture fills
   APP_JAR="${RUN_DIR}/${which}.jar" APP_ARGS="$(build_args "$which")" "${PROJECT_DIR}/scripts/stack.sh" app-start
-  "$0" users "$S_USERS"
+  env $(build_redis_env "$which") "$0" users "$S_USERS"
   # the warm-up needs the same k6 environment as the measured runs, or it only measures 403s
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="$(build_commit "$which")" DURATION="$S_WARMUP_DURATION" \
-    STOCK=1000 env "$(build_env "$which")" "$0" step "$S_WARMUP_RATE"
+    STOCK=1000 env "$(build_env "$which")" $(build_redis_env "$which") "$0" step "$S_WARMUP_RATE"
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
+# Which Redis a build talks to, as environment for the fixture, the drills and the CPU column.
+# A build from before M5 has untagged keys, so it can only run on the single node.
+build_redis_env() { # which
+  if [[ "$1" != baseline && -n "${S_BUCKETS:-}" ]]; then
+    echo "SECKILL_BUCKETS=${S_BUCKETS} BENCH_REDIS_CLUSTER=${STACK_REDIS_CLUSTER_NODES:-}"
+  else
+    echo "SECKILL_BUCKETS=0 BENCH_REDIS_CLUSTER="
+  fi
+}
 build_commit() { [[ "$1" == baseline ]] && echo "$S_BASELINE_COMMIT" || echo "$S_CURRENT_COMMIT"; }
 # k6 signs a seckill token itself; only a build that predates the funnel does not want one.
 build_env() { # which
@@ -426,14 +478,14 @@ build_env() { # which
 
 ladder() { # which
   start_build "$1"
-  env "$(build_env "$1")" BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+  env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
     DURATION="$S_STEP_DURATION" STOCK="$S_STEP_STOCK" "$0" step $S_RATES
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
 }
 
 drain_round() { # which
   start_build "$1"
-  env "$(build_env "$1")" BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
+  env "$(build_env "$1")" $(build_redis_env "$1") BENCH_OUT="$S_RESULT" BENCH_COMMIT="$(build_commit "$1")" \
     "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
 }
@@ -456,11 +508,60 @@ sweep_round() { # batch:threads
   "${PROJECT_DIR}/scripts/stack.sh" app-stop
 }
 
+# One drain of the current build with an explicit bucket count. The commit column carries it
+# (e.g. 1aad214:k8) so the sweep rows keep the summary.csv schema.
+bucket_sweep_round() { # bucket count
+  local buckets="$1"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  local args="${ARGS_CURRENT/--local-deals.seckill.bucket.count=${S_BUCKETS}/--local-deals.seckill.bucket.count=${buckets}}"
+  APP_JAR="${RUN_DIR}/current.jar" APP_ARGS="$args" "${PROJECT_DIR}/scripts/stack.sh" app-start
+  env SECKILL_BUCKETS="$buckets" BENCH_REDIS_CLUSTER="${STACK_REDIS_CLUSTER_NODES:-}" "$0" users "$S_USERS"
+  BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="sweep" DURATION="$S_WARMUP_DURATION" STOCK=1000 \
+    env "$(build_env current)" SECKILL_BUCKETS="$buckets" BENCH_REDIS_CLUSTER="${STACK_REDIS_CLUSTER_NODES:-}" \
+    "$0" step "$S_WARMUP_RATE"
+  env "$(build_env current)" SECKILL_BUCKETS="$buckets" BENCH_REDIS_CLUSTER="${STACK_REDIS_CLUSTER_NODES:-}" \
+    BENCH_OUT="$S_RESULT" BENCH_COMMIT="${S_CURRENT_COMMIT}:k${buckets}" \
+    "$0" drain "$S_DRAIN_STOCK" "$S_DRAIN_RATE"
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+}
+
+wait_cluster_ok() {
+  local deadline=$(( SECONDS + 180 ))
+  until $STACK_REDIS CLUSTER INFO 2>/dev/null | grep -q '^cluster_state:ok'; do
+    (( SECONDS < deadline )) || s_fail "redis cluster did not come back after the drill"
+    sleep 2
+  done
+}
+
+# Kill one Redis master mid-load: what the cluster loses, and that MySQL still does not oversell.
+redis_kill_round() {
+  start_build current
+  local line
+  line="$(env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" \
+    APP_JAR="${RUN_DIR}/current.jar" APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" DRILL_TIMEOUT=1800 \
+    "${PROJECT_DIR}/benchmark/v2/scripts/redis-kill-drill.sh" "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
+  [[ "$line" == voucher=* ]] || { echo "redis kill drill printed no result: ${line}"; return 1; }
+  python3 - "${S_RESULT}/redis-kill-drill.csv" "$S_CURRENT_COMMIT" "$line" <<'PY'
+import csv, os, sys
+path, commit, line = sys.argv[1:]
+row = {'commit': commit, **dict(kv.split('=', 1) for kv in line.split(','))}
+new = not os.path.exists(path)
+with open(path, 'a', newline='') as f:
+    w = csv.DictWriter(f, fieldnames=list(row))
+    if new:
+        w.writeheader()
+    w.writerow(row)
+PY
+  "${PROJECT_DIR}/scripts/stack.sh" app-stop
+  # The cluster must be whole again before the next phase measures anything.
+  wait_cluster_ok
+}
+
 kill_round() { # mode: kill | broker
   start_build current
   local line broker_down=""
   [[ "$1" == broker ]] && broker_down=1
-  line="$(env "$(build_env current)" BENCH_OUT="$S_RESULT" APP_JAR="${RUN_DIR}/current.jar" \
+  line="$(env "$(build_env current)" $(build_redis_env current) BENCH_OUT="$S_RESULT" APP_JAR="${RUN_DIR}/current.jar" \
     APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" BROKER_DOWN="$broker_down" DRILL_TIMEOUT=1800 \
     "${PROJECT_DIR}/benchmark/v2/scripts/kill-drill.sh" "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
   [[ "$line" == voucher=* ]] || { echo "kill drill printed no result: ${line}"; return 1; }
@@ -486,6 +587,9 @@ run_scenario() { # name
     S_DRAIN_ROUNDS S_DRAIN_STOCK S_DRAIN_RATE S_KILL_ROUNDS S_BROKER_KILL_ROUNDS S_KILL_STOCK S_KILL_RATE \
     S_KILL_AFTER S_EXTRA_ARGS S_USERS S_BASELINE_FLAVOUR STACK_NAME K6_IMAGE
   S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
+  S_BUCKETS="${S_BUCKETS:-}"; export S_BUCKETS
+  S_BUCKET_SWEEP="${S_BUCKET_SWEEP:-}"; export S_BUCKET_SWEEP
+  S_REDIS_KILL_ROUNDS="${S_REDIS_KILL_ROUNDS:-0}"; export S_REDIS_KILL_ROUNDS
   S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
   export S_CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
   export S_BASELINE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}")"
@@ -499,6 +603,17 @@ run_scenario() { # name
     export ARGS_BASELINE="${M3_LIMITS_BASELINE} --local-deals.order.pay-timeout=24h"
   fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
+  if [[ -n "${S_BUCKETS:-}" ]]; then
+    # The current build runs on the cluster with its buckets; the baseline predates both and
+    # stays on the single node. The stack environment was read before the mode was known, so
+    # read it again: it now also carries the cluster node list the current build needs.
+    export REDIS_MODE=cluster
+    eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
+    [[ -n "${STACK_REDIS_CLUSTER_NODES:-}" ]] || fail "cluster mode did not print node addresses"
+    ARGS_CURRENT="${ARGS_CURRENT} --local-deals.seckill.bucket.count=${S_BUCKETS}"
+    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.nodes=${STACK_REDIS_CLUSTER_NODES}"
+    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.max-redirects=5"
+  fi
   BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
   # Take the scenario lock before anything that touches the shared stack, and arm the cleanup
   # trap only once it is ours: a refused run must never tear down the running one's containers.
@@ -526,8 +641,11 @@ run_scenario() { # name
   done
   local combo
   for combo in $S_SWEEP; do phase "sweep-${combo/:/x}" 1500 sweep_round "$combo"; done
+  local buckets
+  for buckets in ${S_BUCKET_SWEEP:-}; do phase "bucket-sweep-k${buckets}" 1500 bucket_sweep_round "$buckets"; done
   for (( i = 1; i <= S_KILL_ROUNDS; i++ )); do phase "kill-drill-${i}" 2400 kill_round kill; done
   for (( i = 1; i <= S_BROKER_KILL_ROUNDS; i++ )); do phase "broker-kill-drill-${i}" 2700 kill_round broker; done
+  for (( i = 1; i <= ${S_REDIS_KILL_ROUNDS:-0}; i++ )); do phase "redis-kill-drill-${i}" 2700 redis_kill_round; done
   [[ -s "${S_RESULT}/summary.csv" ]] || s_fail "result: summary.csv is empty"
   echo DONE >"${S_RESULT}/status"
   write_manifest end
@@ -539,7 +657,7 @@ case "${1:-}" in
   step) shift; for rate in "$@"; do one_run step "$rate" "$STOCK" "$DURATION"; done ;;
   drain) one_run drain "${3:?rate}" "${2:?stock}" "$(( ${2} / ${3} + 1 ))s" ;;
   profile) profile "${2:?seconds}" "${3:?name}" ;;
-  m3|m3-smoke|m4|m4-smoke) run_scenario "$1" ;;
+  m3|m3-smoke|m4|m4-smoke|m5|m5-smoke) run_scenario "$1" ;;
   _phase) shift; "$@" ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac

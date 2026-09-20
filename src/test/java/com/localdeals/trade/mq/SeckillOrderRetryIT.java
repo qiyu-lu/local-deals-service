@@ -1,7 +1,9 @@
 package com.localdeals.trade.mq;
 
+import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.exception.StockExhaustedException;
 import com.localdeals.trade.service.IVoucherOrderService;
+import com.localdeals.trade.service.SeckillOrderBatchPersister;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.platform.websocket.WebSocketNotifier;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,13 +31,18 @@ import static org.mockito.Mockito.when;
  * failure-classification actually drives broker-level redelivery — not just the in-memory
  * decision covered by {@link SeckillOrderConsumerTest}.
  *
+ * <p>Since M4 the topic is drained by the batch consumer, so the classification under test is
+ * the batch one: a transient failure of the batch persister must reach the broker, and a slice
+ * the fast path refuses must fall back to the single-message rules and be acknowledged.</p>
+ *
  * <ul>
- *   <li><b>Transient failure</b> (generic exception rethrown) → RocketMQ redelivers the
- *       message, so the consumer is invoked more than once. After retries exhaust
- *       ({@code maxReconsumeTimes}, default 16) RocketMQ routes it to the dead-letter
- *       topic {@code %DLQ%seckill-consumer-group}.</li>
- *   <li><b>Permanent failure</b> ({@link StockExhaustedException} swallowed) → the consumer
- *       ACKs, so the message is delivered exactly once and never retried.</li>
+ *   <li><b>Transient failure</b> (generic exception out of the persister) → the batch is not
+ *       acknowledged, so RocketMQ redelivers it and the persister sees the slice again. After
+ *       retries exhaust ({@code maxReconsumeTimes}, default 16) RocketMQ routes it to the
+ *       dead-letter topic {@code %DLQ%seckill-consumer-group}.</li>
+ *   <li><b>Permanent failure</b> (the slice degrades, then {@link StockExhaustedException} is
+ *       swallowed by the single-message path) → the batch ACKs, so the message is delivered
+ *       exactly once and never retried.</li>
  * </ul>
  *
  * Uses voucher ids that do NOT exist in {@code tb_seckill_voucher}; if a background retry
@@ -61,6 +68,9 @@ class SeckillOrderRetryIT {
     @MockitoBean
     private SeckillOrderStateService seckillOrderStateService;
 
+    @MockitoBean
+    private SeckillOrderBatchPersister seckillOrderBatchPersister;
+
     private static final String TOPIC = System.getProperty(
             "m7rc.seckill.retry.topic", "seckill-order-topic");
     private static final long RUN_SUFFIX = System.currentTimeMillis() % 1_000_000L;
@@ -71,28 +81,41 @@ class SeckillOrderRetryIT {
     void allowExactProcessingReservation() {
         when(seckillOrderStateService.validateForConsumption(any()))
                 .thenReturn(SeckillOrderStateService.ReservationDecision.PROCESS);
+        // The batch claim and its finalize answer for whatever size the batch happens to have.
+        when(seckillOrderStateService.claimForPersistence(any())).thenAnswer(invocation ->
+                java.util.Collections.nCopies(
+                        ((java.util.List<?>) invocation.getArgument(0)).size(),
+                        SeckillOrderStateService.PersistClaim.CLAIMED));
+        when(seckillOrderStateService.markSuccessBatch(any())).thenAnswer(invocation ->
+                java.util.Collections.nCopies(
+                        ((java.util.List<?>) invocation.getArgument(0)).size(), Boolean.TRUE));
     }
 
     @Test
     void transientFailure_isRedeliveredByBroker() {
-        // Generic (transient) exception → consumer rethrows → RocketMQ must redeliver.
+        // Generic (transient) exception out of the persister → batch not acknowledged →
+        // RocketMQ must redeliver.
         doThrow(new RuntimeException("simulated DB timeout"))
-                .when(voucherOrderService).createPendingOrder(any());
+                .when(seckillOrderBatchPersister).persistGroup(
+                        org.mockito.ArgumentMatchers.eq(TRANSIENT_VOUCHER_ID), any());
 
         SeckillOrderMessage msg = new SeckillOrderMessage(
                 TRANSIENT_VOUCHER_ID, 770001L + RUN_SUFFIX, 990001L + RUN_SUFFIX);
         rocketMQTemplate.convertAndSend(TOPIC, msg);
 
-        // The real broker must invoke the consumer at least twice (original + >=1 retry)
-        // for THIS voucher. First consumer-retry delay is ~10s, so allow 40s.
-        verify(voucherOrderService, timeout(40_000).atLeast(2))
-                .createPendingOrder(argThat(o -> o != null &&
-                        o.getVoucherId().equals(TRANSIENT_VOUCHER_ID)));
+        // The real broker must hand the slice to the persister at least twice (original +
+        // >=1 retry). The first consumer-retry delay is ~10s, so allow 40s.
+        verify(seckillOrderBatchPersister, timeout(40_000).atLeast(2))
+                .persistGroup(org.mockito.ArgumentMatchers.eq(TRANSIENT_VOUCHER_ID), any());
     }
 
     @Test
     void permanentFailure_isNotRedelivered() {
-        // StockExhaustedException is swallowed (ACK) → message must NOT be retried.
+        // The slice degrades, the single-message path runs and swallows StockExhausted (ACK)
+        // → the message must NOT be retried.
+        doThrow(new BatchPersistDegradedException("stock guard no longer holds"))
+                .when(seckillOrderBatchPersister).persistGroup(
+                        org.mockito.ArgumentMatchers.eq(PERMANENT_VOUCHER_ID), any());
         doThrow(new StockExhaustedException("DB stock exhausted"))
                 .when(voucherOrderService).createPendingOrder(any());
         doNothing().when(webSocketNotifier).notify(any(), org.mockito.ArgumentMatchers.anyBoolean(), any(), any());

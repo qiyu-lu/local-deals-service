@@ -12,9 +12,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.Arrays;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
-
 /**
  * Gives a closed or refunded order's unit back to the Redis admission layer and lets the user
  * buy again. The DB stock was already restored in the transition's transaction; this is the
@@ -36,14 +33,17 @@ public class ReservationReleaseService {
     private final TradeOrderMapper tradeOrderMapper;
     private final ISeckillVoucherService seckillVoucherService;
     private final SeckillSoldOutRegistry soldOutRegistry;
+    private final SeckillBucketRouter router;
 
     public ReservationReleaseService(StringRedisTemplate stringRedisTemplate, TradeOrderMapper tradeOrderMapper,
                                      ISeckillVoucherService seckillVoucherService,
-                                     SeckillSoldOutRegistry soldOutRegistry) {
+                                     SeckillSoldOutRegistry soldOutRegistry,
+                                     SeckillBucketRouter router) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.tradeOrderMapper = tradeOrderMapper;
         this.seckillVoucherService = seckillVoucherService;
         this.soldOutRegistry = soldOutRegistry;
+        this.router = router;
     }
 
     /**
@@ -61,13 +61,15 @@ public class ReservationReleaseService {
     /** @return true when Redis is released (now or earlier) and the pending flag is cleared. */
     public boolean release(TradeOrder order) {
         try {
+            // The unit goes back to the buyer's own bucket, which is where it was taken from.
+            int bucket = router.bucketOfUser(order.getUserId());
             Long released = stringRedisTemplate.execute(RELEASE_SCRIPT,
-                    Arrays.asList(SECKILL_STOCK_KEY + order.getVoucherId(),
-                            SECKILL_RESERVATION_KEY + order.getVoucherId()),
+                    Arrays.asList(router.stockKey(order.getVoucherId(), bucket),
+                            router.reservationKey(order.getVoucherId(), bucket)),
                     order.getUserId().toString(), order.getOrderNo().toString());
             tradeOrderMapper.clearReleasePending(order.getOrderNo());
             if (Long.valueOf(1L).equals(released)) {
-                soldOutRegistry.clear(order.getVoucherId());
+                soldOutRegistry.clear(order.getVoucherId(), bucket);
             }
             return true;
         } catch (RuntimeException e) {

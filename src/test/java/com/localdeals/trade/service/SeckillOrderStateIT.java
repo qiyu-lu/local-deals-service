@@ -22,17 +22,15 @@ import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = {RedisAutoConfiguration.class, SeckillOrderStateIT.Config.class})
 @ActiveProfiles("test")
 class SeckillOrderStateIT {
+
+    /** One bucket: this test is about the state transitions, not about the split. */
+    static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(1);
 
     private static final Long VOUCHER_ID = 88991L;
     private static final Long USER_ID = 88001L;
@@ -58,7 +56,7 @@ class SeckillOrderStateIT {
                 stockKey(), metaKey(), reservationKey(),
                 statusKey(ORDER_ID), statusKey(SECOND_ORDER_ID)));
         stringRedisTemplate.opsForZSet().remove(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
+                ROUTER.processingKey(0), ORDER_ID.toString(), SECOND_ORDER_ID.toString(),
                 "malformed-id", "01", "+1", "", " ");
     }
 
@@ -72,7 +70,7 @@ class SeckillOrderStateIT {
                 .isEqualTo("PROCESSING");
         assertThat(stringRedisTemplate.getExpire(statusKey(ORDER_ID))).isEqualTo(-1L);
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNotNull();
+                ROUTER.processingKey(0), ORDER_ID.toString())).isNotNull();
         SeckillOrderMessage admitted = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
         assertThat(stateService.validateForConsumption(admitted))
                 .isEqualTo(SeckillOrderStateService.ReservationDecision.PROCESS);
@@ -89,7 +87,7 @@ class SeckillOrderStateIT {
         assertThat(stringRedisTemplate.opsForHash().hasKey(reservationKey(), USER_ID.toString())).isFalse();
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "status")).isEqualTo("FAILED");
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
+                ROUTER.processingKey(0), ORDER_ID.toString())).isNull();
         assertThat(stringRedisTemplate.getExpire(statusKey(ORDER_ID))).isPositive();
         assertThat(stateService.validateForConsumption(message))
                 .isEqualTo(SeckillOrderStateService.ReservationDecision.ALREADY_FAILED);
@@ -109,7 +107,7 @@ class SeckillOrderStateIT {
         assertThat(stringRedisTemplate.opsForValue().get(stockKey())).isEqualTo("1");
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "status")).isEqualTo("SUCCESS");
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
+                ROUTER.processingKey(0), ORDER_ID.toString())).isNull();
         assertThat(stringRedisTemplate.getExpire(statusKey(ORDER_ID))).isPositive();
     }
 
@@ -135,22 +133,25 @@ class SeckillOrderStateIT {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
         SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
         Double dueBefore = stringRedisTemplate.opsForZSet()
-                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString());
+                .score(ROUTER.processingKey(0), ORDER_ID.toString());
 
         assertThat(stateService.claimForPersistence(List.of(message)))
                 .containsExactly(SeckillOrderStateService.PersistClaim.CLAIMED);
 
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "claimOwner"))
                 .isEqualTo(stateService.claimOwner());
+        // The lease may only push the due time away, never pull it closer: a reservation that
+        // was due in two minutes must not become due in thirty seconds because someone claimed
+        // it, or every claimed batch would hand the reconciler work it has to refuse.
         assertThat(stringRedisTemplate.opsForZSet()
-                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString()))
-                .isGreaterThan(dueBefore);
+                .score(ROUTER.processingKey(0), ORDER_ID.toString()))
+                .isGreaterThanOrEqualTo(dueBefore);
 
         // Another instance must not take the same order while the lease holds.
         SeckillOrderStateService otherInstance = new SeckillOrderStateService(
                 stringRedisTemplate, new SeckillProperties(),
                 new SeckillSoldOutRegistry(stringRedisTemplate, java.time.Duration.ofSeconds(1),
-                        System::currentTimeMillis));
+                        System::currentTimeMillis, ROUTER), ROUTER);
         assertThat(otherInstance.claimForPersistence(List.of(message)))
                 .containsExactly(SeckillOrderStateService.PersistClaim.CLAIM_BUSY);
 
@@ -182,7 +183,7 @@ class SeckillOrderStateIT {
             assertThat(stringRedisTemplate.opsForHash().hasKey(statusKey(orderId), "claimOwner"))
                     .isFalse();
             assertThat(stringRedisTemplate.opsForZSet()
-                    .score(SECKILL_PROCESSING_INDEX_KEY, orderId.toString())).isNull();
+                    .score(ROUTER.processingKey(0), orderId.toString())).isNull();
             assertThat(stringRedisTemplate.getExpire(statusKey(orderId))).isPositive();
         }
         // An idempotent replay of the whole batch is still an acknowledgement.
@@ -200,7 +201,7 @@ class SeckillOrderStateIT {
         assertThat(stateService.claimForPersistence(List.of(message)))
                 .containsExactly(SeckillOrderStateService.PersistClaim.ALREADY_SUCCESS);
         assertThat(stringRedisTemplate.opsForZSet()
-                .score(SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNull();
+                .score(ROUTER.processingKey(0), ORDER_ID.toString())).isNull();
     }
 
     @Test
@@ -244,7 +245,7 @@ class SeckillOrderStateIT {
     void dueClaimUsesRedisTimeAndMovesScoreWithoutExpiringProcessingState() {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
         stringRedisTemplate.opsForZSet().add(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
+                ROUTER.processingKey(0), ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
 
         assertThat(stateService.findDueOrderIds(10)).contains(ORDER_ID);
         SeckillOrderStateService.ReconciliationClaim claim = stateService.claimForReconciliation(
@@ -258,7 +259,7 @@ class SeckillOrderStateIT {
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "reconcileAttempts"))
                 .isEqualTo("1");
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString()))
+                ROUTER.processingKey(0), ORDER_ID.toString()))
                 .isGreaterThanOrEqualTo((double) claim.getRedisNow() + 60D);
         assertThat(stringRedisTemplate.getExpire(statusKey(ORDER_ID))).isEqualTo(-1L);
         assertThat(stateService.findDueOrderIds(10)).doesNotContain(ORDER_ID);
@@ -268,15 +269,15 @@ class SeckillOrderStateIT {
     void malformedDueMemberIsDroppedWithoutBlockingValidMember() {
         long dueAt = Instant.now().getEpochSecond() - 1;
         for (String malformed : Arrays.asList("malformed-id", "01", "+1", "", " ")) {
-            stringRedisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, malformed, dueAt);
+            stringRedisTemplate.opsForZSet().add(ROUTER.processingKey(0), malformed, dueAt);
         }
         stringRedisTemplate.opsForZSet().add(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), dueAt);
+                ROUTER.processingKey(0), ORDER_ID.toString(), dueAt);
 
         assertThat(stateService.findDueOrderIds(10)).containsExactly(ORDER_ID);
         for (String malformed : Arrays.asList("malformed-id", "01", "+1", "", " ")) {
             assertThat(stringRedisTemplate.opsForZSet().score(
-                    SECKILL_PROCESSING_INDEX_KEY, malformed)).isNull();
+                    ROUTER.processingKey(0), malformed)).isNull();
         }
     }
 
@@ -284,7 +285,7 @@ class SeckillOrderStateIT {
     void malformedAttemptCountersReturnStateInvalidInsteadOfBreakingClaimParsing() {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
         stringRedisTemplate.opsForZSet().add(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
+                ROUTER.processingKey(0), ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
 
         for (String malformed : Arrays.asList(
                 "not-a-number", "1.5", "1e3", "9223372036854775807")) {
@@ -299,14 +300,14 @@ class SeckillOrderStateIT {
             assertThat(claim.getReconcileAttempts()).isZero();
         }
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNotNull();
+                ROUTER.processingKey(0), ORDER_ID.toString())).isNotNull();
     }
 
     @Test
     void malformedCreatedAtCannotDriveClaimDeadlines() {
         assertThat(admit(USER_ID, ORDER_ID)).isZero();
         stringRedisTemplate.opsForZSet().add(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
+                ROUTER.processingKey(0), ORDER_ID.toString(), Instant.now().getEpochSecond() - 1);
         SeckillOrderMessage message = new SeckillOrderMessage(VOUCHER_ID, USER_ID, ORDER_ID);
 
         for (String malformed : Arrays.asList(
@@ -318,7 +319,7 @@ class SeckillOrderStateIT {
                     .isEqualTo(SeckillOrderStateService.ReconciliationClaimDecision.STATE_INVALID);
         }
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString())).isNotNull();
+                ROUTER.processingKey(0), ORDER_ID.toString())).isNotNull();
         assertThat(stringRedisTemplate.opsForHash().get(reservationKey(), USER_ID.toString()))
                 .isEqualTo(ORDER_ID.toString());
         assertThat(stringRedisTemplate.opsForValue().get(stockKey())).isEqualTo("1");
@@ -331,7 +332,7 @@ class SeckillOrderStateIT {
         // the durable index member.
         stringRedisTemplate.opsForHash().put(statusKey(ORDER_ID), "status", "SUCCESS");
         stringRedisTemplate.opsForZSet().add(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), dueAt);
+                ROUTER.processingKey(0), ORDER_ID.toString(), dueAt);
 
         assertThat(stateService.find(ORDER_ID)).isNull();
         assertThat(stateService.findDueOrderIds(10)).contains(ORDER_ID);
@@ -339,7 +340,7 @@ class SeckillOrderStateIT {
 
         assertThat(stateService.findDueOrderIds(10)).doesNotContain(ORDER_ID);
         assertThat(stringRedisTemplate.opsForZSet().score(
-                SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString()))
+                ROUTER.processingKey(0), ORDER_ID.toString()))
                 .isGreaterThan((double) dueAt);
         assertThat(stringRedisTemplate.opsForHash().get(statusKey(ORDER_ID), "status"))
                 .isEqualTo("SUCCESS");
@@ -357,11 +358,11 @@ class SeckillOrderStateIT {
                 String member = Long.toString(90071992547411000L + offset);
                 unresolvedMembers.add(member);
                 stringRedisTemplate.opsForZSet().add(
-                        SECKILL_PROCESSING_INDEX_KEY, member, now - 2);
+                        ROUTER.processingKey(0), member, now - 2);
             }
             assertThat(admit(USER_ID, ORDER_ID)).isZero();
             stringRedisTemplate.opsForZSet().add(
-                    SECKILL_PROCESSING_INDEX_KEY, ORDER_ID.toString(), now - 1);
+                    ROUTER.processingKey(0), ORDER_ID.toString(), now - 1);
 
             List<Long> firstBatch = stateService.findDueOrderIds(100);
             assertThat(firstBatch).hasSize(100).doesNotContain(ORDER_ID);
@@ -371,7 +372,7 @@ class SeckillOrderStateIT {
             assertThat(stateService.findDueOrderIds(100)).contains(ORDER_ID);
         } finally {
             stringRedisTemplate.opsForZSet().remove(
-                    SECKILL_PROCESSING_INDEX_KEY, unresolvedMembers.toArray());
+                    ROUTER.processingKey(0), unresolvedMembers.toArray());
         }
     }
 
@@ -379,7 +380,7 @@ class SeckillOrderStateIT {
         com.localdeals.platform.config.TrafficControlProperties noLimits =
                 new com.localdeals.platform.config.TrafficControlProperties();
         noLimits.getSeckill().setEnabled(false);
-        return new SeckillAdmissionService(stringRedisTemplate, new SeckillProperties(), noLimits)
+        return new SeckillAdmissionService(stringRedisTemplate, new SeckillProperties(), noLimits, ROUTER)
                 .admit(VOUCHER_ID, userId, orderId, "127.0.0.1").code();
     }
 
@@ -392,19 +393,19 @@ class SeckillOrderStateIT {
     }
 
     private String stockKey() {
-        return SECKILL_STOCK_KEY + VOUCHER_ID;
+        return ROUTER.stockKey(VOUCHER_ID, 0);
     }
 
     private String metaKey() {
-        return SECKILL_META_KEY + VOUCHER_ID;
+        return ROUTER.metaKey(VOUCHER_ID, 0);
     }
 
     private String reservationKey() {
-        return SECKILL_RESERVATION_KEY + VOUCHER_ID;
+        return ROUTER.reservationKey(VOUCHER_ID, 0);
     }
 
     private String statusKey(Long orderId) {
-        return SECKILL_ORDER_STATUS_KEY + orderId;
+        return ROUTER.statusKey(orderId, 0);
     }
 
     @TestConfiguration
@@ -418,7 +419,7 @@ class SeckillOrderStateIT {
         SeckillOrderStateService seckillOrderStateService(StringRedisTemplate stringRedisTemplate,
                                                           SeckillProperties seckillProperties) {
             return new SeckillOrderStateService(stringRedisTemplate, seckillProperties,
-                    org.mockito.Mockito.mock(SeckillSoldOutRegistry.class));
+                    org.mockito.Mockito.mock(SeckillSoldOutRegistry.class), ROUTER);
         }
     }
 }

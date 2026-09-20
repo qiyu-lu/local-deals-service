@@ -39,7 +39,8 @@ class ReliabilityBacklogCollectorTest {
         hotRankService = mock(BlogHotRankService.class);
         registry = new SimpleMeterRegistry();
         collector = new ReliabilityBacklogCollector(properties, jdbcTemplate, redisTemplate,
-                hotRankService, new LocalDealsMetrics(registry));
+                hotRankService, new LocalDealsMetrics(registry),
+                new com.localdeals.trade.service.SeckillBucketRouter(1));
     }
 
     @Test

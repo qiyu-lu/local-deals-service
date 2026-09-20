@@ -20,7 +20,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
+import com.localdeals.trade.service.SeckillBucketRouter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
@@ -29,6 +29,10 @@ import static org.mockito.Mockito.mock;
 @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(
         named = "M5A_ISOLATED", matches = "true")
 class ReliabilityBacklogRedisIT {
+
+    /** One bucket keeps the sample of this test a single index, as it was before M5. */
+    private static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(1);
+    private static final String PROCESSING_KEY = ROUTER.processingKey(0);
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -42,15 +46,15 @@ class ReliabilityBacklogRedisIT {
     @BeforeEach
     @AfterEach
     void cleanOwnedKeys() {
-        redisTemplate.delete(SECKILL_PROCESSING_INDEX_KEY);
+        redisTemplate.delete(PROCESSING_KEY);
     }
 
     @Test
     void readOnlyLuaReportsDueWithoutChangingRedisData() {
         long now = Instant.now().getEpochSecond();
-        redisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, "m5a-due", now - 7D);
-        redisTemplate.opsForZSet().add(SECKILL_PROCESSING_INDEX_KEY, "m5a-future", now + 600D);
-        byte[] processingBefore = dump(SECKILL_PROCESSING_INDEX_KEY);
+        redisTemplate.opsForZSet().add(PROCESSING_KEY, "m5a-due", now - 7D);
+        redisTemplate.opsForZSet().add(PROCESSING_KEY, "m5a-future", now + 600D);
+        byte[] processingBefore = dump(PROCESSING_KEY);
 
         collector.collectSeckill();
 
@@ -58,7 +62,7 @@ class ReliabilityBacklogRedisIT {
                 .isEqualTo(1D);
         assertThat(registry.get("local_deals.seckill.processing.oldest_overdue").gauge().value())
                 .isBetween(7D, 10D);
-        assertThat(dump(SECKILL_PROCESSING_INDEX_KEY)).isEqualTo(processingBefore);
+        assertThat(dump(PROCESSING_KEY)).isEqualTo(processingBefore);
     }
 
     @Test
@@ -66,7 +70,7 @@ class ReliabilityBacklogRedisIT {
         collector.collectSeckill();
         assertThat(registry.get("local_deals.seckill.processing.due").gauge().value()).isZero();
 
-        redisTemplate.opsForValue().set(SECKILL_PROCESSING_INDEX_KEY, "wrong-type");
+        redisTemplate.opsForValue().set(PROCESSING_KEY, "wrong-type");
         collector.collectSeckill();
 
         assertThat(registry.get("local_deals.seckill.processing.due").gauge().value()).isNaN();
@@ -118,7 +122,7 @@ class ReliabilityBacklogRedisIT {
                 BlogHotRankService hotRankService,
                 LocalDealsMetrics metrics) {
             return new ReliabilityBacklogCollector(
-                    properties, jdbcTemplate, redisTemplate, hotRankService, metrics);
+                    properties, jdbcTemplate, redisTemplate, hotRankService, metrics, ROUTER);
         }
     }
 }

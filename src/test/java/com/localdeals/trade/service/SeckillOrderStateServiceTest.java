@@ -12,11 +12,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
 import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -27,6 +23,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SeckillOrderStateServiceTest {
+
+    private static final long USER_ID = 23L;
+    /** Every generated order number repeats the buyer's gene; the keys depend on it. */
+    private static final long ORDER_ID = (90071992547409931L & ~1023L) | USER_ID;
+    private static final SeckillBucketRouter ROUTER = new SeckillBucketRouter(16);
+    private static final int BUCKET = ROUTER.bucketOfUser(USER_ID);
 
     private StringRedisTemplate redisTemplate;
     private HashOperations<String, Object, Object> hashOperations;
@@ -41,8 +43,8 @@ class SeckillOrderStateServiceTest {
         hashOperations = mock(HashOperations.class);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         soldOut = mock(SeckillSoldOutRegistry.class);
-        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties(), soldOut);
-        message = new SeckillOrderMessage(17L, 23L, 90071992547409931L);
+        service = new SeckillOrderStateService(redisTemplate, new SeckillProperties(), soldOut, ROUTER);
+        message = new SeckillOrderMessage(17L, USER_ID, ORDER_ID);
     }
 
     @Test
@@ -55,9 +57,9 @@ class SeckillOrderStateServiceTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_RESERVATION_KEY + message.getVoucherId(),
-                        SECKILL_PROCESSING_INDEX_KEY)),
+                        ROUTER.statusKey(message.getOrderId(), BUCKET),
+                        ROUTER.reservationKey(message.getVoucherId(), BUCKET),
+                        ROUTER.processingKey(BUCKET))),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
@@ -75,8 +77,8 @@ class SeckillOrderStateServiceTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_RESERVATION_KEY + message.getVoucherId())),
+                        ROUTER.statusKey(message.getOrderId(), BUCKET),
+                        ROUTER.reservationKey(message.getVoucherId(), BUCKET))),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()));
@@ -101,7 +103,7 @@ class SeckillOrderStateServiceTest {
     void compensationIsIdempotentWhenStatusIsAlreadyFailed() {
         doReturn(0L).when(redisTemplate).execute(
                 any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
-        when(hashOperations.entries(SECKILL_ORDER_STATUS_KEY + message.getOrderId()))
+        when(hashOperations.entries(ROUTER.statusKey(message.getOrderId(), BUCKET)))
                 .thenReturn(state("FAILED", "DB_STOCK_EXHAUSTED"));
 
         assertThat(service.compensate(message, "DB_STOCK_EXHAUSTED")).isTrue();
@@ -109,10 +111,10 @@ class SeckillOrderStateServiceTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        SECKILL_STOCK_KEY + message.getVoucherId(),
-                        SECKILL_RESERVATION_KEY + message.getVoucherId(),
-                        SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_PROCESSING_INDEX_KEY)),
+                        ROUTER.stockKey(message.getVoucherId(), BUCKET),
+                        ROUTER.reservationKey(message.getVoucherId(), BUCKET),
+                        ROUTER.statusKey(message.getOrderId(), BUCKET),
+                        ROUTER.processingKey(BUCKET))),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
@@ -126,7 +128,7 @@ class SeckillOrderStateServiceTest {
                 any(RedisScript.class), anyList(), any(), any(), any(), any(), any());
         Map<Object, Object> otherUsersState = state("FAILED", "DB_ORDER_CONFLICT");
         otherUsersState.put("userId", "24");
-        when(hashOperations.entries(SECKILL_ORDER_STATUS_KEY + message.getOrderId()))
+        when(hashOperations.entries(ROUTER.statusKey(message.getOrderId(), BUCKET)))
                 .thenReturn(otherUsersState);
 
         assertThat(service.compensate(message, "DB_ORDER_CONFLICT")).isFalse();
@@ -134,22 +136,25 @@ class SeckillOrderStateServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void dueQueryIsBoundedAndDropsMalformedRawMembersWithoutDroppingValidIds() {
+    void dueQueryAsksEveryBucketForItsShareAndDropsMalformedRawMembers() {
         org.springframework.data.redis.core.ZSetOperations<String, String> zSet =
                 org.mockito.Mockito.mock(org.springframework.data.redis.core.ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSet);
-        doReturn(Arrays.asList("41", "not-a-long", "01", "+1", "", " ", "42"))
-                .when(redisTemplate).execute(
-                any(RedisScript.class), anyList(), eq("100"));
+        // The index is per bucket: a batch of 100 over sixteen buckets is seven each.
+        doReturn(Arrays.asList("41", "not-a-long", "01", "+1", "", " ", "42"),
+                java.util.List.of())
+                .when(redisTemplate).execute(any(RedisScript.class), anyList(), eq("7"));
 
         assertThat(service.findDueOrderIds(500)).containsExactly(41L, 42L);
 
-        verify(redisTemplate).execute(
-                any(RedisScript.class),
-                eq(java.util.Collections.singletonList(SECKILL_PROCESSING_INDEX_KEY)),
-                eq("100"));
+        for (int bucket = 0; bucket < ROUTER.count(); bucket++) {
+            verify(redisTemplate).execute(
+                    any(RedisScript.class),
+                    eq(java.util.Collections.singletonList(ROUTER.processingKey(bucket))),
+                    eq("7"));
+        }
         for (String malformed : new String[]{"not-a-long", "01", "+1", "", " "}) {
-            verify(zSet).remove(SECKILL_PROCESSING_INDEX_KEY, malformed);
+            verify(zSet).remove(ROUTER.processingKey(0), malformed);
         }
     }
 
@@ -169,9 +174,9 @@ class SeckillOrderStateServiceTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_RESERVATION_KEY + message.getVoucherId(),
-                        SECKILL_PROCESSING_INDEX_KEY)),
+                        ROUTER.statusKey(message.getOrderId(), BUCKET),
+                        ROUTER.reservationKey(message.getVoucherId(), BUCKET),
+                        ROUTER.processingKey(BUCKET))),
                 eq(message.getUserId().toString()),
                 eq(message.getVoucherId().toString()),
                 eq(message.getOrderId().toString()),
@@ -190,8 +195,8 @@ class SeckillOrderStateServiceTest {
         verify(redisTemplate).execute(
                 any(RedisScript.class),
                 eq(Arrays.asList(
-                        SECKILL_ORDER_STATUS_KEY + message.getOrderId(),
-                        SECKILL_PROCESSING_INDEX_KEY)),
+                        ROUTER.statusKey(message.getOrderId(), BUCKET),
+                        ROUTER.processingKey(BUCKET))),
                 eq(message.getOrderId().toString()),
                 eq("60"));
     }
@@ -213,7 +218,7 @@ class SeckillOrderStateServiceTest {
 
         assertThat(service.compensate(message, "DB_STOCK_EXHAUSTED")).isTrue();
 
-        verify(soldOut).clear(17L);
+        verify(soldOut).clear(17L, BUCKET);
     }
 
     @Test

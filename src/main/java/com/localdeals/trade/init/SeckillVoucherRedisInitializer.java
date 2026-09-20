@@ -2,6 +2,7 @@ package com.localdeals.trade.init;
 
 import com.localdeals.trade.entity.SeckillVoucher;
 import com.localdeals.trade.service.ISeckillVoucherService;
+import com.localdeals.trade.service.SeckillBucketRouter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -17,9 +18,6 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 
 /**
  * Backfills Redis admission state for seckill vouchers created before Redis metadata preheating
@@ -48,11 +46,14 @@ public class SeckillVoucherRedisInitializer implements ApplicationRunner {
 
     private final ISeckillVoucherService seckillVoucherService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final SeckillBucketRouter router;
 
     public SeckillVoucherRedisInitializer(ISeckillVoucherService seckillVoucherService,
-                                          StringRedisTemplate stringRedisTemplate) {
+                                          StringRedisTemplate stringRedisTemplate,
+                                          SeckillBucketRouter router) {
         this.seckillVoucherService = seckillVoucherService;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.router = router;
     }
 
     @Override
@@ -70,20 +71,26 @@ public class SeckillVoucherRedisInitializer implements ApplicationRunner {
 
         int changedVouchers = 0;
         for (SeckillVoucher voucher : vouchers) {
-            Long result = stringRedisTemplate.execute(
-                    BACKFILL_SCRIPT,
-                    Arrays.asList(
-                            SECKILL_STOCK_KEY + voucher.getVoucherId(),
-                            SECKILL_META_KEY + voucher.getVoucherId()),
-                    voucher.getStock().toString(),
-                    Long.toString(voucher.getBeginTime().atZone(BUSINESS_ZONE).toEpochSecond()),
-                    Long.toString(voucher.getEndTime().atZone(BUSINESS_ZONE).toEpochSecond())
-            );
-            if (result == null) {
-                throw new IllegalStateException(
-                        "Redis returned no result while backfilling voucher " + voucher.getVoucherId());
+            boolean changed = false;
+            // The stock is split over the buckets; the activity metadata is replicated into each
+            // of them, because the admission script may only read keys of the buyer's own slot.
+            for (int bucket = 0; bucket < router.count(); bucket++) {
+                Long result = stringRedisTemplate.execute(
+                        BACKFILL_SCRIPT,
+                        Arrays.asList(
+                                router.stockKey(voucher.getVoucherId(), bucket),
+                                router.metaKey(voucher.getVoucherId(), bucket)),
+                        Long.toString(router.stockShare(voucher.getStock(), bucket)),
+                        Long.toString(voucher.getBeginTime().atZone(BUSINESS_ZONE).toEpochSecond()),
+                        Long.toString(voucher.getEndTime().atZone(BUSINESS_ZONE).toEpochSecond())
+                );
+                if (result == null) {
+                    throw new IllegalStateException(
+                            "Redis returned no result while backfilling voucher " + voucher.getVoucherId());
+                }
+                changed |= result != 0L;
             }
-            if (result != 0L) {
+            if (changed) {
                 changedVouchers++;
             }
         }

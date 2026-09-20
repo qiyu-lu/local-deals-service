@@ -20,11 +20,6 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_META_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_ORDER_STATUS_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_PROCESSING_INDEX_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_RESERVATION_KEY;
-import static com.localdeals.platform.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -50,6 +45,8 @@ class SeckillRedriveIT {
     private static final int STOCK = 3;
 
     @Autowired
+    private com.localdeals.trade.service.SeckillBucketRouter router;
+    @Autowired
     private SeckillAdmissionService admissionService;
     @Autowired
     private SnowflakeOrderIdGenerator orderIdGenerator;
@@ -67,20 +64,25 @@ class SeckillRedriveIT {
     private TradeFixture fixture;
     private long orderId;
 
+    /** Everything this test does belongs to one buyer, so to one bucket. */
+    private int bucket() {
+        return router.bucketOfUser(USER);
+    }
+
     @BeforeEach
     void setUp() {
         fixture = new TradeFixture(jdbc, BASE).create(STOCK);
         long now = Instant.now().getEpochSecond();
-        redis.opsForValue().set(SECKILL_STOCK_KEY + fixture.voucherId, Integer.toString(STOCK));
-        redis.opsForHash().putAll(SECKILL_META_KEY + fixture.voucherId, Map.of(
+        redis.opsForValue().set(router.stockKey(fixture.voucherId, bucket()), Integer.toString(STOCK));
+        redis.opsForHash().putAll(router.metaKey(fixture.voucherId, bucket()), Map.of(
                 "status", "ACTIVE", "beginAt", Long.toString(now - 3600), "endAt", Long.toString(now + 3600)));
     }
 
     @AfterEach
     void tearDown() {
-        redis.delete(java.util.List.of(SECKILL_STOCK_KEY + fixture.voucherId, SECKILL_META_KEY + fixture.voucherId,
-                SECKILL_RESERVATION_KEY + fixture.voucherId, SECKILL_ORDER_STATUS_KEY + orderId));
-        redis.opsForZSet().remove(SECKILL_PROCESSING_INDEX_KEY, Long.toString(orderId));
+        redis.delete(java.util.List.of(router.stockKey(fixture.voucherId, bucket()), router.metaKey(fixture.voucherId, bucket()),
+                router.reservationKey(fixture.voucherId, bucket()), router.statusKeyOfOrder(orderId)));
+        redis.opsForZSet().remove(router.processingKey(bucket()), Long.toString(orderId));
         fixture.delete();
     }
 
@@ -97,11 +99,11 @@ class SeckillRedriveIT {
                     Integer.class, orderId)).isEqualTo(1);
         });
         await().atMost(30, TimeUnit.SECONDS).untilAsserted(() ->
-                assertThat(redis.opsForHash().get(SECKILL_ORDER_STATUS_KEY + orderId, "status")).isEqualTo("SUCCESS"));
+                assertThat(redis.opsForHash().get(router.statusKeyOfOrder(orderId), "status")).isEqualTo("SUCCESS"));
 
         assertThat(fixture.orderStatus(orderId)).isEqualTo("PENDING_PAY");
         assertThat(fixture.dbStock()).isEqualTo(STOCK - 1);
-        assertThat(redis.opsForValue().get(SECKILL_STOCK_KEY + fixture.voucherId)).isEqualTo(Integer.toString(STOCK - 1));
-        assertThat(redis.opsForZSet().score(SECKILL_PROCESSING_INDEX_KEY, Long.toString(orderId))).isNull();
+        assertThat(redis.opsForValue().get(router.stockKey(fixture.voucherId, bucket()))).isEqualTo(Integer.toString(STOCK - 1));
+        assertThat(redis.opsForZSet().score(router.processingKey(bucket()), Long.toString(orderId))).isNull();
     }
 }

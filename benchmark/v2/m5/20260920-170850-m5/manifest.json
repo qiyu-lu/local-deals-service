@@ -1,0 +1,68 @@
+{
+  "scenario": "m5",
+  "started_at": "2026-09-20T17:08:50+0800",
+  "commit": "f5dfbae9cce11014ac3ebffb1e851bf2dc0b0657",
+  "commit_short": "f5dfbae",
+  "uncommitted_changes": "?? benchmark/v2/m5/20260920-170850-m5/",
+  "baseline": {
+    "tag": "v2.0-m4",
+    "commit": "7c4ee5286fbe3f81716e08ec3750ac6c58ca94bb"
+  },
+  "parameters": {
+    "sweep": "",
+    "rates": "10000 20000",
+    "drill_args": "",
+    "drain_rounds": "3",
+    "milestone": "m5",
+    "drain_stock": "20000",
+    "kill_stock": "20000",
+    "extra_args": "",
+    "kill_rate": "2000",
+    "users": "100000",
+    "baseline_tag": "v2.0-m4",
+    "baseline_commit": "7c4ee52",
+    "kill_rounds": "1",
+    "buckets": "16",
+    "broker_kill_rounds": "0",
+    "kill_after": "6",
+    "warmup_rate": "500",
+    "bucket_sweep": "1 8 64",
+    "warmup_duration": "30s",
+    "baseline_flavour": "funnel",
+    "current_commit": "f5dfbae",
+    "step_stock": "1000",
+    "redis_kill_rounds": "2",
+    "drain_rate": "2000",
+    "step_duration": "30s"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret  --local-deals.seckill.bucket.count=16 --spring.data.redis.cluster.nodes=127.0.0.1:38001,127.0.0.1:38002,127.0.0.1:38003,127.0.0.1:38004,127.0.0.1:38005,127.0.0.1:38006 --spring.data.redis.cluster.max-redirects=5"
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "38083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "4.99 6.58 7.02 5/3619 3444339",
+    "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  },
+  "finished_at": "2026-09-20T17:41:14+0800",
+  "load_at_end": {
+    "loadavg": "7.48 7.24 7.58 5/4147 42318"
+  },
+  "status": "DONE"
+}
