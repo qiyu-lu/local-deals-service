@@ -318,7 +318,7 @@ flowchart LR
 | M0 基线与工具 | ☑ | `v2.0-m0` | 准入拐点 ≈1 万 req/s（p99 63 ms），天花板 15.9k req/s，15k 时 Broker 先流控；落库 123 / 264 / 478 单/s（三轮，中位 264）；half message 数 = 请求数；[基线](../../benchmark/v2/m0/baseline.md) | [0001](../adr/0001-m0-cleanup-and-baseline.md) |
 | M1 Java 21 / Boot 3 | ☑ | `v2.0-m1` | Java 21 + Boot 3.5.16 + ES 8.18.8；`mvn test` 311/311，隔离栈 IT 执行的 38 个全绿；同场对照 `v2.0-m0`：准入天花板 14.5k → 17.5k req/s，10k 档 p99 73.7 → 51.8 ms、CPU −20%，拐点仍 ≈1 万；落库中位 180.8 vs 155.6 单/s（区间重合，无差别）；[复测](../../benchmark/v2/m1/comparison.md) | [0002](../adr/0002-m1-java21-boot3.md) |
 | M2 订单域闭环 | ☑ | `v2.0-m2` | 5 类竞态 IT 全绿且两种交错都跑到（支付/关单 20 轮：支付胜 5、关单胜 15；核销/退款 10 轮：3/7）；定时消息 3 s 超时实测关单，HTTP 端到端 20 s 超时 23 s 内关单并可再买；`mvn test` 356/356，隔离栈 IT 72 个执行全绿，营销业务 IT 17/17；落库同场 A/B 中位 189.4 vs 177.5 单/s（区间重叠，无可测回退），M2 新增开销 < 2%，44% 仍在热点行 `UPDATE`；[复测](../../benchmark/v2/m2/comparison.md) | [0003](../adr/0003-m2-order-lifecycle.md) |
-| M3 准入漏斗 | ☐ | | | |
+| M3 准入漏斗 | ☑ | `v2.0-m3` | `mvn test` 401/401；同场对照 `v2.0-m2`：准入拐点（p99<100 ms 且丢弃<1%）5k → 20k req/s（p99 83 ms），天花板 13.2k → ≥26.2k req/s（30k 档未见顶，丢弃已由 k6 吃满 3.57 核造成）；10k 档 p99 128.2 → 32.8 ms、应用 CPU 3.04 → 0.60 核；half message = 请求数 → 0，普通消息 = 成功数；Broker 0.9 → 0.08 核、Redis 0.4 → 0.01 核；每档 accepted = stock，无超卖；落库中位 217.5 vs 154.9 单/s（区间重合，消费侧未改）；`kill -9` ×2 与「先杀 Broker 再杀应用」三方一致收敛（102.8 / 102.7 / 574.2 s，重投 4249 单全部落库）；[复测](../../benchmark/v2/m3/comparison.md) | [0004](../adr/0004-m3-admission-funnel.md) |
 | M4 批量消费 | ☐ | | | |
 | M5 Cluster 分桶与故障演练 | ☐ | | | |
 | M6 分库分表与读模型 | ☐ | | | |
