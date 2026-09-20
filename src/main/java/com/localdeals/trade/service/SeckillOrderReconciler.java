@@ -367,7 +367,6 @@ public class SeckillOrderReconciler {
         REDRIVE_FAILED("redrive_failed"),
         CLAIM_SKIPPED("claim_skipped"),
         SCHEDULER_BUSY("scheduler_busy"),
-        LOCK_BUSY("lock_busy"),
         SCAN_ERROR("scan_error"),
         DATABASE_ERROR("database_error"),
         STATE_ERROR("state_error"),

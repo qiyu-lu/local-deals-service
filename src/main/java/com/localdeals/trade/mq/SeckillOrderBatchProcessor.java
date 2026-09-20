@@ -98,7 +98,7 @@ public class SeckillOrderBatchProcessor {
                 case CLAIM_BUSY:
                     // The reconciler (or another consumer) holds the lease; come back later.
                     localDealsMetrics.recordMqConsumeOutcome(
-                            LocalDealsMetrics.MqConsumeOutcome.LOCK_BUSY);
+                            LocalDealsMetrics.MqConsumeOutcome.CLAIM_BUSY);
                     retryNeeded = true;
                     break;
                 case POISONED:
