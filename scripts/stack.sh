@@ -59,7 +59,8 @@ check_isolation() {
   [[ "$STACK_ID" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || fail "STACK_ID must match [a-z0-9-]{2,31}"
   local port forbidden
   local cluster_ports=()
-  [[ "$REDIS_MODE" != cluster ]] || mapfile -t cluster_ports < <(redis_cluster_ports)
+  # Both the client and the bus ports: another stack's bus range is just as fatal a collision.
+  [[ "$REDIS_MODE" != cluster ]] || mapfile -t cluster_ports < <(redis_cluster_ports; redis_cluster_bus_ports)
   for port in "$MYSQL_PORT" "$REDIS_PORT" "$NAMESRV_PORT" "$BROKER_PORT" "$ES_PORT" "$APP_PORT" \
       "$MANAGEMENT_PORT" ${cluster_ports[@]+"${cluster_ports[@]}"}; do
     for forbidden in "${FORBIDDEN_PORTS[@]}"; do
@@ -71,6 +72,11 @@ check_isolation() {
 redis_cluster_ports() { # 1..6
   local i
   for i in 1 2 3 4 5 6; do echo "${REDIS_CLUSTER_PORT_BASE}${i}"; done
+}
+
+redis_cluster_bus_ports() { # 1..6
+  local i
+  for i in 1 2 3 4 5 6; do echo "${REDIS_CLUSTER_BUS_BASE}${i}"; done
 }
 
 redis_cluster_nodes() {
@@ -96,6 +102,13 @@ cluster_node_ready() { cluster_cli "$1" PING | grep -qx PONG; }
 cluster_state_ok() { cluster_cli "${REDIS_CLUSTER_PORT_BASE}1" CLUSTER INFO | grep -q '^cluster_state:ok'; }
 
 start_redis_cluster() {
+  # The nodes share the host network, so a busy port is a hard failure the container reports
+  # only in its log. Say it here instead of timing out on a node that never started.
+  local port
+  for port in $(redis_cluster_ports) $(redis_cluster_bus_ports); do
+    ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN &&
+      fail "port ${port} is already in use; another cluster is running (REDIS_CLUSTER_PORT_BASE/REDIS_CLUSTER_BUS_BASE)"
+  done
   cluster_compose up -d
   local port
   for port in $(redis_cluster_ports); do
