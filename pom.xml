@@ -16,6 +16,7 @@
     <properties>
         <java.version>21</java.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <shardingsphere.version>5.5.2</shardingsphere.version>
     </properties>
 
     <dependencyManagement>
@@ -88,6 +89,20 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- M6: trade_order and its attached tables split over 2 databases x 4 tables. -->
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-jdbc</artifactId>
+            <version>${shardingsphere.version}</version>
+            <exclusions>
+                <!-- Boot 3.5 brings its own, and two SnakeYAML versions on one classpath is a
+                     NoSuchMethodError waiting for the first @ConfigurationProperties bind. -->
+                <exclusion>
+                    <groupId>org.yaml</groupId>
+                    <artifactId>snakeyaml</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>

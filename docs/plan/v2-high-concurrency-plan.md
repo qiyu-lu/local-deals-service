@@ -281,12 +281,39 @@ flowchart LR
 
 ### M6 订单分库分表与商户侧读模型（约 4 天）
 
+- **M6 开头先做的两件事（2026-09-20 决定）**：
+  1. 补上 M4 → M5 一路欠着的仪表：`local_deals.seckill.consume.batch.size{stage=delivered|persisted}`
+     与 `local_deals.seckill.consume.degraded{reason}`；`scripts/bench.sh` 每轮归档 actuator 快照，
+     `app.log` 改为轮转而不是覆盖；`summary.csv` 增加 `batch_mean` 列。**已完成。**
+  2. 仪表当场推翻了一个结论：**批大小实测约 1.03**（`batchSize=64`，`persisted == delivered`，
+     退化计数为 0）。也就是说「落库 ≈ 80 次提交/s × 批大小」里卡住的是**批大小**，不是提交速率。
+     成因：16 个消费线程的处理能力（约 1300 次/s）本来就跟得上到达速率（1000–2000/s），
+     队列里永远没有第二条消息在等，RocketMQ 自然只能一次交一条。同一次运行的 Redis 宕机轮里
+     积压形成了，批大小立刻到 max 32——机制被看到了两次。
+     因此**先扫消费参数（`pull-interval` / `pull-batch-size` / 线程数），再决定要不要拆 MySQL 热点行**。
+     **已完成**（`scripts/bench.sh m6-consume`，结果
+     [`benchmark/v2/m6/20260920-215408-m6-consume`](../../benchmark/v2/m6/20260920-215408-m6-consume)，
+     `status=DONE`，commit `f35f34d`，分析见 [M6 消费参数扫描](../../benchmark/v2/m6/consume-sweep.md)）：
+     - **拉取间隔确实填批**：`batch_mean` 2.16（0 ms）→ 3.90（10 ms）→ 6.53（20 ms）→ 12.68（50 ms）；
+       其中 0 ms → 10 ms 两行只差这一个旋钮（生效 pullBatchSize 都是 64）。
+     - **消费默认值改为 `256:4:50ms:256`**（`batch-size` / `thread-count` / `pull-interval` /
+       `pull-batch-size`）：2001.5 单/s、负载后 0.1 s 排空、批 12.68，而当时的默认值
+       `64:16:0:32` 在同一场次两轮分别是 944.6 / 11.6 s 与 432.9 / 30.7 s。整组一起改，
+       因为只有整组被测过；四项里只有拉取间隔有干净的单旋钮证据。
+     - **2001.5 单/s 是下限不是上限**：场景只发 2000 req/s，负载停止时已落完，本场景测不出
+       更高的数字。上限要靠更高的 `S_DRAIN_RATE` 去量，并入 M8 那一晚。
+     - **MySQL 热点行 `tb_seckill_voucher` 决定不拆**（ADR 0007 决策 4）。理由：那 80 次提交/s
+       是双稳态的慢档不是那一行的能力——同一轮里同一行被量到约 394 次/s 与约 73 次/s 两段；
+       新默认值下那一行每秒只被要求约 150 次提交，当前的约束是到达速率。回归条件：到达速率
+       远高于 2000/s、`drain_s_after_load` 重新大于 0、且 `persist_orders_per_s ÷ batch_mean`
+       不再随负载上升——挂在 M8 的高速率落库轮上。
+
 - ShardingSphere-JDBC：`trade_order` 及其附属表按 `user_id` 分片（本地 2 库 × 4 表）；`order_no` 含 user 基因，所以按 `order_no` 查与按 `user_id` 查都能单分片命中，避免广播。
 - 限购唯一键 `uk(user_id, voucher_id, active_flag)` 含分片键，分片内唯一即全局唯一——讲清为什么这成立。
-- 商户/平台侧“按店铺查订单”不走分片库：Canal → RocketMQ → ES 订单索引（复用现有 `EsSyncConsumer` 模式，并把 Canal 链路补成真正的端到端测试，解决旧文档里的 consumer-level 遗留）。
+- ~~商户/平台侧“按店铺查订单”不走分片库：Canal → RocketMQ → ES 订单索引~~ **2026-09-20 决定不做**（第 5 节裁剪顺序里的 M6 内部第一可砍项）。商户后台按 `merchant_id` 分页因此仍是跨 8 张表的广播归并——结果正确、不扩展，作为已知边界写进 ADR 0008 与 README。Canal → RocketMQ → ES 的端到端遗留因此也仍然存在。
 - 关单兜底扫描按分片并行；对账器读主库（Hint 强制）。
 - `tb_seckill_voucher` 等低频表设为单库表/广播表。
-- 验收：分片路由单测（按 order_no / user_id 均单分片）；跨分片限购并发 IT；商户订单列表端到端延迟实测。
+- 验收：分片路由单测（按 order_no / user_id 均单分片）✔；跨分片限购并发 IT ✔；~~商户订单列表端到端延迟实测~~（随 ES 读模型一并取消）。
 
 ### M6b 日终对账（约 2 天，可选）
 
@@ -305,6 +332,10 @@ flowchart LR
 
 - nginx + 2–3 实例 + Redis Cluster + RocketMQ 5.x + 分片库，全链路场景：10 万用户抢 1000 库存；其中 30% 不支付触发关单回补，被回补库存再次被抢完。最终核对：成功单数 = 库存、零超卖、零重复、预占/订单/库存三方对账一致。
 - 实例数 1→2→3 的吞吐扩展曲线（证明水平扩展，或找出不线性的原因）。
+- **M6 留下的一个问题**：M6 的冒烟里，同一轮 drain 的落库速率是基线 `v2.0-m5` 388.6 单/s、
+  分片构建 111.4 单/s（2000 单规模，只看方向）。M8 的 `scripts/bench.sh m6` 同场对照要回答：
+  分片是否真的让落库变慢了，慢多少，以及是不是「一个批次要写到最多 8 个物理节点」造成的。
+  若确认，候选改动是生产端按基因选队列、让一个消费批次尽量只落一个分片。
 - **M5 留下的一次演练**：Redis 主从切换的 RPO 实测为 0（转移期间 slot 不可写，买家收到 503 而不是假的成功），
   所以「Redis 超放 → MySQL `stock >= n` 兜底」这条防线**至今没有被真实触发过**。M8 要先用 `CLIENT PAUSE`
   或断开复制链路制造几秒复制空窗，再杀 master，把超放逼出来，量化丢失预占数与用户可见失败。
@@ -329,7 +360,7 @@ flowchart LR
 | M3 准入漏斗 | ☑ | `v2.0-m3` | `mvn test` 401/401；同场对照 `v2.0-m2`：准入拐点（p99<100 ms 且丢弃<1%）5k → 20k req/s（p99 83 ms），天花板 13.2k → ≥26.2k req/s（30k 档未见顶，丢弃已由 k6 吃满 3.57 核造成）；10k 档 p99 128.2 → 32.8 ms、应用 CPU 3.04 → 0.60 核；half message = 请求数 → 0，普通消息 = 成功数；Broker 0.9 → 0.08 核、Redis 0.4 → 0.01 核；每档 accepted = stock，无超卖；落库中位 217.5 vs 154.9 单/s（区间重合，消费侧未改）；`kill -9` ×2 与「先杀 Broker 再杀应用」三方一致收敛（102.8 / 102.7 / 574.2 s，重投 4249 单全部落库）；[复测](../../benchmark/v2/m3/comparison.md) | [0004](../adr/0004-m3-admission-funnel.md) |
 | M4 批量消费 | ☑ | `v2.0-m4` | `mvn test` 429/429；同场对照 `v2.0-m3`：落库中位 156.3 → 319.1 单/s（最好轮 945.2，参数扫描最优 `32:16` 1056.2，默认 `64:16` 975.3），负载后排空 105.6 → 47.7 s，阶梯 1000 单档 144.8–172.9 → 691.5–703.1 单/s；**待验证目标 ≥3000 单/s 未达成**——同一版本关掉批量（`1:16`）是 168.7 单/s，与基线同档，证明提速只来自批量，而一次提交的上限约 80 次/s，吞吐 ≈ 80 × 实际批大小；准入端 10k/20k 档无回退、half message 恒 0、`accepted = stock`；`kill -9` 收敛 102.8 → 44.7 s，先杀 Broker 572.1 s（对账器未批量化，与预期一致），两次演练预占=订单、Redis 库存=DB 库存、无残留 PROCESSING；[复测](../../benchmark/v2/m4/comparison.md) | [0005](../adr/0005-m4-batch-consumption.md) |
 | M5 Cluster 分桶与故障演练 | ☑ | `v2.0-m5` | `mvn test` 442/442，隔离栈全量 IT 在真实 3 主 3 从 Cluster 上 579 个全绿；同场对照 `v2.0-m4`（对照组单节点——旧 key 无 hash tag，在 Cluster 上跑不起来）：准入 10k 档 9944 → 9956 req/s、20k 档 19661 → 19333（−1.7%），两档 `accepted = stock`、无超卖、half message 恒 0，代价是 p99 +28~45 ms；**落库无可测变化且这次量不出来**——九轮平均由消费端的双稳态决定（A 段占比 0%→94% 对应 860→190 单/s），基线与 M5 混在同一条曲线，K=1/8/64 不单调；**Redis master 宕机 ×2：丢失预占 0、库存差 0、超卖 0**，转移 5.2/7.8 s、恢复 7.3/9.4 s、收敛 40.2/31.4 s，代价约 1.26 万个 503（42% 请求）；应用 `kill -9` 收敛 44.7 → 56.8 s；尾部浪费实测 0，故不做借库存；[复测](../../benchmark/v2/m5/comparison.md) | [0006](../adr/0006-m5-cluster-buckets.md) |
-| M6 分库分表与读模型 | ☐ | | | |
+| M6 分库分表与读模型 | ☑ | `v2.0-m6` | `mvn test` 473/473；隔离栈全量 IT 执行 94 个全绿（49 个环境门控跳过），营销业务 IT 17/17；`OrderShardRoutingIT` 用物理连接核对 8 个槽位，订单与审计行都只在 `slot = user_id % 8` 指定的表里，按 `order_no` 查与按 `user_id` 查同片；一批 8 个槽位的用户 ds_0/ds_1 各落 4 行、库存只扣一次。**吞吐数字留空**：长测并入 M8（`scripts/bench.sh m6`）。**ES 订单读模型不做**（2026-09-20 决定），商户后台按 `merchant_id` 分页仍是广播归并 | [0008](../adr/0008-m6-order-sharding.md) |
 | M6b 日终对账（可选） | ☐ | | | |
 | M7 多级缓存（可裁剪） | ☐ | | | |
 | M8 全链路压测与可观测 | ☐ | | | |
@@ -344,6 +375,32 @@ M2 执行时发现的计划偏差（详见 ADR 0003）：`seckill_compensate.lua
 M4 执行时发现的计划偏差（详见 ADR 0005）：rocketmq-spring 的监听容器逐条投递，只调 `consumeMessageBatchMaxSize` 不会产生批量，M4 自己持有 `DefaultMQPushConsumer`；「PROCESSING → PERSISTING(owner, lease)」没有新增状态值，而是在原状态 Hash 上加 `claimOwner` / `claimExpireAt`，对外状态仍是 `PROCESSING`，查询契约不变；`INSERT IGNORE` 不告诉你哪几行被忽略，所以扣库存的 n 不准时整组回滚、退化为逐条重放；验收目标 ≥3000 单/s 未达成（中位 319、最好 1056 单/s），瓶颈定位为「提交速率约 80 次/s × 实际批大小」：批量没让提交更快，只是让一次提交带走整批，而消费线程从 16 加到 32 反而更慢（更多线程抢同一行）。**抬高 80 次/s 这个上限正是 M5 的库存分桶**，M4 遗留两件事带进 M5：批大小的分布指标 + 退化计数（`LocalDealsMetrics` 现在没有，所以「批为什么攒不满」这次只有推断没有实测），以及让 `scripts/bench.sh` 每阶段归档 `app.log` 与一次 actuator 快照（`app.log` 每次 `app-start` 被覆盖）。
 
 M5 执行时发现的计划偏差（详见 ADR 0006）：hash tag 用 `{sk:b<n>}` 而**不带券号**（按 orderId 查状态时拿不到券号），代价是不同券的同号桶共用 slot；活动元数据按桶复制 K 份；消费批次的认领与收尾按桶分组、每桶一次往返，但**落库仍按券分组**；L1 售罄标记跑在鉴权之前、没有用户也就没有桶，改为「每个桶都标记」才本地拒绝；L2 的按券下限除以 K 分摊，所以 20k 档的 429 从 21 涨到 1480（设计内行为）；对照组必须跑单节点，因为 `v2.0-m4` 的 key 没有 tag、在 Cluster 上根本起不来，这是本次 A/B 唯一的结构性差异。**两处需要改正的预期**：(1) M4 复测与上一段里「抬高 80 次/s 这个上限正是 M5 的库存分桶」是错的——那 80 次/s 是 MySQL `tb_seckill_voucher` 同一行的代价，M5 分的是 Redis 的 key，`SeckillVoucherMapper` 至今一张券一行，**拆这一行目前不属于任何里程碑**；(2) 计划预期的「主从切换丢预占 → Redis 超放 → MySQL 条件更新兜底」**没有复现**，实测 RPO = 0，因为转移期间那些 slot 直接不可写（买家收到 503 而不是假的成功），丢失窗口只有不足 1 ms 的复制延迟；要逼出那条防线需要先制造复制空窗（`CLIENT PAUSE` / 断链）或把写速率提高一两个数量级，已记在 M8。M4 遗留的两件仪表工作（批大小分布 + 退化计数、`bench.sh` 按阶段归档 `app.log` 与 actuator 快照）**M5 仍未做**，落库吞吐的 A/B 结论在补上之前一律不可信。
+
+M6 执行时发现的计划偏差（详见 [ADR 0008](../adr/0008-m6-order-sharding.md)）：分片拓扑用 `slot = key % 8`、
+`ds = slot % 2`、`table = slot / 2`，靠「8 整除 1024」让 M3 的基因同时决定库和表，所以按 `user_id` 查和按
+`order_no` 查必然同片；`pay_no` / `refund_no` / `P<order_no>` 都继承基因，只有营销发放的 `G<grant_id>` 没有。
+**`tb_seckill_voucher` 明确不做广播表**——`stock` 是写热点，广播写要 2PC 才能自洽，把最后一道防线建在需要
+分布式事务的数字上是把问题变复杂，所以它是只在 ds_0 的单表。**七件计划没写、但实际挡路的事**：
+(1) ShardingSphere 5.5.2 的元数据仓库带进 `jackson-dataformat-xml`，Spring 就把 XML 转换器排在 JSON 前面，
+不带 Accept 头的请求开始返回 `<Result>…`；排除这个依赖会让启动直接失败（它运行时真的要 `XmlMapper`），
+最终在 `WebConfig` 里显式删掉声明 XML 媒体类型的转换器——**只有 4 个控制器测试抓到了它**。
+(2) 四类 SQL 被分片拒绝且理由都成立：`INSERT INTO 分片表 ... SELECT ... JOIN 单表`、多表 `DELETE ... JOIN`、
+`UPDATE ... LIMIT`（limit 会按节点生效，「最多过期 200 张」会变成 1600 张）、以及不带分片键的
+`SELECT ... FOR UPDATE`——最后一类**不报错**，只是在 8 张表上各锁一行，是最危险的一类。
+还有第五类：**单表与分片表的关联子查询**（`SELECT ... FROM tb_user u WHERE EXISTS (SELECT 1 FROM trade_order o WHERE o.user_id=u.id)`）
+会被路由到一个根本没有 `tb_user` 的库；`MarketingTagMemberMapper.countBusinessRelationship` 因此拆成了两问一合。
+(3) 一条 INSERT 同时写 `order_no` 和 `user_id` 时两列必须指向同一片，于是测试里伪造的 `BASE + n` 订单号被拒；
+这不是限制而是不变量生效——顺带使「订单号被别的用户占用」这类冲突**只可能来自同基因用户**，测试也照此改写。
+(4) 附属表的 `AUTO_INCREMENT` 会在每张物理表各自从头数，改用 ShardingSphere 的 `SNOWFLAKE`。
+(5) `uk(channel_txn_no)`、`uk(channel_refund_no)`、`uk(verify_code)` 收窄为片内唯一（前两者只会被同时带着
+`pay_no` / `refund_no` 的语句碰到，幂等不受影响）；而 `uk(user_id, voucher_id, active_flag)` 语义不变，
+因为一个用户的行永远在同一张表里——这正是分片键选 `user_id` 的原因。
+(6) 营销那四个刻意收窄的测试上下文自己 import 数据源自动配置，必须显式 import 分片配置，否则拿到的是
+ds_0 的裸连接。(7) 事务选 **LOCAL 而不是 XA**：一个消费批次确实横跨两个库（`OrderShardRoutingIT` 钉住了这点），
+崩在两次提交之间的后果是**有界的少卖而不是超卖**（未提交的那一半仍持有 Redis 预占，对账器重投 + `INSERT IGNORE`
+幂等，但库存会被多扣一次），**故障注入本身没有做，这一条是推理不是实测**。
+另：ds_1 的 URL 从 `spring.datasource.url` 推导（schema 加 `_1`），所以隔离栈与压测脚本的变量不用改，
+代价是 V16 搬迁 pre-shard 旧行时要跨 schema 读，**两个库必须是同一实例的两个 schema**。
 
 时间不够时的裁剪顺序：先砍 M7，再砍 M6b，再把 M6 缩为“只做分片、不做 ES 读模型”。**M2、M3、M4、M5 的故障演练不可砍**——它们分别对应面试里的“业务闭环”“高并发设计”“性能调优”“分布式故障”四类必问题。
 

@@ -21,6 +21,7 @@ import com.localdeals.marketing.service.MarketingAdminService;
 import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import com.localdeals.trade.testsupport.TradeFixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.apache.rocketmq.client.consumer.DefaultLitePullConsumer;
@@ -89,10 +90,7 @@ class MarketingAdminIsolationIT {
         Shop shopB = shop(merchantB.getId(), "M6A shop B");
         Voucher voucherA = voucher(shopA.getId(), "M6A voucher A");
         Voucher voucherB = voucher(shopB.getId(), "M6A voucher B");
-        jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
-                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
-                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
-                9_610_001L, 1L, voucherA.getId());
+        TradeFixture.insertPaidOrder(jdbcTemplate, 9_610_001L, 1L, voucherA.getId());
 
         AdminPrincipalHolder.save(merchantPrincipal(ownerA, merchantA.getId()));
         MarketingTag tagA = service.createTag(tagRequest(null, "VIP_A", "A VIP"));

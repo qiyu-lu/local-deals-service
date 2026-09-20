@@ -15,11 +15,10 @@ spring:
       maximum-pool-size: "${LOCAL_DEALS_DB_POOL_SIZE:24}"
       minimum-idle: "${LOCAL_DEALS_DB_POOL_MIN_IDLE:8}"
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 1
-    validate-on-migrate: true
+    # The order domain runs on two databases, and DDL sent through a routing data source would
+    # have to be told where it belongs. ShardingDataSourceConfiguration migrates each physical
+    # database directly instead, with the settings this block used to hold.
+    enabled: false
   data:
     redis:
       host: "${LOCAL_DEALS_REDIS_HOST:localhost}"
@@ -68,6 +67,14 @@ management:
 local-deals:
   # Shared business-day boundary for DAILY_SIGN_IN and TASK_REWARD keys.
   business-time-zone: "${LOCAL_DEALS_BUSINESS_TIME_ZONE:Asia/Shanghai}"
+  sharding:
+    # ds_1 defaults to the same server as spring.datasource.url with this appended to the schema,
+    # so a deployment gains a schema instead of a second set of connection settings. Set url to
+    # put it on another server — V16's carry-over of the pre-shard rows then has nothing to read.
+    second-schema-suffix: "${LOCAL_DEALS_SHARDING_SECOND_SCHEMA_SUFFIX:_1}"
+    url: "${LOCAL_DEALS_SHARDING_URL:}"
+    username: "${LOCAL_DEALS_SHARDING_USERNAME:}"
+    password: "${LOCAL_DEALS_SHARDING_PASSWORD:}"
   client-ip:
     # Proxy headers are trusted only when the direct peer is in this explicit list.
     trusted-proxies: "${LOCAL_DEALS_TRUSTED_PROXIES:${LOCAL_DEALS_ADMIN_TRUSTED_PROXIES:}}"
@@ -174,9 +181,19 @@ local-deals:
       ttl: "${LOCAL_DEALS_SECKILL_TOKEN_TTL:10m}"
     consume:
       enabled: "${LOCAL_DEALS_SECKILL_CONSUME_ENABLED:true}"
+      # These four are the M6 sweep's winning combination, shipped whole because that is how it
+      # was measured: 2001.5 orders/s, drained 0.1 s after the load, mean batch 12.68.
+      # See benchmark/v2/m6/consume-sweep.md.
       # One consume call takes this many messages: one INSERT and one stock UPDATE per voucher.
-      batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:64}"
-      thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:16}"
+      batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_BATCH_SIZE:256}"
+      thread-count: "${LOCAL_DEALS_SECKILL_CONSUME_THREADS:4}"
+      # Messages one pull brings back; a consume batch can never exceed it.
+      pull-batch-size: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_BATCH_SIZE:256}"
+      # How long a queue waits between pulls. Zero pulls continuously, and a consumer that keeps
+      # up with the arrivals then only ever finds one message waiting (measured: mean batch 2.16).
+      # At 2000 orders/s, 50 ms accumulates a mean batch of 12.68 instead, and costs each order
+      # up to one interval of extra latency before it lands.
+      pull-interval: "${LOCAL_DEALS_SECKILL_CONSUME_PULL_INTERVAL:50ms}"
       # How long a claimed batch is leased away from the reconciler.
       claim-lease: "${LOCAL_DEALS_SECKILL_CONSUME_CLAIM_LEASE:30s}"
     funnel:

@@ -7,6 +7,7 @@ import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.mapper.OrderStateLogMapper;
 import com.localdeals.trade.mapper.SeckillVoucherMapper;
 import com.localdeals.trade.mapper.TradeOrderMapper;
+import com.localdeals.trade.mapper.VoucherMapper;
 import com.localdeals.trade.mq.SeckillOrderMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,15 +36,18 @@ public class SeckillOrderBatchPersister {
     private final TradeOrderMapper tradeOrderMapper;
     private final SeckillVoucherMapper seckillVoucherMapper;
     private final OrderStateLogMapper stateLogMapper;
+    private final VoucherMapper voucherMapper;
     private final OrderProperties orderProperties;
 
     public SeckillOrderBatchPersister(TradeOrderMapper tradeOrderMapper,
                                       SeckillVoucherMapper seckillVoucherMapper,
                                       OrderStateLogMapper stateLogMapper,
+                                      VoucherMapper voucherMapper,
                                       OrderProperties orderProperties) {
         this.tradeOrderMapper = tradeOrderMapper;
         this.seckillVoucherMapper = seckillVoucherMapper;
         this.stateLogMapper = stateLogMapper;
+        this.voucherMapper = voucherMapper;
         this.orderProperties = orderProperties;
     }
 
@@ -61,18 +65,25 @@ public class SeckillOrderBatchPersister {
             rows.add(new TradeOrderMapper.SeckillOrderRow(message.getOrderId(), message.getUserId()));
         }
 
-        int inserted = tradeOrderMapper.insertPendingBatchFromVoucher(
-                rows, voucherId, orderProperties.getPayTimeout().getSeconds());
+        // One read per voucher per batch: trade_order is sharded, tb_voucher is not, so the
+        // snapshot the rows carry cannot be joined inside the insert any more.
+        VoucherMapper.VoucherSnapshot voucher = voucherMapper.selectSnapshot(voucherId);
+        if (voucher == null) {
+            throw BatchPersistDegradedException.insertSkipped(
+                    "Voucher or its shop is missing. voucherId=" + voucherId);
+        }
+        int inserted = tradeOrderMapper.insertPendingBatch(
+                rows, voucher, orderProperties.getPayTimeout().getSeconds());
         if (inserted != messages.size()) {
             // Either a duplicate was ignored or the voucher/shop rows are gone. Both need the
             // per-message classification; decrementing stock by the wrong n must never happen.
-            throw new BatchPersistDegradedException(
+            throw BatchPersistDegradedException.insertSkipped(
                     "Batch insert covered " + inserted + " of " + messages.size() +
                             " orders. voucherId=" + voucherId);
         }
 
         if (seckillVoucherMapper.decrementStock(voucherId, messages.size()) != 1) {
-            throw new BatchPersistDegradedException(
+            throw BatchPersistDegradedException.stockShort(
                     "DB stock cannot cover the batch. voucherId=" + voucherId +
                             " orders=" + messages.size());
         }

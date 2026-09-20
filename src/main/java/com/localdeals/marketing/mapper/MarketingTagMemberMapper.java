@@ -11,13 +11,27 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public interface MarketingTagMemberMapper extends BaseMapper<MarketingTagMember> {
-    @Select("SELECT COUNT(*) FROM tb_user u WHERE u.id = #{userId} AND (" +
-            "EXISTS (SELECT 1 FROM trade_order o " +
-            "WHERE o.user_id = u.id AND o.merchant_id = #{merchantId}) OR " +
-            "EXISTS (SELECT 1 FROM tb_voucher_grant g " +
-            "WHERE g.user_id = u.id AND g.merchant_id = #{merchantId}))")
-    int countBusinessRelationship(@Param("merchantId") Long merchantId,
+    /**
+     * Half of "does this user have any business with this merchant": a real user who has been
+     * granted one of its vouchers. The other half is in {@link #countOrdersWithMerchant}.
+     *
+     * <p>They used to be one statement. trade_order is sharded and tb_user is not, so a
+     * correlated EXISTS over both gets routed to a database where tb_user does not exist —
+     * the two halves have to be asked separately and combined by the caller.</p>
+     */
+    @Select("SELECT COUNT(*) FROM tb_user u WHERE u.id = #{userId} AND EXISTS (" +
+            "SELECT 1 FROM tb_voucher_grant g WHERE g.user_id = u.id AND g.merchant_id = #{merchantId})")
+    int countGrantRelationship(@Param("merchantId") Long merchantId,
             @Param("userId") Long userId);
+
+    /** The other half: an order with this merchant. Routed by user_id to one shard. */
+    @Select("SELECT COUNT(*) FROM trade_order WHERE user_id = #{userId} AND merchant_id = #{merchantId}")
+    int countOrdersWithMerchant(@Param("merchantId") Long merchantId,
+            @Param("userId") Long userId);
+
+    /** An order alone no longer proves the user row exists, so it is asked for separately. */
+    @Select("SELECT COUNT(*) FROM tb_user WHERE id = #{userId}")
+    int countUser(@Param("userId") Long userId);
 
     @Select("SELECT m.* FROM tb_marketing_tag_member m " +
             "JOIN tb_marketing_tag t ON t.id = m.tag_id AND t.merchant_id = m.merchant_id " +

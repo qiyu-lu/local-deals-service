@@ -32,6 +32,10 @@ def env(name):
     return value
 
 
+def schema_of(url):
+    return url.split('//', 1)[1].split('?', 1)[0].split('/', 1)[1]
+
+
 def mysql(sql):
     url = env('LOCAL_DEALS_DATASOURCE_URL')  # jdbc:mysql://127.0.0.1:23306/local_deals?...
     host_port, schema = url.split('//', 1)[1].split('?', 1)[0].split('/', 1)
@@ -189,7 +193,23 @@ def voucher(stock):
 def orders(voucher_id):
     # ORDERS_TABLE=tb_voucher_order measures a build from before M2 (e.g. the v2.0-m1 jar).
     table = os.environ.get('ORDERS_TABLE', 'trade_order')
-    print(mysql(f"SELECT COUNT(*) FROM {table} WHERE voucher_id = {int(voucher_id)};").strip())
+    voucher_id = int(voucher_id)
+    schema = schema_of(env('LOCAL_DEALS_DATASOURCE_URL'))
+    # From M6 the orders live in <table>_0..3 in this build's schema and the same in <schema>_1,
+    # and this counts them with a plain mysql client that knows nothing about the routing layer.
+    # A build from before M6 still has the one logical table. Ask the server which it is instead
+    # of configuring it per build, so the same command measures both sides of an A/B.
+    names = [line for line in mysql(
+        "SELECT CONCAT('`', table_schema, '`.`', table_name, '`') FROM information_schema.tables "
+        f"WHERE table_schema IN ('{schema}', '{schema}_1') "
+        f"AND (table_name = '{table}' OR table_name REGEXP '^{table}_[0-9]+$');").split()
+        if line]
+    if not names:
+        sys.exit(f"no table named {table} (or {table}_N) in {schema} or {schema}_1")
+    union = " UNION ALL ".join(
+        f"SELECT COUNT(*) AS c FROM {name} WHERE voucher_id = {voucher_id}" for name in names)
+    # COALESCE: SUM over no matching rows is NULL, and the caller wants a number.
+    print(mysql(f"SELECT COALESCE(SUM(c), 0) FROM ({union}) counted;").strip())
 
 
 if __name__ == '__main__':

@@ -66,8 +66,9 @@ public class SeckillOrderBatchConsumer {
                         : ConsumeConcurrentlyStatus.RECONSUME_LATER);
         pushConsumer.start();
         this.consumer = pushConsumer;
-        log.info("Seckill batch consumer started. topic={} batchSize={} threads={}",
-                seckillProperties.getTopic(), consume.getBatchSize(), consume.getThreadCount());
+        log.info("Seckill batch consumer started. topic={} batchSize={} threads={} pullBatch={} pullInterval={}ms",
+                seckillProperties.getTopic(), consume.getBatchSize(), consume.getThreadCount(),
+                consume.getPullBatchSize(), consume.getPullInterval().toMillis());
     }
 
     /** Visible for testing: everything about the push consumer except the broker connection. */
@@ -80,7 +81,11 @@ public class SeckillOrderBatchConsumer {
         pushConsumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         pushConsumer.setConsumeMessageBatchMaxSize(consume.getBatchSize());
         // Without a pull batch at least as large, the consume batch can never be filled.
-        pushConsumer.setPullBatchSize(Math.max(32, consume.getBatchSize()));
+        pushConsumer.setPullBatchSize(Math.max(consume.getPullBatchSize(), consume.getBatchSize()));
+        // Zero keeps the M4 behaviour: pull as fast as the queue allows. The M5 smoke showed
+        // what that costs when the consumer keeps up — a mean batch of 1.03 against a maximum
+        // of 64 — so this is the knob a throughput sweep turns.
+        pushConsumer.setPullInterval(consume.getPullInterval().toMillis());
         pushConsumer.setConsumeThreadMin(consume.getThreadCount());
         pushConsumer.setConsumeThreadMax(consume.getThreadCount());
     }

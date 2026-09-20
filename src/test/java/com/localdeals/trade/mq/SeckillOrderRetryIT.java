@@ -113,7 +113,7 @@ class SeckillOrderRetryIT {
     void permanentFailure_isNotRedelivered() {
         // The slice degrades, the single-message path runs and swallows StockExhausted (ACK)
         // → the message must NOT be retried.
-        doThrow(new BatchPersistDegradedException("stock guard no longer holds"))
+        doThrow(BatchPersistDegradedException.stockShort("stock guard no longer holds"))
                 .when(seckillOrderBatchPersister).persistGroup(
                         org.mockito.ArgumentMatchers.eq(PERMANENT_VOUCHER_ID), any());
         doThrow(new StockExhaustedException("DB stock exhausted"))

@@ -21,6 +21,7 @@ import com.localdeals.marketing.service.VoucherGrantService;
 import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import com.localdeals.trade.testsupport.TradeFixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -384,10 +385,7 @@ class M6cBatchBusinessIT {
 
     private void addMembers(MarketingTag tag, List<Long> users) {
         for (Long user : users) {
-            jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
-                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
-                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
-                    ORDER_ID.incrementAndGet(), user, VOUCHER_ID);
+            TradeFixture.insertPaidOrder(jdbcTemplate, ORDER_ID.incrementAndGet(), user, VOUCHER_ID);
             marketingAdminService.addMember(tag.getId(), user, new MarketingTagMemberRequest());
         }
     }
@@ -542,8 +540,12 @@ class M6cBatchBusinessIT {
                 "WHERE t.code LIKE ?", "M6C_%");
         jdbcTemplate.update("DELETE FROM tb_voucher_campaign WHERE name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_marketing_tag WHERE code LIKE ?", "M6C_%");
-        jdbcTemplate.update("DELETE o FROM trade_order o JOIN tb_user u ON u.id=o.user_id " +
-                "WHERE u.nick_name LIKE ?", FIXTURE_PREFIX + "%");
+        // trade_order is sharded: a DELETE joining it to tb_user spans databases, which is not a
+        // statement any more. Find the users first, then delete by the key that routes.
+        for (Long userId : jdbcTemplate.queryForList(
+                "SELECT id FROM tb_user WHERE nick_name LIKE ?", Long.class, FIXTURE_PREFIX + "%")) {
+            jdbcTemplate.update("DELETE FROM trade_order WHERE user_id = ?", userId);
+        }
         jdbcTemplate.update("DELETE FROM tb_user WHERE nick_name LIKE ?", FIXTURE_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_admin_account WHERE username LIKE ?", ACCOUNT_PREFIX + "%");
         jdbcTemplate.update("DELETE FROM tb_merchant WHERE code LIKE ?", FIXTURE_PREFIX + "%");

@@ -12,6 +12,7 @@ import com.localdeals.trade.exception.StockExhaustedException;
 import com.localdeals.trade.config.OrderProperties;
 import com.localdeals.trade.entity.TradeOrder;
 import com.localdeals.trade.mapper.TradeOrderMapper;
+import com.localdeals.trade.mapper.VoucherMapper;
 import com.localdeals.trade.mq.SeckillOrderMessage;
 import com.localdeals.trade.mq.SeckillOrderProducer;
 import com.localdeals.trade.service.ISeckillVoucherService;
@@ -89,6 +90,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
 
     @Resource
     private OrderProperties orderProperties;
+
+    @Resource
+    private VoucherMapper voucherMapper;
 
     @Resource
     private MeterRegistry meterRegistry;
@@ -385,8 +389,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<TradeOrderMapper, Trade
         long orderNo = message.getOrderId();
         long userId = message.getUserId();
         long voucherId = message.getVoucherId();
+        // trade_order is sharded and tb_voucher is not, so the price/shop/merchant snapshot is
+        // read here rather than joined inside the insert.
+        VoucherMapper.VoucherSnapshot voucher = voucherMapper.selectSnapshot(voucherId);
+        if (voucher == null) {
+            throw new IllegalStateException("Voucher or its shop is missing. voucherId=" + voucherId);
+        }
         try {
-            if (getBaseMapper().insertPendingFromVoucher(orderNo, userId, voucherId,
+            if (getBaseMapper().insertPending(orderNo, userId, voucher,
                     orderProperties.getPayTimeout().getSeconds()) != 1) {
                 throw new IllegalStateException("Voucher or its shop is missing. voucherId=" + voucherId);
             }

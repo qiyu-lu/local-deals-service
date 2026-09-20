@@ -68,17 +68,17 @@ class CouponVerifyIT {
 
     @Test
     void aPaidOrderHasExactlyOnePurchaseCouponValidForTheVouchersDays() {
-        UserCoupon coupon = paidOrderCoupon(BASE + 1);
-        UserCoupon again = tx.execute(status -> issuer.issueForOrder(orderMapper.selectById(BASE + 1)));
+        UserCoupon coupon = paidOrderCoupon(order(1));
+        UserCoupon again = tx.execute(status -> issuer.issueForOrder(orderMapper.selectById(order(1))));
 
         assertThat(again.getVerifyCode()).isEqualTo(coupon.getVerifyCode());
-        assertThat(coupon.getCouponNo()).isEqualTo("P" + (BASE + 1));
+        assertThat(coupon.getCouponNo()).isEqualTo("P" + (order(1)));
         assertThat(coupon.getMerchantId()).isEqualTo(fixture.merchantId);
         assertThat(coupon.getShopId()).isEqualTo(fixture.shopId);
         assertThat(coupon.getStatus().name()).isEqualTo("AVAILABLE");
         assertThat(validDays(coupon.getCouponNo())).isEqualTo(7);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM user_coupon WHERE source_ref = ?", Integer.class,
-                Long.toString(BASE + 1))).isEqualTo(1);
+                Long.toString(order(1)))).isEqualTo(1);
     }
 
     @Test
@@ -99,20 +99,20 @@ class CouponVerifyIT {
 
     @Test
     void verifyingConsumesTheCouponAndMovesThePurchaseOrderToUsed() {
-        UserCoupon coupon = paidOrderCoupon(BASE + 2);
+        UserCoupon coupon = paidOrderCoupon(order(2));
 
         UserCoupon used = couponService.verify(coupon.getVerifyCode(), merchant(fixture.merchantId));
 
         assertThat(used.getStatus().name()).isEqualTo("USED");
         assertThat(used.getVerifiedBy()).isEqualTo(BASE + 900);
-        assertThat(fixture.orderStatus(BASE + 2)).isEqualTo("USED");
+        assertThat(fixture.orderStatus(order(2))).isEqualTo("USED");
         assertRejected(() -> couponService.verify(coupon.getVerifyCode(), merchant(fixture.merchantId)),
                 ApiErrorCodes.COUPON_ALREADY_USED);
     }
 
     @Test
     void concurrentVerificationsOfOneCodeLetExactlyOneWin() throws Exception {
-        UserCoupon coupon = paidOrderCoupon(BASE + 3);
+        UserCoupon coupon = paidOrderCoupon(order(3));
         ExecutorService pool = Executors.newFixedThreadPool(10);
         CountDownLatch start = new CountDownLatch(1);
         List<Future<Boolean>> results = new ArrayList<>();
@@ -135,7 +135,7 @@ class CouponVerifyIT {
             }
             assertThat(winners).isEqualTo(1);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM order_state_log WHERE order_no = ? AND event = 'VERIFY'",
-                    Integer.class, BASE + 3)).isEqualTo(1);
+                    Integer.class, order(3))).isEqualTo(1);
         } finally {
             pool.shutdownNow();
         }
@@ -143,23 +143,23 @@ class CouponVerifyIT {
 
     @Test
     void anotherMerchantsCodeLooksExactlyLikeAnUnknownCode() {
-        UserCoupon coupon = paidOrderCoupon(BASE + 4);
+        UserCoupon coupon = paidOrderCoupon(order(4));
 
         assertRejected(() -> couponService.verify(coupon.getVerifyCode(), merchant(fixture.merchantId + 1)),
                 ApiErrorCodes.COUPON_INVALID);
         assertRejected(() -> couponService.verify("0000000000000000", merchant(fixture.merchantId)),
                 ApiErrorCodes.COUPON_INVALID);
-        assertThat(fixture.orderStatus(BASE + 4)).isEqualTo("PAID");
+        assertThat(fixture.orderStatus(order(4))).isEqualTo("PAID");
     }
 
     @Test
     void anExpiredCouponIsRejectedAndTheExpiryJobMarksIt() {
-        UserCoupon coupon = paidOrderCoupon(BASE + 5);
+        UserCoupon coupon = paidOrderCoupon(order(5));
         jdbc.update("UPDATE user_coupon SET valid_to = NOW(3) - INTERVAL 1 SECOND WHERE id = ?", coupon.getId());
 
         assertRejected(() -> couponService.verify(coupon.getVerifyCode(), merchant(fixture.merchantId)),
                 ApiErrorCodes.COUPON_EXPIRED);
-        assertThat(fixture.orderStatus(BASE + 5)).isEqualTo("PAID");
+        assertThat(fixture.orderStatus(order(5))).isEqualTo("PAID");
 
         assertThat(couponService.expireDue(1_000)).isGreaterThanOrEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT status FROM user_coupon WHERE id = ?", String.class, coupon.getId()))
@@ -168,9 +168,14 @@ class CouponVerifyIT {
 
     @Test
     void theWalletListsTheUsersCoupons() {
-        paidOrderCoupon(BASE + 6);
+        paidOrderCoupon(order(6));
 
-        assertThat(couponService.listMine(USER)).extracting(UserCoupon::getCouponNo).contains("P" + (BASE + 6));
+        assertThat(couponService.listMine(USER)).extracting(UserCoupon::getCouponNo).contains("P" + (order(6)));
+    }
+
+    /** A routable order number of USER; see TradeFixture.orderNo. */
+    private static long order(long seed) {
+        return TradeFixture.orderNo(BASE + seed, USER);
     }
 
     private UserCoupon paidOrderCoupon(long orderNo) {

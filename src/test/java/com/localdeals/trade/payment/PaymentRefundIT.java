@@ -172,7 +172,7 @@ class PaymentRefundIT {
         int closeWins = 0;
         for (int i = 0; i < 20; i++) {
             long orderNo = order(100 + i);
-            String payNo = paymentService.prepay(USER + 100 + i, orderNo).getPayNo();
+            String payNo = paymentService.prepay(buyer(100 + i), orderNo).getPayNo();
             fixture.expire(orderNo);
             PaymentNotification notification = paid(payNo, "TXN-" + orderNo);
             int stockBefore = fixture.dbStock();
@@ -247,14 +247,14 @@ class PaymentRefundIT {
         int verifyWins = 0;
         for (int i = 0; i < 10; i++) {
             long orderNo = paidOrder(200 + i);
-            long buyer = USER + 200 + i;
+            long buyerId = buyer(200 + i);
             String code = couponCode(orderNo);
 
             long verifyDelay = i >= 7 ? HEAD_START_MS : 0;
             long refundDelay = i >= 4 && i < 7 ? HEAD_START_MS : 0;
             List<Object> results = concurrently(2, List.of(
                     () -> after(verifyDelay, () -> attempt(() -> couponService.verify(code, merchant()))),
-                    () -> after(refundDelay, () -> attempt(() -> refundService.apply(buyer, orderNo)))));
+                    () -> after(refundDelay, () -> attempt(() -> refundService.apply(buyerId, orderNo)))));
 
             String status = fixture.orderStatus(orderNo);
             if ("USED".equals(status)) {
@@ -285,8 +285,9 @@ class PaymentRefundIT {
         assertThat(fixture.orderStatus(orderNo)).isEqualTo("REFUNDED");
         assertThat(couponStatus(orderNo)).isEqualTo("REFUNDED");
         assertThat(fixture.dbStock()).isEqualTo(stockAfterPurchase + 1);
-        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, USER, BASE + 9));
-        assertThat(fixture.orderStatus(BASE + 9)).isEqualTo("PENDING_PAY");
+        long again = TradeFixture.orderNo(BASE + 9, USER);
+        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, USER, again));
+        assertThat(fixture.orderStatus(again)).isEqualTo("PENDING_PAY");
     }
 
     @Test
@@ -301,15 +302,21 @@ class PaymentRefundIT {
         assertThat(count("SELECT request_attempts FROM refund_record WHERE refund_no = ?", refundNo)).isEqualTo(2);
     }
 
+    /** Rounds numbered 100 and up buy as their own user, so each gets its own order. */
+    private static long buyer(int offset) {
+        return USER + (offset >= 100 ? offset : 0);
+    }
+
     private long order(int offset) {
-        long orderNo = BASE + offset;
-        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, USER + (offset >= 100 ? offset : 0), orderNo));
+        long userId = buyer(offset);
+        long orderNo = TradeFixture.orderNo(BASE + offset, userId);
+        orderService.createPendingOrder(new SeckillOrderMessage(fixture.voucherId, userId, orderNo));
         return orderNo;
     }
 
     private long paidOrder(int offset) {
         long orderNo = order(offset);
-        long userId = USER + (offset >= 100 ? offset : 0);
+        long userId = buyer(offset);
         String payNo = paymentService.prepay(userId, orderNo).getPayNo();
         assertThat(callbackService.onPaid(paid(payNo, "TXN-" + orderNo))).isEqualTo(PaidOutcome.PAID);
         return orderNo;

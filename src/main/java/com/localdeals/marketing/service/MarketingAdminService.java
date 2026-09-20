@@ -93,7 +93,7 @@ public class MarketingAdminService {
         if (request.getExpireTime() != null && !request.getExpireTime().isAfter(LocalDateTime.now())) {
             throw new IllegalArgumentException("成员过期时间必须晚于当前时间");
         }
-        if (memberMapper.countBusinessRelationship(merchantId, userId) == 0) {
+        if (!hasBusinessRelationship(merchantId, userId)) {
             throw new ApiStatusException(HttpStatus.CONFLICT, "CAMPAIGN_INELIGIBLE",
                     "用户与当前商户尚无业务关系");
         }
@@ -292,4 +292,18 @@ public class MarketingAdminService {
     private ApiStatusException notFound() {
         return new ApiStatusException(HttpStatus.NOT_FOUND, "资源不存在");
     }
+
+    /**
+     * A real user who has either ordered from this merchant or been granted one of its vouchers.
+     * Two statements rather than one: trade_order is sharded and tb_user is not, so no single
+     * query can reach both (see MarketingTagMemberMapper).
+     */
+    private boolean hasBusinessRelationship(Long merchantId, Long userId) {
+        if (memberMapper.countGrantRelationship(merchantId, userId) > 0) {
+            return true;
+        }
+        return memberMapper.countOrdersWithMerchant(merchantId, userId) > 0
+                && memberMapper.countUser(userId) > 0;
+    }
+
 }

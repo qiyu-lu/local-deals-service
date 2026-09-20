@@ -49,3 +49,4 @@ build/
 /benchmark/**/raw/
 jmeter.log
 .superpowers/
+__pycache__/

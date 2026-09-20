@@ -4,7 +4,6 @@ import com.localdeals.merchant.dto.ShopDoc;
 import com.localdeals.merchant.entity.Shop;
 import com.localdeals.merchant.service.IShopService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
@@ -17,10 +16,14 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import java.util.List;
 
+/**
+ * Seeds shop_index once the schema exists. The dependency on Boot's flywayInitializer is gone
+ * with the bean: migrations now run while the sharded data source is being built, so anything
+ * that holds a data source — this one through IShopService — is already past them.
+ */
 @Slf4j
 @Component
 @Profile("!test")
-@DependsOn("flywayInitializer")
 public class ShopIndexInitializer {
 
     @Resource

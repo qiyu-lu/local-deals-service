@@ -17,6 +17,7 @@ import com.localdeals.marketing.service.VoucherCampaignUserService;
 import com.localdeals.merchant.utils.AdminPrincipalHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import com.localdeals.trade.testsupport.TradeFixture;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,10 +69,7 @@ class M6aBusinessFlowIT {
     void ownerToMemberToManualTagClaimFlowHasOneGrantAndOneCount() {
         Long memberUserId = selectUserWithoutOrder(-1L);
         Long ineligibleUserId = selectUserWithoutOrder(memberUserId);
-        jdbcTemplate.update("INSERT INTO trade_order(order_no,user_id,voucher_id,shop_id,merchant_id,amount,status,expire_at) " +
-                "SELECT ?,?,v.id,v.shop_id,s.merchant_id,v.pay_value,'PAID',NOW(3) " +
-                "FROM tb_voucher v JOIN tb_shop s ON s.id=v.shop_id WHERE v.id=?",
-                BUSINESS_ORDER_ID, memberUserId, VOUCHER_ID);
+        TradeFixture.insertPaidOrder(jdbcTemplate, BUSINESS_ORDER_ID, memberUserId, VOUCHER_ID);
 
         Long operatorId = createAccount();
         AdminPrincipalHolder.save(merchantPrincipal(operatorId));
@@ -178,10 +176,19 @@ class M6aBusinessFlowIT {
     }
 
     private Long selectUserWithoutOrder(Long excludedUserId) {
-        return jdbcTemplate.queryForObject("SELECT u.id FROM tb_user u " +
-                        "WHERE u.id <> ? AND NOT EXISTS (SELECT 1 FROM trade_order o " +
-                        "WHERE o.user_id=u.id AND o.voucher_id=?) ORDER BY u.id LIMIT 1",
-                Long.class, excludedUserId, VOUCHER_ID);
+        // tb_user is a single table and trade_order is sharded, so one statement cannot span
+        // both: the correlated NOT EXISTS gets routed to a database where tb_user does not
+        // exist. Two steps instead, each of which routes.
+        for (Long candidate : jdbcTemplate.queryForList(
+                "SELECT id FROM tb_user WHERE id <> ? ORDER BY id LIMIT 200", Long.class, excludedUserId)) {
+            Integer orders = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM trade_order WHERE user_id = ? AND voucher_id = ?",
+                    Integer.class, candidate, VOUCHER_ID);
+            if (orders != null && orders == 0) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("no user without an order for voucher " + VOUCHER_ID);
     }
 
     private VoucherCampaignUserView viewFor(List<VoucherCampaignUserView> views, Long campaignId) {

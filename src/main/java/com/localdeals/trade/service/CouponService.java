@@ -47,19 +47,27 @@ public class CouponService {
         long adminId = principal.getAccountId();
         if (coupon.getSource() == CouponSource.PURCHASE &&
                 !stateMachine.fire(Long.parseLong(coupon.getSourceRef()), OrderEvent.VERIFY, "ADMIN:" + adminId)) {
-            throw rejection(couponMapper.selectForUpdate(coupon.getId()));
+            throw rejection(couponMapper.selectForUpdate(coupon.getId(), coupon.getUserId()));
         }
-        if (couponMapper.markUsed(coupon.getId(), adminId) != 1) {
+        if (couponMapper.markUsed(coupon.getId(), coupon.getUserId(), adminId) != 1) {
             // Rolls back the order transition above.
-            throw rejection(couponMapper.selectForUpdate(coupon.getId()));
+            throw rejection(couponMapper.selectForUpdate(coupon.getId(), coupon.getUserId()));
         }
-        return couponMapper.selectById(coupon.getId());
+        return couponMapper.selectOwned(coupon.getId(), coupon.getUserId());
     }
 
-    /** Marks up to {@code limit} lapsed AVAILABLE coupons EXPIRED; returns how many. */
+    /**
+     * Marks up to {@code limit} lapsed AVAILABLE coupons EXPIRED; returns how many.
+     * One statement per coupon rather than one bounded UPDATE: the bound cannot cross shards.
+     * Each is an idempotent CAS, so a sweep interrupted half way simply leaves work for the next.
+     */
     @Transactional
     public int expireDue(int limit) {
-        return couponMapper.expireDue(limit);
+        int expired = 0;
+        for (UserCouponMapper.CouponRef due : couponMapper.selectDue(limit)) {
+            expired += couponMapper.expire(due.id(), due.userId());
+        }
+        return expired;
     }
 
     public List<UserCoupon> listMine(long userId) {

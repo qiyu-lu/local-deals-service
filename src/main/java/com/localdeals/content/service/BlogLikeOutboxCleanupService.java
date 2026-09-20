@@ -11,10 +11,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class BlogLikeOutboxCleanupService {
 
+    /**
+     * DATE_SUB rather than {@code TIMESTAMPADD(SECOND, -?, ...)}: every statement now goes
+     * through ShardingSphere's parser, single table or not, and it reads TIMESTAMPADD's unit
+     * argument as a column — "Unknown column 'SECOND' in 'where clause'", once per sweep.
+     */
     static final String DELETE_PROCESSED_SQL =
             "DELETE FROM tb_blog_like_outbox " +
                     "WHERE processed_time IS NOT NULL " +
-                    "AND processed_time < TIMESTAMPADD(SECOND, -?, CURRENT_TIMESTAMP(3)) " +
+                    "AND processed_time < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? SECOND) " +
                     "ORDER BY processed_time, id LIMIT ?";
 
     private final BlogLikeProperties properties;
