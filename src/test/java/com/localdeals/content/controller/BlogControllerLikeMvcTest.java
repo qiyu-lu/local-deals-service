@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.http.HttpStatus;
 
@@ -40,6 +41,9 @@ class BlogControllerLikeMvcTest {
         BlogController controller = new BlogController();
         ReflectionTestUtils.setField(controller, "blogService", blogService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                // The standalone builder picks converters off the classpath, where an XML codec
+                // now sits; production pins JSON in WebConfig, so pin the same thing here.
+                .setMessageConverters(new MappingJackson2HttpMessageConverter())
                 .setControllerAdvice(new WebExceptionAdvice())
                 .addInterceptors(new LoginInterceptor(
                         WebConfig.PUBLIC_GET_PATHS, WebConfig.PUBLIC_POST_PATHS))

@@ -10,6 +10,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -79,5 +81,29 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/admin/**")
                 .excludePathPatterns("/admin/auth/login")
                 .order(1);
+    }
+
+    /**
+     * This API answers JSON, and no dependency gets to change that by arriving on the classpath.
+     *
+     * <p>ShardingSphere's metadata repository needs jackson-dataformat-xml, and Spring builds an
+     * XML converter ahead of the JSON one whenever it sees XmlMapper. A request that sends no
+     * Accept header, or asks for {@code *\/*} as every browser does, then gets
+     * {@code <Result><success>true</success>...}. Dropping the dependency is not an option — the
+     * repository fails to start without it — so the converters go instead.</p>
+     */
+    @Override
+    public void extendMessageConverters(List<HttpMessageConverter<?>> converters) {
+        converters.removeIf(WebConfig::writesXml);
+    }
+
+    /**
+     * True only for a converter that names an XML type itself. Matching on {@code canWrite}
+     * instead would also take out the byte-array and string converters, which claim
+     * {@code *}{@code /*} and are needed for every non-JSON response the API still makes.
+     */
+    private static boolean writesXml(HttpMessageConverter<?> converter) {
+        return converter.getSupportedMediaTypes().stream()
+                .anyMatch(type -> "xml".equals(type.getSubtype()) || "xml".equals(type.getSubtypeSuffix()));
     }
 }

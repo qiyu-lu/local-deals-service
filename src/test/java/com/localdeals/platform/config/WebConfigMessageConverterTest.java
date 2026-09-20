@@ -1,5 +1,6 @@
 package com.localdeals.platform.config;
 
+import com.localdeals.platform.dto.Result;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.ByteArrayHttpMessageConverter;
@@ -15,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class WebConfigMessageConverterTest {
 
+    /** Probed with Result, not Object: Jackson reports it cannot serialize a bare Object. */
     @Test
     void theApiAnswersJsonWhateverADriverPutsOnTheClasspath() {
         List<HttpMessageConverter<?>> converters = new ArrayList<>(List.of(
@@ -25,11 +27,15 @@ class WebConfigMessageConverterTest {
 
         new WebConfig().extendMessageConverters(converters);
 
+
         assertThat(converters)
                 .as("nothing left that would answer a */* request in XML")
-                .noneMatch(converter -> converter.canWrite(Object.class, MediaType.APPLICATION_XML));
+                .noneMatch(converter -> converter.canWrite(Result.class, MediaType.APPLICATION_XML));
         assertThat(converters)
                 .as("JSON is still there")
-                .anyMatch(converter -> converter.canWrite(Object.class, MediaType.APPLICATION_JSON));
+                .anyMatch(converter -> converter.canWrite(Result.class, MediaType.APPLICATION_JSON));
+        assertThat(converters)
+                .as("and so is everything that only claimed */*")
+                .hasSize(3);
     }
 }
