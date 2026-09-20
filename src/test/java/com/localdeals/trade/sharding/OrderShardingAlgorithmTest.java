@@ -82,6 +82,31 @@ class OrderShardingAlgorithmTest {
         assertThat(targets).containsExactlyElementsOf(TABLES);
     }
 
+    /**
+     * Every column of one statement describes the same row, so a column that carries no slot
+     * only fails to narrow — it does not widen. A grant coupon is exactly this: its coupon_no
+     * has no gene, and the insert next to it names user_id.
+     */
+    @Test
+    void aColumnWithoutASlotDefersToOneThatHasIt() {
+        long userId = 5L;
+        Collection<String> byUserAlone = tables.doSharding(TABLES, values(Map.of("user_id", List.of(userId))));
+
+        Collection<String> withGrantCoupon = tables.doSharding(TABLES, values(Map.of(
+                "user_id", List.of(userId), "coupon_no", List.of("G91"))));
+
+        assertThat(withGrantCoupon).isEqualTo(byUserAlone).containsExactly("trade_order_2");
+    }
+
+    /** Two keys of one row that name different slots is a bug; the answer must not be one of them. */
+    @Test
+    void twoColumnsThatDisagreeBroadcastRatherThanPickASide() {
+        Collection<String> targets = tables.doSharding(TABLES, values(Map.of(
+                "user_id", List.of(5L), "order_no", List.of((1L << 60) | 2L))));
+
+        assertThat(targets).containsExactlyElementsOf(TABLES);
+    }
+
     @Test
     void aRangeBroadcastsBecauseASlotIsNotAnOrdering() {
         Range<Comparable<?>> span = Range.closed(cast(1L), cast(9L));
