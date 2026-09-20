@@ -360,7 +360,8 @@ load_scenario() {
       S_RATES=""; S_STEP_DURATION=30s; S_STEP_STOCK=1000
       # One reference round of v2.0-m5 as it stands, then the sweep.
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=20000; S_DRAIN_RATE=2000
-      S_BUCKETS=16
+      # The baseline is v2.0-m5: a cluster build with buckets, unlike every earlier baseline.
+      S_BUCKETS=16; S_BASELINE_BUCKETS=16
       # batch:threads:pullIntervalMs:pullBatchSize
       S_SWEEP="64:16:0:32 64:16:10:64 64:16:20:128 64:4:20:128 64:2:20:128 256:4:50:256"
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
@@ -371,7 +372,7 @@ load_scenario() {
       S_WARMUP_RATE=200; S_WARMUP_DURATION=5s
       S_RATES=""; S_STEP_DURATION=10s; S_STEP_STOCK=200
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
-      S_BUCKETS=8
+      S_BUCKETS=8; S_BASELINE_BUCKETS=8
       S_SWEEP="64:16:0:32 64:4:20:128"
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=0; S_REDIS_KILL_ROUNDS=0
       S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
@@ -535,8 +536,14 @@ build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CU
 # Which Redis a build talks to, as environment for the fixture, the drills and the CPU column.
 # A build from before M5 has untagged keys, so it can only run on the single node.
 build_redis_env() { # which
-  if [[ "$1" != baseline && -n "${S_BUCKETS:-}" ]]; then
-    echo "SECKILL_BUCKETS=${S_BUCKETS} BENCH_REDIS_CLUSTER=${STACK_REDIS_CLUSTER_NODES:-}"
+  local buckets=""
+  if [[ "$1" == baseline ]]; then
+    buckets="${S_BASELINE_BUCKETS:-}"
+  else
+    buckets="${S_BUCKETS:-}"
+  fi
+  if [[ -n "$buckets" ]]; then
+    echo "SECKILL_BUCKETS=${buckets} BENCH_REDIS_CLUSTER=${STACK_REDIS_CLUSTER_NODES:-}"
   else
     echo "SECKILL_BUCKETS=0 BENCH_REDIS_CLUSTER="
   fi
@@ -669,6 +676,7 @@ run_scenario() { # name
     S_KILL_AFTER S_EXTRA_ARGS S_USERS S_BASELINE_FLAVOUR STACK_NAME K6_IMAGE
   S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
   S_BUCKETS="${S_BUCKETS:-}"; export S_BUCKETS
+  S_BASELINE_BUCKETS="${S_BASELINE_BUCKETS:-}"; export S_BASELINE_BUCKETS
   S_BUCKET_SWEEP="${S_BUCKET_SWEEP:-}"; export S_BUCKET_SWEEP
   S_REDIS_KILL_ROUNDS="${S_REDIS_KILL_ROUNDS:-0}"; export S_REDIS_KILL_ROUNDS
   S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
@@ -685,15 +693,20 @@ run_scenario() { # name
   fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
   if [[ -n "${S_BUCKETS:-}" ]]; then
-    # The current build runs on the cluster with its buckets; the baseline predates both and
-    # stays on the single node. The stack environment was read before the mode was known, so
-    # read it again: it now also carries the cluster node list the current build needs.
+    # The current build runs on the cluster with its buckets. Whether the baseline joins it
+    # depends on the tag: v2.0-m4 and earlier have untagged keys and can only run on the single
+    # node, while a v2.0-m5 baseline needs the cluster and its buckets or it answers 503 to
+    # everything. S_BASELINE_BUCKETS says which of the two this scenario's baseline is. The stack
+    # environment was read before the mode was known, so read it again: it now also carries the
+    # cluster node list.
     export REDIS_MODE=cluster
     eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
     [[ -n "${STACK_REDIS_CLUSTER_NODES:-}" ]] || fail "cluster mode did not print node addresses"
-    ARGS_CURRENT="${ARGS_CURRENT} --local-deals.seckill.bucket.count=${S_BUCKETS}"
-    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.nodes=${STACK_REDIS_CLUSTER_NODES}"
-    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.max-redirects=5"
+    local cluster_args="--spring.data.redis.cluster.nodes=${STACK_REDIS_CLUSTER_NODES} --spring.data.redis.cluster.max-redirects=5"
+    ARGS_CURRENT="${ARGS_CURRENT} --local-deals.seckill.bucket.count=${S_BUCKETS} ${cluster_args}"
+    if [[ -n "${S_BASELINE_BUCKETS:-}" ]]; then
+      ARGS_BASELINE="${ARGS_BASELINE} --local-deals.seckill.bucket.count=${S_BASELINE_BUCKETS} ${cluster_args}"
+    fi
   fi
   BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
   # Take the scenario lock before anything that touches the shared stack, and arm the cleanup

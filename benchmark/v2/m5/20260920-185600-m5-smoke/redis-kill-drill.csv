@@ -1,0 +1,2 @@
+commit,voucher,stock,killed_node,reserved_at_kill,stock_at_kill,noticed_s,recovered_s,accepted,orders,reservations,redis_stock,db_stock,processing_left,lost_admissions,stock_gap,oversold,converge_s
+5de8b4d,21,3000,ld-m3bench-redis-c3,2846,134,7.3,7.8,2945,2945,2945,55,55,0,0,0,0,22.4

@@ -281,6 +281,18 @@ flowchart LR
 
 ### M6 订单分库分表与商户侧读模型（约 4 天）
 
+- **M6 开头先做的两件事（2026-09-20 决定）**：
+  1. 补上 M4 → M5 一路欠着的仪表：`local_deals.seckill.consume.batch.size{stage=delivered|persisted}`
+     与 `local_deals.seckill.consume.degraded{reason}`；`scripts/bench.sh` 每轮归档 actuator 快照，
+     `app.log` 改为轮转而不是覆盖；`summary.csv` 增加 `batch_mean` 列。**已完成。**
+  2. 仪表当场推翻了一个结论：**批大小实测约 1.03**（`batchSize=64`，`persisted == delivered`，
+     退化计数为 0）。也就是说「落库 ≈ 80 次提交/s × 批大小」里卡住的是**批大小**，不是提交速率。
+     成因：16 个消费线程的处理能力（约 1300 次/s）本来就跟得上到达速率（1000–2000/s），
+     队列里永远没有第二条消息在等，RocketMQ 自然只能一次交一条。同一次运行的 Redis 宕机轮里
+     积压形成了，批大小立刻到 max 32——机制被看到了两次。
+     因此**先扫消费参数（`pull-interval` / `pull-batch-size` / 线程数），再决定要不要拆 MySQL 热点行**：
+     拆行抬高的是提交速率，而提交速率目前不是约束项。扫描场景：`scripts/bench.sh m6-consume`。
+
 - ShardingSphere-JDBC：`trade_order` 及其附属表按 `user_id` 分片（本地 2 库 × 4 表）；`order_no` 含 user 基因，所以按 `order_no` 查与按 `user_id` 查都能单分片命中，避免广播。
 - 限购唯一键 `uk(user_id, voucher_id, active_flag)` 含分片键，分片内唯一即全局唯一——讲清为什么这成立。
 - 商户/平台侧“按店铺查订单”不走分片库：Canal → RocketMQ → ES 订单索引（复用现有 `EsSyncConsumer` 模式，并把 Canal 链路补成真正的端到端测试，解决旧文档里的 consumer-level 遗留）。
