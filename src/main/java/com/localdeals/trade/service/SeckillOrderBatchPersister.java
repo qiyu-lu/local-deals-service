@@ -66,13 +66,13 @@ public class SeckillOrderBatchPersister {
         if (inserted != messages.size()) {
             // Either a duplicate was ignored or the voucher/shop rows are gone. Both need the
             // per-message classification; decrementing stock by the wrong n must never happen.
-            throw new BatchPersistDegradedException(
+            throw BatchPersistDegradedException.insertSkipped(
                     "Batch insert covered " + inserted + " of " + messages.size() +
                             " orders. voucherId=" + voucherId);
         }
 
         if (seckillVoucherMapper.decrementStock(voucherId, messages.size()) != 1) {
-            throw new BatchPersistDegradedException(
+            throw BatchPersistDegradedException.stockShort(
                     "DB stock cannot cover the batch. voucherId=" + voucherId +
                             " orders=" + messages.size());
         }

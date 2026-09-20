@@ -4,6 +4,7 @@ import com.localdeals.content.service.BlogHotRankReadResult;
 import com.localdeals.content.service.BlogHotRankService;
 import com.localdeals.marketing.dto.VoucherGrantCommand;
 import io.micrometer.core.instrument.Counter;
+import com.localdeals.trade.exception.BatchPersistDegradedException;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -46,6 +47,8 @@ public class LocalDealsMetrics {
     public enum TrafficResult { ALLOWED, REJECTED, UNAVAILABLE }
     public enum TrafficReason { NONE, ACTIVITY, USER, IP, CONCURRENCY, REDIS, INTERRUPTED }
     public enum SeckillDbPersistResult { SUCCESS, FAILURE }
+    /** Where a batch was measured: as RocketMQ delivered it, and as one INSERT carried it. */
+    public enum SeckillBatchStage { DELIVERED, PERSISTED }
     public enum GrantSource { USER_CLAIM, ADMIN_GRANT, TASK_REWARD, BATCH_GRANT }
     public enum GrantResult {
         GRANTED, IDEMPOTENT, INELIGIBLE, QUOTA_EXHAUSTED, RULE_CHANGED,
@@ -92,6 +95,10 @@ public class LocalDealsMetrics {
             new EnumMap<>(MqConsumeOutcome.class);
     private final Map<SeckillDbPersistResult, Timer> seckillDbPersistDurations =
             new EnumMap<>(SeckillDbPersistResult.class);
+    private final Map<SeckillBatchStage, DistributionSummary> seckillBatchSizes =
+            new EnumMap<>(SeckillBatchStage.class);
+    private final Map<BatchPersistDegradedException.Reason, Counter> seckillBatchDegradations =
+            new EnumMap<>(BatchPersistDegradedException.Reason.class);
     private final Map<String, Counter> grantCommands = new HashMap<>();
     private final Timer grantDuration;
     private final Map<String, Counter> trafficDecisions = new HashMap<>();
@@ -257,6 +264,22 @@ public class LocalDealsMetrics {
                             .publishPercentileHistogram()
                             .register(registry));
         }
+        for (SeckillBatchStage stage : SeckillBatchStage.values()) {
+            seckillBatchSizes.put(stage,
+                    DistributionSummary.builder("local_deals.seckill.consume.batch.size")
+                            .description("Orders per seckill consume batch, as delivered and as persisted")
+                            .baseUnit("orders")
+                            .tag("stage", metricValue(stage))
+                            .publishPercentileHistogram()
+                            .register(registry));
+        }
+        for (BatchPersistDegradedException.Reason reason
+                : BatchPersistDegradedException.Reason.values()) {
+            seckillBatchDegradations.put(reason,
+                    counter(registry, "local_deals.seckill.consume.degraded",
+                            "Batch slices that fell back to single-message replay",
+                            "reason", metricValue(reason)));
+        }
         for (GrantSource source : GrantSource.values()) {
             for (GrantResult result : GrantResult.values()) {
                 grantCommands.put(key(source, result),
@@ -355,6 +378,29 @@ public class LocalDealsMetrics {
 
     public void recordSeckillDbPersist(SeckillDbPersistResult result, long nanos) {
         safeRecord(seckillDbPersistDurations.get(result), nanos);
+    }
+
+    /**
+     * How many orders a batch held. {@code DELIVERED} is what the broker handed the consumer,
+     * {@code PERSISTED} is what one INSERT plus one stock update actually carried — the gap
+     * between them is the whole story of why a batch run is fast or slow.
+     */
+    public void recordSeckillBatchSize(SeckillBatchStage stage, int orders) {
+        if (orders <= 0) {
+            return;
+        }
+        DistributionSummary summary = seckillBatchSizes.get(stage);
+        if (summary != null) {
+            try {
+                summary.record(orders);
+            } catch (RuntimeException ignored) {
+                // Metrics must not break a batch that is already committed.
+            }
+        }
+    }
+
+    public void recordSeckillBatchDegraded(BatchPersistDegradedException.Reason reason) {
+        safeIncrement(seckillBatchDegradations.get(reason));
     }
 
     public void recordGrant(VoucherGrantCommand command, GrantResult result) {

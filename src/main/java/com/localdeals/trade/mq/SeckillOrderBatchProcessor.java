@@ -54,6 +54,8 @@ public class SeckillOrderBatchProcessor {
         if (batch == null || batch.isEmpty()) {
             return true;
         }
+        localDealsMetrics.recordSeckillBatchSize(
+                LocalDealsMetrics.SeckillBatchStage.DELIVERED, batch.size());
         List<SeckillOrderMessage> wellFormed = new ArrayList<>(batch.size());
         boolean retryNeeded = false;
         for (SeckillOrderMessage message : batch) {
@@ -139,10 +141,15 @@ public class SeckillOrderBatchProcessor {
             persisted.addAll(group);
             localDealsMetrics.recordSeckillDbPersist(
                     LocalDealsMetrics.SeckillDbPersistResult.SUCCESS, System.nanoTime() - startedAt);
+            // Only a group that made it through one INSERT and one stock update counts as a
+            // persisted batch; a degraded one is replayed message by message below.
+            localDealsMetrics.recordSeckillBatchSize(
+                    LocalDealsMetrics.SeckillBatchStage.PERSISTED, group.size());
             return true;
         } catch (BatchPersistDegradedException degraded) {
             localDealsMetrics.recordSeckillDbPersist(
                     LocalDealsMetrics.SeckillDbPersistResult.FAILURE, System.nanoTime() - startedAt);
+            localDealsMetrics.recordSeckillBatchDegraded(degraded.getReason());
             log.info("Seckill batch degraded to single-message handling. voucherId={} size={} reason={}",
                     voucherId, group.size(), degraded.getMessage());
             return persistOneByOne(group, persisted);
