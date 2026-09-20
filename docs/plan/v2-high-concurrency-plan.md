@@ -290,8 +290,23 @@ flowchart LR
      成因：16 个消费线程的处理能力（约 1300 次/s）本来就跟得上到达速率（1000–2000/s），
      队列里永远没有第二条消息在等，RocketMQ 自然只能一次交一条。同一次运行的 Redis 宕机轮里
      积压形成了，批大小立刻到 max 32——机制被看到了两次。
-     因此**先扫消费参数（`pull-interval` / `pull-batch-size` / 线程数），再决定要不要拆 MySQL 热点行**：
-     拆行抬高的是提交速率，而提交速率目前不是约束项。扫描场景：`scripts/bench.sh m6-consume`。
+     因此**先扫消费参数（`pull-interval` / `pull-batch-size` / 线程数），再决定要不要拆 MySQL 热点行**。
+     **已完成**（`scripts/bench.sh m6-consume`，结果
+     [`benchmark/v2/m6/20260920-215408-m6-consume`](../../benchmark/v2/m6/20260920-215408-m6-consume)，
+     `status=DONE`，commit `f35f34d`，分析见 [M6 消费参数扫描](../../benchmark/v2/m6/consume-sweep.md)）：
+     - **拉取间隔确实填批**：`batch_mean` 2.16（0 ms）→ 3.90（10 ms）→ 6.53（20 ms）→ 12.68（50 ms）；
+       其中 0 ms → 10 ms 两行只差这一个旋钮（生效 pullBatchSize 都是 64）。
+     - **消费默认值改为 `256:4:50ms:256`**（`batch-size` / `thread-count` / `pull-interval` /
+       `pull-batch-size`）：2001.5 单/s、负载后 0.1 s 排空、批 12.68，而当时的默认值
+       `64:16:0:32` 在同一场次两轮分别是 944.6 / 11.6 s 与 432.9 / 30.7 s。整组一起改，
+       因为只有整组被测过；四项里只有拉取间隔有干净的单旋钮证据。
+     - **2001.5 单/s 是下限不是上限**：场景只发 2000 req/s，负载停止时已落完，本场景测不出
+       更高的数字。上限要靠更高的 `S_DRAIN_RATE` 去量，并入 M8 那一晚。
+     - **MySQL 热点行 `tb_seckill_voucher` 决定不拆**（ADR 0007 决策 4）。理由：那 80 次提交/s
+       是双稳态的慢档不是那一行的能力——同一轮里同一行被量到约 394 次/s 与约 73 次/s 两段；
+       新默认值下那一行每秒只被要求约 150 次提交，当前的约束是到达速率。回归条件：到达速率
+       远高于 2000/s、`drain_s_after_load` 重新大于 0、且 `persist_orders_per_s ÷ batch_mean`
+       不再随负载上升——挂在 M8 的高速率落库轮上。
 
 - ShardingSphere-JDBC：`trade_order` 及其附属表按 `user_id` 分片（本地 2 库 × 4 表）；`order_no` 含 user 基因，所以按 `order_no` 查与按 `user_id` 查都能单分片命中，避免广播。
 - 限购唯一键 `uk(user_id, voucher_id, active_flag)` 含分片键，分片内唯一即全局唯一——讲清为什么这成立。
