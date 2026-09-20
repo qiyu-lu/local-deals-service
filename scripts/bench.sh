@@ -604,9 +604,15 @@ run_scenario() { # name
   fi
   export ARGS_CURRENT="${M3_LIMITS_CURRENT} --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=${M3_TOKEN_SECRET} ${S_EXTRA_ARGS}"
   if [[ -n "${S_BUCKETS:-}" ]]; then
-    # The current build runs on the cluster with its buckets; the baseline predates both.
+    # The current build runs on the cluster with its buckets; the baseline predates both and
+    # stays on the single node. The stack environment was read before the mode was known, so
+    # read it again: it now also carries the cluster node list the current build needs.
     export REDIS_MODE=cluster
+    eval "$("${PROJECT_DIR}/scripts/stack.sh" env)"
+    [[ -n "${STACK_REDIS_CLUSTER_NODES:-}" ]] || fail "cluster mode did not print node addresses"
     ARGS_CURRENT="${ARGS_CURRENT} --local-deals.seckill.bucket.count=${S_BUCKETS}"
+    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.nodes=${STACK_REDIS_CLUSTER_NODES}"
+    ARGS_CURRENT="${ARGS_CURRENT} --spring.data.redis.cluster.max-redirects=5"
   fi
   BROKER_STORE_ROOT_CHECK="$(sed -n 's/^LOCAL_DEALS_ROCKETMQ_STORE_ROOT=//p' "${PROJECT_DIR}/.env" 2>/dev/null | tail -1)/x"
   # Take the scenario lock before anything that touches the shared stack, and arm the cleanup
