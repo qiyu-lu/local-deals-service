@@ -6,6 +6,8 @@ import com.localdeals.trade.exception.BatchPersistDegradedException;
 import com.localdeals.trade.service.SeckillOrderBatchPersister;
 import com.localdeals.trade.service.SeckillOrderStateService;
 import com.localdeals.trade.service.SeckillOrderStateService.PersistClaim;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,7 @@ class SeckillOrderBatchProcessorTest {
     private SeckillOrderConsumer singleMessageConsumer;
     private OrderTimeoutScheduler orderTimeoutScheduler;
     private WebSocketNotifier webSocketNotifier;
+    private SimpleMeterRegistry registry;
     private SeckillOrderBatchProcessor processor;
 
     private final SeckillOrderMessage first = new SeckillOrderMessage(7L, 101L, 9001L);
@@ -45,9 +48,84 @@ class SeckillOrderBatchProcessorTest {
         singleMessageConsumer = mock(SeckillOrderConsumer.class);
         orderTimeoutScheduler = mock(OrderTimeoutScheduler.class);
         webSocketNotifier = mock(WebSocketNotifier.class);
+        registry = new SimpleMeterRegistry();
         processor = new SeckillOrderBatchProcessor(stateService, batchPersister,
                 singleMessageConsumer, orderTimeoutScheduler, webSocketNotifier,
-                new LocalDealsMetrics(new SimpleMeterRegistry()));
+                new LocalDealsMetrics(registry));
+    }
+
+    private DistributionSummary batchSize(String stage) {
+        return registry.find("local_deals.seckill.consume.batch.size").tag("stage", stage).summary();
+    }
+
+    private double degraded(String reason) {
+        Counter counter = registry.find("local_deals.seckill.consume.degraded")
+                .tag("reason", reason).counter();
+        return counter == null ? -1 : counter.count();
+    }
+
+    // M5 could not read its own persistence A/B because nothing recorded how full the batches
+    // actually were: "the slow rounds had one or two orders per batch" stayed an inference from
+    // M4 onwards. These two metrics are what turns it into a measurement.
+    @Test
+    void theDeliveredBatchAndEachPersistedGroupAreMeasured() {
+        List<SeckillOrderMessage> batch = Arrays.asList(first, otherVoucher, second);
+        when(stateService.claimForPersistence(batch)).thenReturn(
+                Arrays.asList(PersistClaim.CLAIMED, PersistClaim.CLAIMED, PersistClaim.CLAIMED));
+        when(stateService.markSuccessBatch(anyList()))
+                .thenReturn(Arrays.asList(true, true, true));
+
+        assertThat(processor.process(batch)).isTrue();
+
+        // What RocketMQ handed over: one batch of three.
+        assertThat(batchSize("delivered").count()).isEqualTo(1);
+        assertThat(batchSize("delivered").totalAmount()).isEqualTo(3);
+        // What one INSERT + one stock update actually carried: two groups, of two and of one.
+        assertThat(batchSize("persisted").count()).isEqualTo(2);
+        assertThat(batchSize("persisted").totalAmount()).isEqualTo(3);
+        assertThat(batchSize("persisted").max()).isEqualTo(2);
+    }
+
+    @Test
+    void aBatchIsMeasuredAsDeliveredEvenWhenNothingIsClaimed() {
+        List<SeckillOrderMessage> batch = Arrays.asList(first, second);
+        when(stateService.claimForPersistence(batch)).thenReturn(
+                Arrays.asList(PersistClaim.ALREADY_SUCCESS, PersistClaim.ALREADY_FAILED));
+
+        assertThat(processor.process(batch)).isTrue();
+
+        assertThat(batchSize("delivered").count()).isEqualTo(1);
+        assertThat(batchSize("delivered").totalAmount()).isEqualTo(2);
+        assertThat(batchSize("persisted").count()).isZero();
+    }
+
+    @Test
+    void eachDegradationIsCountedByWhatMadeTheFastPathStopHolding() {
+        List<SeckillOrderMessage> batch = Arrays.asList(first, second);
+        when(stateService.claimForPersistence(batch)).thenReturn(
+                Arrays.asList(PersistClaim.CLAIMED, PersistClaim.CLAIMED));
+        doThrow(BatchPersistDegradedException.insertSkipped("voucherId=7 covered 1 of 2"))
+                .when(batchPersister).persistGroup(eq(7L), anyList());
+
+        assertThat(processor.process(batch)).isTrue();
+
+        assertThat(degraded("insert_skipped")).isEqualTo(1);
+        assertThat(degraded("stock_short")).isZero();
+        // A degraded group never reached one INSERT, so it is not a persisted group.
+        assertThat(batchSize("persisted").count()).isZero();
+    }
+
+    @Test
+    void aStockGuardThatNoLongerHoldsIsCountedApartFromASkippedInsert() {
+        List<SeckillOrderMessage> batch = List.of(first);
+        when(stateService.claimForPersistence(batch)).thenReturn(List.of(PersistClaim.CLAIMED));
+        doThrow(BatchPersistDegradedException.stockShort("voucherId=7 orders=1"))
+                .when(batchPersister).persistGroup(eq(7L), anyList());
+
+        assertThat(processor.process(batch)).isTrue();
+
+        assertThat(degraded("stock_short")).isEqualTo(1);
+        assertThat(degraded("insert_skipped")).isZero();
     }
 
     @Test
@@ -98,7 +176,7 @@ class SeckillOrderBatchProcessorTest {
         List<SeckillOrderMessage> batch = Arrays.asList(first, second);
         when(stateService.claimForPersistence(batch)).thenReturn(
                 Arrays.asList(PersistClaim.CLAIMED, PersistClaim.CLAIMED));
-        doThrow(new BatchPersistDegradedException("insert covered 1 of 2"))
+        doThrow(BatchPersistDegradedException.insertSkipped("insert covered 1 of 2"))
                 .when(batchPersister).persistGroup(eq(7L), anyList());
 
         assertThat(processor.process(batch)).isTrue();
@@ -113,7 +191,7 @@ class SeckillOrderBatchProcessorTest {
     void aSingleMessageFailureInsideADegradedGroupRedeliversTheBatch() {
         List<SeckillOrderMessage> batch = List.of(first);
         when(stateService.claimForPersistence(batch)).thenReturn(List.of(PersistClaim.CLAIMED));
-        doThrow(new BatchPersistDegradedException("insert covered 0 of 1"))
+        doThrow(BatchPersistDegradedException.insertSkipped("insert covered 0 of 1"))
                 .when(batchPersister).persistGroup(anyLong(), anyList());
         doThrow(new IllegalStateException("db down")).when(singleMessageConsumer).onMessage(first);
 
