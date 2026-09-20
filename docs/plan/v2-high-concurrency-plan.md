@@ -372,6 +372,32 @@ M4 执行时发现的计划偏差（详见 ADR 0005）：rocketmq-spring 的监�
 
 M5 执行时发现的计划偏差（详见 ADR 0006）：hash tag 用 `{sk:b<n>}` 而**不带券号**（按 orderId 查状态时拿不到券号），代价是不同券的同号桶共用 slot；活动元数据按桶复制 K 份；消费批次的认领与收尾按桶分组、每桶一次往返，但**落库仍按券分组**；L1 售罄标记跑在鉴权之前、没有用户也就没有桶，改为「每个桶都标记」才本地拒绝；L2 的按券下限除以 K 分摊，所以 20k 档的 429 从 21 涨到 1480（设计内行为）；对照组必须跑单节点，因为 `v2.0-m4` 的 key 没有 tag、在 Cluster 上根本起不来，这是本次 A/B 唯一的结构性差异。**两处需要改正的预期**：(1) M4 复测与上一段里「抬高 80 次/s 这个上限正是 M5 的库存分桶」是错的——那 80 次/s 是 MySQL `tb_seckill_voucher` 同一行的代价，M5 分的是 Redis 的 key，`SeckillVoucherMapper` 至今一张券一行，**拆这一行目前不属于任何里程碑**；(2) 计划预期的「主从切换丢预占 → Redis 超放 → MySQL 条件更新兜底」**没有复现**，实测 RPO = 0，因为转移期间那些 slot 直接不可写（买家收到 503 而不是假的成功），丢失窗口只有不足 1 ms 的复制延迟；要逼出那条防线需要先制造复制空窗（`CLIENT PAUSE` / 断链）或把写速率提高一两个数量级，已记在 M8。M4 遗留的两件仪表工作（批大小分布 + 退化计数、`bench.sh` 按阶段归档 `app.log` 与 actuator 快照）**M5 仍未做**，落库吞吐的 A/B 结论在补上之前一律不可信。
 
+M6 执行时发现的计划偏差（详见 [ADR 0008](../adr/0008-m6-order-sharding.md)）：分片拓扑用 `slot = key % 8`、
+`ds = slot % 2`、`table = slot / 2`，靠「8 整除 1024」让 M3 的基因同时决定库和表，所以按 `user_id` 查和按
+`order_no` 查必然同片；`pay_no` / `refund_no` / `P<order_no>` 都继承基因，只有营销发放的 `G<grant_id>` 没有。
+**`tb_seckill_voucher` 明确不做广播表**——`stock` 是写热点，广播写要 2PC 才能自洽，把最后一道防线建在需要
+分布式事务的数字上是把问题变复杂，所以它是只在 ds_0 的单表。**七件计划没写、但实际挡路的事**：
+(1) ShardingSphere 5.5.2 的元数据仓库带进 `jackson-dataformat-xml`，Spring 就把 XML 转换器排在 JSON 前面，
+不带 Accept 头的请求开始返回 `<Result>…`；排除这个依赖会让启动直接失败（它运行时真的要 `XmlMapper`），
+最终在 `WebConfig` 里显式删掉声明 XML 媒体类型的转换器——**只有 4 个控制器测试抓到了它**。
+(2) 四类 SQL 被分片拒绝且理由都成立：`INSERT INTO 分片表 ... SELECT ... JOIN 单表`、多表 `DELETE ... JOIN`、
+`UPDATE ... LIMIT`（limit 会按节点生效，「最多过期 200 张」会变成 1600 张）、以及不带分片键的
+`SELECT ... FOR UPDATE`——最后一类**不报错**，只是在 8 张表上各锁一行，是最危险的一类。
+还有第五类：**单表与分片表的关联子查询**（`SELECT ... FROM tb_user u WHERE EXISTS (SELECT 1 FROM trade_order o WHERE o.user_id=u.id)`）
+会被路由到一个根本没有 `tb_user` 的库；`MarketingTagMemberMapper.countBusinessRelationship` 因此拆成了两问一合。
+(3) 一条 INSERT 同时写 `order_no` 和 `user_id` 时两列必须指向同一片，于是测试里伪造的 `BASE + n` 订单号被拒；
+这不是限制而是不变量生效——顺带使「订单号被别的用户占用」这类冲突**只可能来自同基因用户**，测试也照此改写。
+(4) 附属表的 `AUTO_INCREMENT` 会在每张物理表各自从头数，改用 ShardingSphere 的 `SNOWFLAKE`。
+(5) `uk(channel_txn_no)`、`uk(channel_refund_no)`、`uk(verify_code)` 收窄为片内唯一（前两者只会被同时带着
+`pay_no` / `refund_no` 的语句碰到，幂等不受影响）；而 `uk(user_id, voucher_id, active_flag)` 语义不变，
+因为一个用户的行永远在同一张表里——这正是分片键选 `user_id` 的原因。
+(6) 营销那四个刻意收窄的测试上下文自己 import 数据源自动配置，必须显式 import 分片配置，否则拿到的是
+ds_0 的裸连接。(7) 事务选 **LOCAL 而不是 XA**：一个消费批次确实横跨两个库（`OrderShardRoutingIT` 钉住了这点），
+崩在两次提交之间的后果是**有界的少卖而不是超卖**（未提交的那一半仍持有 Redis 预占，对账器重投 + `INSERT IGNORE`
+幂等，但库存会被多扣一次），**故障注入本身没有做，这一条是推理不是实测**。
+另：ds_1 的 URL 从 `spring.datasource.url` 推导（schema 加 `_1`），所以隔离栈与压测脚本的变量不用改，
+代价是 V16 搬迁 pre-shard 旧行时要跨 schema 读，**两个库必须是同一实例的两个 schema**。
+
 时间不够时的裁剪顺序：先砍 M7，再砍 M6b，再把 M6 缩为“只做分片、不做 ES 读模型”。**M2、M3、M4、M5 的故障演练不可砍**——它们分别对应面试里的“业务闭环”“高并发设计”“性能调优”“分布式故障”四类必问题。
 
 ## 6. 诚实边界
