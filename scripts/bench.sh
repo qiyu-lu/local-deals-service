@@ -269,8 +269,9 @@ load_scenario() {
       S_RATES="500 2000"; S_STEP_DURATION=10s; S_STEP_STOCK=200
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
-      # only the smoke shortens reconciliation, so the drill converges within minutes
-      S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
+      # only the smoke shortens reconciliation, and only for the drills: a redriving reconciler
+      # would turn a drain into a measurement of redelivery instead of persistence
+      S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
     m4)
       S_MILESTONE=m4; S_BASELINE_TAG=v2.0-m3; S_BASELINE_FLAVOUR=funnel
@@ -289,7 +290,7 @@ load_scenario() {
       S_DRAIN_ROUNDS=1; S_DRAIN_STOCK=2000; S_DRAIN_RATE=1000
       S_SWEEP="1:8 64:16"
       S_KILL_ROUNDS=0; S_BROKER_KILL_ROUNDS=1; S_KILL_STOCK=3000; S_KILL_RATE=1000; S_KILL_AFTER=3
-      S_EXTRA_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
+      S_EXTRA_ARGS=""; S_DRILL_ARGS="--local-deals.seckill.reconciliation.initial-delay=5s --local-deals.seckill.reconciliation.fixed-delay=2s --local-deals.seckill.reconciliation.stale-after=10s --local-deals.seckill.reconciliation.retry-delay=5s --local-deals.seckill.reconciliation.batch-size=1000"
       S_USERS=20000 ;;
     *) fail "unknown scenario $1" ;;
   esac
@@ -408,8 +409,9 @@ start_build() { # which
   # the app first: on a fresh stack its Flyway migrations create the tables the fixture fills
   APP_JAR="${RUN_DIR}/${which}.jar" APP_ARGS="$(build_args "$which")" "${PROJECT_DIR}/scripts/stack.sh" app-start
   "$0" users "$S_USERS"
+  # the warm-up needs the same k6 environment as the measured runs, or it only measures 403s
   BENCH_OUT="${S_RESULT}/raw/warmup" BENCH_COMMIT="$(build_commit "$which")" DURATION="$S_WARMUP_DURATION" \
-    STOCK=1000 "$0" step "$S_WARMUP_RATE"
+    STOCK=1000 env "$(build_env "$which")" "$0" step "$S_WARMUP_RATE"
 }
 build_args() { [[ "$1" == baseline ]] && echo "$ARGS_BASELINE" || echo "$ARGS_CURRENT"; }
 build_commit() { [[ "$1" == baseline ]] && git -C "$PROJECT_DIR" rev-parse --short "${S_BASELINE_TAG}^{commit}" || git -C "$PROJECT_DIR" rev-parse --short HEAD; }
@@ -459,7 +461,7 @@ kill_round() { # mode: kill | broker
   local line broker_down=""
   [[ "$1" == broker ]] && broker_down=1
   line="$(env "$(build_env current)" BENCH_OUT="$S_RESULT" APP_JAR="${RUN_DIR}/current.jar" \
-    APP_ARGS="$ARGS_CURRENT" BROKER_DOWN="$broker_down" DRILL_TIMEOUT=1800 \
+    APP_ARGS="${ARGS_CURRENT} ${S_DRILL_ARGS}" BROKER_DOWN="$broker_down" DRILL_TIMEOUT=1800 \
     "${PROJECT_DIR}/benchmark/v2/scripts/kill-drill.sh" "$S_KILL_STOCK" "$S_KILL_RATE" "$S_KILL_AFTER" | tail -1)"
   [[ "$line" == voucher=* ]] || { echo "kill drill printed no result: ${line}"; return 1; }
   python3 - "${S_RESULT}/kill-drill.csv" "$(git -C "$PROJECT_DIR" rev-parse --short HEAD)" "$1" "$line" <<'PY'
@@ -484,6 +486,7 @@ run_scenario() { # name
     S_DRAIN_ROUNDS S_DRAIN_STOCK S_DRAIN_RATE S_KILL_ROUNDS S_BROKER_KILL_ROUNDS S_KILL_STOCK S_KILL_RATE \
     S_KILL_AFTER S_EXTRA_ARGS S_USERS S_BASELINE_FLAVOUR STACK_NAME K6_IMAGE
   S_SWEEP="${S_SWEEP:-}"; export S_SWEEP
+  S_DRILL_ARGS="${S_DRILL_ARGS:-}"; export S_DRILL_ARGS
   # Same pinning as M0 (see benchmark/v2/m0/baseline.md) unless overridden.
   export APP_CPUS="${APP_CPUS:-0-3,8-11}" DEPS_CPUS="${DEPS_CPUS:-4-5,12-13}" K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
   K6_CPUS="${K6_CPUS_SCENARIO:-6-7,14-15}"
