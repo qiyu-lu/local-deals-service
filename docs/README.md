@@ -28,6 +28,7 @@ V2 以代码为准；V1 的过程文档、执行证据和学习笔记已从主�
 | [0007](adr/0007-m6-batch-fill.md) | M6：消费参数扫描；为什么不拆库存热点行 |
 | [0008](adr/0008-m6-order-sharding.md) | M6：订单分 2 库 × 4 表，基因法与片内唯一键 |
 | [0009](adr/0009-m8-multi-instance.md) | M8：多实例、nginx、traceId 三跳、workerId 缺陷 |
+| [0010](adr/0010-m9-packaging.md) | M9：仓库名、文档主干、笔记与问答的写法、为什么不拆库存热点行 |
 
 ## 压测证据
 
