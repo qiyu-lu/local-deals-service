@@ -1,0 +1,90 @@
+{
+  "scenario": "m8",
+  "started_at": "2026-09-21T04:02:51+0800",
+  "commit": "1cc920290d0ea10ffac9aa6faa2452f5a9bd52c1",
+  "commit_short": "1cc9202",
+  "uncommitted_changes": "?? benchmark/v2/m8/20260921-040251-m8/",
+  "baseline": {
+    "tag": "v2.0-m6",
+    "commit": "6be81334c3d5014e6129e4f6eb664c93303dc0f8"
+  },
+  "parameters": {
+    "sweep": "",
+    "instance_cpus": "",
+    "rates": "",
+    "scale_drain_stock": "20000",
+    "drill_args": "",
+    "scale": "",
+    "drain_rounds": "0",
+    "window_tail": "5",
+    "milestone": "m8",
+    "fullchain_stock": "0",
+    "drain_stock": "0",
+    "kill_stock": "0",
+    "instances": "1",
+    "extra_args": "",
+    "baseline_schema": "",
+    "fullchain_rate": "1",
+    "kill_rate": "1",
+    "users": "0",
+    "lb_access_log": "",
+    "baseline_tag": "v2.0-m6",
+    "baseline_commit": "6be8133",
+    "scale_rates": "",
+    "kill_rounds": "0",
+    "pay_timeout": "24h",
+    "buckets": "",
+    "broker_kill_rounds": "0",
+    "kill_after": "0",
+    "warmup_rate": "0",
+    "suite": "m6 m8-fullchain m8-scale m8-window",
+    "fullchain": "",
+    "window_rounds": "0",
+    "pay_ratio": "0.7",
+    "bucket_sweep": "",
+    "window_sleep": "0",
+    "warmup_duration": "0s",
+    "baseline_flavour": "funnel",
+    "fullchain_users": "0",
+    "current_commit": "1cc9202",
+    "step_stock": "0",
+    "scale_drain_rounds": "0",
+    "scale_drain_rate": "20000",
+    "baseline_buckets": "",
+    "redis_kill_rounds": "0",
+    "lb_cpus": "",
+    "drain_rate": "1",
+    "step_duration": "0s",
+    "fullchain_wave2_users": "0"
+  },
+  "cpu_pinning": {
+    "app": "0-3,8-11",
+    "dependencies": "4-5,12-13",
+    "k6": "6-7,14-15"
+  },
+  "jvm_options": "-Xms2g -Xmx2g",
+  "app_args": {
+    "baseline": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret",
+    "current": "--local-deals.traffic.seckill.ip-limit=100000 --local-deals.order.pay-timeout=24h --local-deals.seckill.token.secret=bench-seckill-token-secret --local-deals.payment.callback-secret=bench-payment-callback-secret "
+  },
+  "stack": {
+    "id": "m3bench",
+    "app_port": "24083"
+  },
+  "k6_image": "grafana/k6:2.2.0",
+  "machine": {
+    "cpu": "",
+    "nproc": "16",
+    "mem": "30 GB",
+    "kernel": "5.15.0-134-generic"
+  },
+  "load_at_start": {
+    "loadavg": "5.30 6.78 7.46 5/3417 2498366",
+    "other_containers": "local-deals-canal local-deals-es local-deals-mysql local-deals-nginx local-deals-redis ragent-iron-ore-dev-postgres-1 ragent-iron-ore-dev-redis-1 ragent-iron-ore-dev-rocketmq-broker-1 ragent-iron-ore-dev-rocketmq-nameserver-1 ragent-iron-ore-dev-rustfs-1 rmq-consumer rmq-producer"
+  },
+  "finished_at": "2026-09-21T04:57:13+0800",
+  "load_at_end": {
+    "loadavg": "7.65 6.81 7.38 5/3436 3907725"
+  },
+  "status": "DONE"
+}

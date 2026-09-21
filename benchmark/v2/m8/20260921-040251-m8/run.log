@@ -1,0 +1,69 @@
+2026-09-21 04:02:51 scenario m8 -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-040251-m8
+2026-09-21 04:02:51 suite of m6 m8-fullchain m8-scale m8-window
+2026-09-21 04:02:51 suite: m6 starting
+2026-09-21 04:02:51 scenario m6 -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-040251-m6
+2026-09-21 04:02:51 phase stack-up start (timeout 900s)
+2026-09-21 04:03:43 phase stack-up done
+2026-09-21 04:03:43 phase build start (timeout 1200s)
+2026-09-21 04:03:45 phase build done
+2026-09-21 04:03:45 phase ladder-baseline start (timeout 960s)
+2026-09-21 04:06:31 phase ladder-baseline done
+2026-09-21 04:06:31 phase ladder-current start (timeout 960s)
+2026-09-21 04:09:14 phase ladder-current done
+2026-09-21 04:09:14 phase drain-baseline-1 start (timeout 1500s)
+2026-09-21 04:10:55 phase drain-baseline-1 done
+2026-09-21 04:10:55 phase drain-current-1 start (timeout 1500s)
+2026-09-21 04:12:27 phase drain-current-1 done
+2026-09-21 04:12:27 phase drain-baseline-2 start (timeout 1500s)
+2026-09-21 04:14:48 phase drain-baseline-2 done
+2026-09-21 04:14:48 phase drain-current-2 start (timeout 1500s)
+2026-09-21 04:16:24 phase drain-current-2 done
+2026-09-21 04:16:24 phase drain-baseline-3 start (timeout 1500s)
+2026-09-21 04:18:08 phase drain-baseline-3 done
+2026-09-21 04:18:08 phase drain-current-3 start (timeout 1500s)
+2026-09-21 04:19:38 phase drain-current-3 done
+2026-09-21 04:19:38 scenario m6 done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-040251-m6
+2026-09-21 04:20:05 suite: m6 -> DONE
+2026-09-21 04:20:10 suite: m8-fullchain starting
+2026-09-21 04:20:11 scenario m8-fullchain -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042010-m8-fullchain
+2026-09-21 04:20:11 phase stack-up start (timeout 900s)
+2026-09-21 04:21:03 phase stack-up done
+2026-09-21 04:21:03 phase build start (timeout 1200s)
+2026-09-21 04:21:03 phase build done
+2026-09-21 04:21:03 phase full-chain start (timeout 3600s)
+2026-09-21 04:24:29 phase full-chain done
+2026-09-21 04:24:29 scenario m8-fullchain done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042010-m8-fullchain
+2026-09-21 04:24:58 suite: m8-fullchain -> DONE
+2026-09-21 04:25:03 suite: m8-scale starting
+2026-09-21 04:25:03 scenario m8-scale -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042503-m8-scale
+2026-09-21 04:25:03 phase stack-up start (timeout 900s)
+2026-09-21 04:25:57 phase stack-up done
+2026-09-21 04:25:57 phase build start (timeout 1200s)
+2026-09-21 04:25:57 phase build done
+2026-09-21 04:25:57 phase scale-1-instances start (timeout 2400s)
+2026-09-21 04:31:10 phase scale-1-instances done
+2026-09-21 04:31:10 phase scale-2-instances start (timeout 2400s)
+2026-09-21 04:36:38 phase scale-2-instances done
+2026-09-21 04:36:38 phase scale-3-instances start (timeout 2400s)
+2026-09-21 04:42:41 phase scale-3-instances done
+2026-09-21 04:42:41 scenario m8-scale done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042503-m8-scale
+2026-09-21 04:43:09 suite: m8-scale -> DONE
+2026-09-21 04:43:14 suite: m8-window starting
+2026-09-21 04:43:14 scenario m8-window -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-044314-m8-window
+2026-09-21 04:43:14 phase stack-up start (timeout 900s)
+2026-09-21 04:43:59 phase stack-up done
+2026-09-21 04:43:59 phase build start (timeout 1200s)
+2026-09-21 04:43:59 phase build done
+2026-09-21 04:43:59 phase redis-window-drill-1 start (timeout 2700s)
+2026-09-21 04:50:24 phase redis-window-drill-1 done
+2026-09-21 04:50:24 phase redis-window-drill-2 start (timeout 2700s)
+2026-09-21 04:56:39 phase redis-window-drill-2 done
+2026-09-21 04:56:39 scenario m8-window done -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-044314-m8-window
+2026-09-21 04:57:08 suite: m8-window -> DONE
+2026-09-21 04:57:13 suite done: 4 finished, 0 not -> /home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-040251-m8
+ Volume ld-m3bench_redis-data  Removing
+ Volume ld-m3bench_mysql-data  Removing
+ Volume ld-m3bench_redis-data  Removed
+ Volume ld-m3bench_mysql-data  Removed
+time="2026-09-21T04:57:14+08:00" level=warning msg="Warning: No resource found to remove for project \"ld-m3bench-redis-cluster\"."
+2026-09-21 04:57:14 cleanup done; status: DONE

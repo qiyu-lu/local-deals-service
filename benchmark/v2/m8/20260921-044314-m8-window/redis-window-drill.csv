@@ -1,0 +1,3 @@
+commit,voucher,stock,killed_node,replica_sleep_s,replica,reserved_at_kill,stock_at_kill,noticed_s,recovered_s,accepted,orders,reservations,redis_stock,db_stock,processing_left,lost_admissions,stock_gap,oversold,stock_short_degraded,window_effective,replica_links_killed,replicas_connected_at_kill,converge_s
+1cc9202,11,30000,ld-m3bench-redis-c3,8,127.0.0.1:21005,15803,14123,3.6,8.3,33104,30000,30000,0,0,0,3104,0,0,0,yes,1,0,306.0
+1cc9202,13,30000,ld-m3bench-redis-c5,8,127.0.0.1:21003,15882,14047,4.1,8.3,33101,30000,30000,0,0,0,3101,0,0,0,yes,1,0,308.1

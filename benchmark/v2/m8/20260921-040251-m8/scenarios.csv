@@ -1,0 +1,5 @@
+scenario,status,result_dir,started_at,finished_at
+m6,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m6/20260921-040251-m6,2026-09-21 04:02:51,2026-09-21 04:20:05
+m8-fullchain,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042010-m8-fullchain,2026-09-21 04:20:10,2026-09-21 04:24:58
+m8-scale,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-042503-m8-scale,2026-09-21 04:25:03,2026-09-21 04:43:09
+m8-window,"DONE",/home/sd101t/IdeaProjects/hm-dianping/benchmark/v2/m8/20260921-044314-m8-window,2026-09-21 04:43:14,2026-09-21 04:57:08
