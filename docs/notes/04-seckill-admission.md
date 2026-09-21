@@ -15,6 +15,86 @@
 
 ## 二、涉及的数据
 
+### 2.1 先理解 Redis Cluster，再看库存分桶
+
+**先说结论**：这个项目接入的是 Redis Cluster，集群环境由 **3 个主节点和各自的 1 个副本**组成。
+主节点分担不同 key 的读写，副本复制自己主节点的数据、在故障后参与接替。理解它，才能解释为什么下面
+的库存要分桶、为什么一个准入脚本涉及的 key 必须带相同的 hash tag。
+
+**展开**：从一条请求怎样找到数据开始看。
+
+- **分片与主从是两件事。** 分片把不同数据分给不同主节点，主从复制为每一片保留副本。
+  3 主 3 从里，每个副本只复制所属主节点的那一片，并非六个节点各存完整数据。哨兵（Sentinel）主要为
+  非分片的主从部署做监控和自动切换；本项目的 Cluster 自带故障检测与选举，没有另配哨兵。
+  [哨兵的适用范围](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/)。
+- **槽位是 key 与节点之间的一层映射。** Redis 把 key 空间分成 16384 个哈希槽（slot），通常按
+  `CRC16(key) % 16384` 算出槽号，再由槽号找到负责的主节点。一个主节点负责很多槽，一个槽可以放很多 key。
+  本项目的 **16 个业务桶、16384 个 Redis 槽、3 个主节点**是三个不同概念；增加业务桶不会自动增加节点。
+- **客户端负责找对节点。** 节点列表是发现集群的入口，客户端随后维护「槽 → 节点」的路由表，直接向目标
+  节点发命令。`MOVED` 告诉客户端这个槽实际由哪个节点负责；`ASK` 常见于槽迁移，要求这一次请求临时去指定节点，不能据此
+  永久改掉槽归属。集群节点不会替客户端把业务命令转发一圈。
+  [槽位与重定向规则](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)。
+- **Lua 的原子操作范围要落在同一个槽。** 本项目的准入脚本同时操作库存、预占、订单状态等 key；
+  如果传入的 key 跨槽，会被 `CROSSSLOT` 拒绝，即使这两个槽碰巧在同一个主节点上也不行。
+  所以项目把同一桶的相关 key 都加上 `{sk:b3}` 这样的 hash tag：Redis 只对花括号里 `sk:b3` 这段算槽号，
+  下列 key 就能在同一个脚本里处理。其他桶换自己的 tag，把热点分散出去；单个库存 key 本身不会被 Cluster
+  自动拆开。[同槽操作与 hash tag](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)。
+
+```text
+sk:{sk:b3}:stock:17          17 号券在 3 号桶的库存
+sk:{sk:b3}:resv:17           同一份库存对应的预占
+sk:{sk:b3}:processing        3 号桶的处理中索引
+```
+
+**主节点宕机后呢？** 节点之间通过集群总线交换心跳和故障信息；故障得到确认、满足选举条件后，副本才会
+接替主节点负责原来的槽。需要可用的副本和多数主节点参与，不能保证任意节点故障组合都能恢复。
+本项目把节点超时配为 5000 毫秒，但故障确认、选举和客户端更新路由还要时间，**不能承诺 5 秒恢复**。
+
+主从使用异步复制：主节点刚确认扣减、还没复制给副本就宕机，新主可能带着旧库存接单。这与 Lua 执行时
+能否被其他请求插入是两回事。项目里，准入调用异常后会按订单号回查是否实际成功，仍无法确认才返回 503；
+若旧库存造成超放，最终建单还要过数据库的 `stock >= n` 条件更新。消费与补偿详见
+[第 05 章](05-seckill-persistence.md)，故障场景与历史结果见[第 12 章第五节](12-benchmark-and-testing.md)。
+异步复制的丢写窗口见[Redis 复制说明](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/)。
+
+**别踩**：同槽是这个多 key Lua 能执行的前提，不保证故障后数据不回退；副本接替服务也不代表业务全程无错误。
+Redis 分桶分散的是 Redis 侧的热点，数据库里同一张券仍是一行库存，不能把它说成解决了 MySQL 的行锁竞争。
+
+### 2.2 当前项目怎样配置集群连接
+
+**先说结论**：项目保留单机与集群两种接入方式。默认配置文件仍是 `spring.data.redis.host/port`；
+是否连接 Cluster，取决于应用启动时有没有收到 `spring.data.redis.cluster.nodes`。只启动六个 Redis
+进程，或者只把库存桶数改成 16，都不会让应用自动切到集群。
+
+| 配置所在层 | 当前设置与作用 |
+| --- | --- |
+| Redis 节点 | `docker/redis-cluster/docker-compose.yml` 定义六个节点，`cluster-enabled yes` 开启集群，`cluster-config-file nodes.conf` 保存 Redis 自己维护的节点拓扑；`cluster-node-timeout 5000` 用于故障检测。 |
+| 主从关系与槽分配 | `scripts/stack.sh` 在 `REDIS_MODE=cluster` 时启动节点，再用 `redis-cli --cluster create … --cluster-replicas 1` 组建 3 主 3 从并分配槽；同一套脚本还保留单节点用于旧版本对照。 |
+| 地址与认证 | 脚本默认客户端端口为 `27001`–`27006`，Redis 6.2 的总线端口为对应端口加 10000。节点共享宿主网络，宣告 `127.0.0.1`，让宿主机应用和其他节点都能到达；`requirepass` 管客户端认证，`masterauth` 用于副本连接主节点。 |
+| 应用节点列表 | `stack.sh env` 输出的是 `STACK_REDIS_CLUSTER_NODES`，这是脚本变量；`bench.sh` 再把它放进 `--spring.data.redis.cluster.nodes=…`。直接启动应用时，也可以设置 Spring 能识别的 `SPRING_DATA_REDIS_CLUSTER_NODES` 环境变量。 |
+| 普通 Redis 操作 | `StringRedisTemplate` 底层使用 Lettuce。`RedisClusterConfig` 开启每 10 秒周期刷新和自适应拓扑刷新，让客户端跟上节点变化；连接断开时拒绝继续排队命令。刷新机制不保证当前请求一定成功。 |
+| 分布式锁 | `RedissonConfig` 读取同一份 Spring Redis 配置，有节点列表就用 `useClusterServers()`，每 5 秒扫描；否则用 `useSingleServer()`。两个客户端都需要认识集群。 |
+
+应用连接部分可以理解成下面这份**等价配置示意**，节点列表也可以由环境变量或启动参数注入：
+
+```yaml
+spring:
+  data:
+    redis:
+      password: "${LOCAL_DEALS_REDIS_PASSWORD}"
+      cluster:
+        nodes: 127.0.0.1:27001,127.0.0.1:27002,127.0.0.1:27003,127.0.0.1:27004,127.0.0.1:27005,127.0.0.1:27006
+        max-redirects: 5
+```
+
+这里的 `max-redirects` 是一次命令允许跟随的最大重定向次数，不是业务重试次数。槽位路由由客户端处理，
+业务代码仍然用 `StringRedisTemplate` 调脚本；业务自己负责的是选桶并保证 key 同槽。
+
+**别踩**：这套 compose 用于本机隔离栈，六个进程仍共享一台宿主机，不能据此声称具备跨机器容灾。
+它还配置了 `appendonly no` 和 `save ""`，关闭 AOF 和自动 RDB 快照；`nodes.conf` 保存的是拓扑，
+不等于业务数据持久化。换成多机部署时，要重新安排主从所在机器、节点可达地址和持久化策略。
+
+### 2.3 准入脚本涉及的数据
+
 **库存分桶**：一张券的库存不是一个 key，而是被拆成 K 份（K 是 2 的幂、默认 16、最大 1024）。
 桶号由**买家**决定——用户 id 对 1024 取模后再取低位，也就是 `userId % K`。每个桶下有五样东西，
 它们的 key 都带同一个 hash tag（tag 里只有桶号，**不带券号**），因此在 Redis Cluster 上落在同一个 slot：
@@ -207,6 +287,13 @@ Redis 自己的时间，因为多个实例的本地时钟不一定一致；然�
 别的实例收到就设自己的标记；库存回到桶里的三个地方——补偿、关单释放、退款释放——广播「去掉这个桶」。
 这只是加速手段，丢了也没关系，因为每个实例每秒都有一个探针会去 Redis 问真话。
 
+**（4）集群与分桶。** 我用的集群环境是三主三从，三个主节点分担不同槽，每个主节点有一个副本。
+应用先通过节点列表发现集群，客户端按槽找到对应节点；主从切换后再更新路由。秒杀库存默认拆成十六个业务桶，
+同一用户固定进同一桶，我把这一桶的库存、预占和状态 key 加上相同的 hash tag，保证一次 Lua 的所有 key
+都在同槽，否则就会报跨槽错误。桶数和节点数没有一一对应关系，拆桶是为了让同一张热券的请求能分散出去。
+副本是异步复制的，所以切换后可能少掉刚才的扣减；Lua 只保证执行期间不被插入，不保证这些写入永远不丢。
+最终库存还要靠数据库条件更新守住，这也是为什么我要把「抢到预占」和「订单落库成功」分开。
+
 ## 五、为什么这么设计 / 会被怎么追问
 
 **为什么不用事务消息？** 事务消息要解决的是「本地事务成功了但消息没发出去」，但它只覆盖半消息与
@@ -234,7 +321,8 @@ Redis 自己的时间，因为多个实例的本地时钟不一定一致；然�
 多半是直接调小 K。
 
 **本地令牌桶是每实例的，多实例不就放行 N 倍了吗？** 是的，而且是有意的。L2 只防洪峰、不做精确配额；
-**精确判定永远在那一次 Lua 里**，超卖是由「读库存和扣库存在同一个原子区间」保证的，不是由限流保证的。
+**准入的精确判定在那一次 Lua 里**，读库存和扣库存在同一个原子区间，避免并发请求重复扣掉同一份 Redis 库存；
+发生主从切换、Redis 状态回退时，最终不超卖仍靠数据库条件更新，不能把 Lua 的原子性当成不丢写的保证。
 同理，一部分「还有库存时」的请求会被答 429，在秒杀语义里他们本来也抢不到。
 
 **这些数字怎么样？** 准入拐点（p99 < 100 ms 且丢弃 < 1% 的最高档）从 5k 抬到 20k req/s，天花板从
@@ -287,6 +375,9 @@ Redis 自己的时间，因为多个实例的本地时钟不一定一致；然�
 | L2 本地令牌桶 | `SeckillLocalRateLimiter` |
 | 秒杀令牌 | `SeckillTokenService`，请求头 `X-Seckill-Token` |
 | 分桶路由 / key 前缀 | `SeckillBucketRouter`，前缀 `sk:{sk:b<n>}:` |
+| 集群节点与组建 | [集群 compose](../../docker/redis-cluster/docker-compose.yml)、[stack.sh](../../scripts/stack.sh) 的 `start_redis_cluster` / `print_env` |
+| 应用集群参数注入 | [bench.sh](../../scripts/bench.sh) 的 `cluster_args`；[默认 Redis 配置](../../src/main/resources/application.yaml) |
+| 客户端拓扑与锁连接 | [RedisClusterConfig](../../src/main/java/com/localdeals/platform/config/RedisClusterConfig.java)、[RedissonConfig](../../src/main/java/com/localdeals/platform/config/RedissonConfig.java) |
 | 本地发号器 | `SnowflakeOrderIdGenerator` |
 | 实例编号租约 | `WorkerIdLease`，key 前缀 `order-id:worker:` |
 | 成功者发消息 | `SeckillOrderProducer`，主题 `seckill-order-topic` |
