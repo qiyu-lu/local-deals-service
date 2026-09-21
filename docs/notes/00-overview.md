@@ -224,17 +224,20 @@
 
 ## 附：章节索引
 
+**★ = 简历项目描述里直接写到的环节（准入漏斗、异步落库、一致性与故障演练、订单与营销），
+面试复习优先看这几章。**
+
 | 章 | 主题 |
 | --- | --- |
 | [01](01-consumer-login.md) | 消费者登录：验证码、会话、两级拦截器 |
 | [02](02-merchant-admin.md) | 商户后台：登录锁定、RBAC、数据隔离、审计 |
 | [03](03-shop-read-path.md) | 店铺读路径：缓存、GEO、搜索、图片归属 |
-| [04](04-seckill-admission.md) | 秒杀准入：三层漏斗与一次脚本 |
-| [05](05-seckill-persistence.md) | 异步落库：批量消费、认领、对账与收敛 |
-| [06](06-order-lifecycle.md) | 订单闭环：状态机、支付、关单、退款、五类竞态 |
-| [07](07-coupon-asset.md) | 券资产：统一发券、核销、过期 |
-| [08](08-order-sharding.md) | 订单分库分表：基因法、片内唯一键、被拒的 SQL |
+| [04](04-seckill-admission.md) ★ | 秒杀准入：三层漏斗与一次脚本 |
+| [05](05-seckill-persistence.md) ★ | 异步落库：批量消费、认领、对账与收敛 |
+| [06](06-order-lifecycle.md) ★ | 订单闭环：状态机、支付、关单、退款、五类竞态 |
+| [07](07-coupon-asset.md) ★ | 券资产：统一发券、核销、过期 |
+| [08](08-order-sharding.md) ★ | 订单分库分表：基因法、片内唯一键、被拒的 SQL |
 | [09](09-marketing.md) | 营销：活动、发放、批量 Job、通知发件箱 |
 | [10](10-like-outbox-hot-rank.md) | 点赞发件箱与热榜 |
 | [11](11-observability.md) | 可观测：追踪几跳、指标、积压采样 |
-| [12](12-benchmark-and-testing.md) | 压测方法与数字、三次演练、三层测试怎么跑与用到的命令 |
+| [12](12-benchmark-and-testing.md) ★ | 压测方法与数字、三次演练、三层测试怎么跑与用到的命令 |
