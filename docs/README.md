@@ -13,6 +13,5 @@ V2 以代码为准；V1 的过程文档、执行证据和学习笔记已从主�
 | [M3 准入漏斗复测](../benchmark/v2/m3/comparison.md) | 本地漏斗 + 单次 Lua 对 `v2.0-m2` 的 A/B：拐点、天花板、故障演练 |
 | [M4 批量消费复测](../benchmark/v2/m4/comparison.md) | 批量落库对 `v2.0-m3` 的 A/B：落库速率、参数扫描、瓶颈定位 |
 | [运行手册](runbook.md) | 开发栈、隔离栈、Quick Start、压测与演练、排障 |
-| [设计（V1，待按 ADR 重写）](design/) | 与 V2 冲突的部分随对应里程碑改写为 ADR，M9 删除 |
 
 目标形态（M9）：`README.md`、`adr/`、`plan/`、`benchmark-report.md`、`runbook.md`，合计 2000 行以内。
