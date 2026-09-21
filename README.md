@@ -122,6 +122,8 @@ mvn spring-boot:run          # 业务 8083，management 127.0.0.1:18084
 - [压测报告](docs/benchmark-report.md)：方法、逐里程碑演进、哪些话不能说
 - [ADR](docs/adr/)：每个里程碑一页的背景 / 备选 / 决策 / 代价
 - [运行手册](docs/runbook.md)
+- [学习笔记](docs/notes/00-overview.md)：十三章链路详解与口述版
+- [项目深挖问答](docs/interview/project-deep-dive.md)：114 题面试追问与回答
 - [V2 重构计划与进度](docs/plan/v2-high-concurrency-plan.md)
 
 ---
