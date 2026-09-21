@@ -100,7 +100,7 @@ Redis Stream 仅存在于历史归档，不属于当前正式秒杀链路。
 - Node.js 与 npm 仅在需要重新构建管理端时使用。
 
 更完整的版本检查、IDE 设置和常见问题见
-[环境与常见问题](docs/guides/environment-setup.md)。
+[运行手册](docs/runbook.md)。
 
 ### 准备环境变量
 
@@ -171,7 +171,7 @@ mvn -o test
 
 - [文档索引](docs/README.md)
 - [V2 重构计划与进度](docs/plan/v2-high-concurrency-plan.md)
-- [环境与常见问题](docs/guides/environment-setup.md)
+- [运行手册](docs/runbook.md)
 
 ## 已知边界
 
