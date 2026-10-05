@@ -98,7 +98,8 @@ class OrderCloseIT {
         assertThat(fixture.orderStatus(order(1))).isEqualTo("PENDING_PAY");
         assertThat(redisStock()).isEqualTo(STOCK - 1);
         assertThat(fixture.dbStock()).isEqualTo(STOCK - 1);
-        org.mockito.Mockito.verify(timeoutScheduler).scheduleClose(order(1));
+        org.mockito.Mockito.verify(timeoutScheduler).scheduleClose(
+                org.mockito.ArgumentMatchers.eq(order(1)), org.mockito.ArgumentMatchers.any());
     }
 
     /** Plan race 3. */
