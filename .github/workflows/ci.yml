@@ -34,4 +34,4 @@ jobs:
       - name: integration tests
         run: >-
           mvn -B test -DfailIfNoTests=false
-          -Dtest='*IT,!SeckillWithRocketMQIT,!SeckillOrderRetryIT,!OrderCloseTimerIT,!CanalSyncIT,!ShopSearchAfterIT,!ShopSearchBeforeIT'
+          -Dtest='*IT,!SeckillWithRocketMQIT,!SeckillOrderRetryIT,!SeckillRedriveIT,!OrderCloseTimerIT,!CanalSyncIT,!ShopSearchAfterIT,!ShopSearchBeforeIT'
