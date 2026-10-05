@@ -7,6 +7,9 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -57,5 +60,20 @@ public class ContainersInitializer implements ApplicationContextInitializer<Conf
                 .withExposedPorts(6379);
         mysql.start();
         redis.start();
+        createSecondOrderDatabase();
+    }
+
+    /**
+     * The order tables are sharded over two databases on one server, and the second one's URL is
+     * derived from the first ({@code ShardingProperties#urlFrom}: schema + {@code _1}). The
+     * container only creates the first, so every context failed on {@code Unknown database}.
+     */
+    private static void createSecondOrderDatabase() {
+        try (Connection connection = mysql.createConnection("");
+             Statement statement = connection.createStatement()) {
+            statement.execute("CREATE DATABASE IF NOT EXISTS " + mysql.getDatabaseName() + "_1");
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to create the second order database", e);
+        }
     }
 }
