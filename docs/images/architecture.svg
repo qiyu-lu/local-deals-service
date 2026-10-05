@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="712" viewBox="0 0 880 712" role="img" aria-labelledby="title desc">
+<title id="title">秒杀主链路</title>
+<desc id="desc">请求经 nginx 进入三个应用实例，依次经过本地售罄标记、本地令牌桶和一次 Redis Lua；只有抢到的请求发消息到 RocketMQ，由批量消费写入 MySQL。超时关单与对账器负责兜底。</desc>
+<style>
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif; }
+.t { font-size: 15px; font-weight: 600; }
+.s { font-size: 12.5px; }
+.em { font-size: 12.5px; font-weight: 600; }
+.m { font-size: 12px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+.lbl { font-size: 13px; font-weight: 600; }
+.lgd { font-size: 12px; }
+.gt { font-size: 14px; font-weight: 600; }
+.bn, .ba, .bg, .bp, .bo, .bt { stroke-width: 1.2; }
+.grp { stroke-width: 1.2; stroke-dasharray: 6 4; }
+.ln, .lr, .lx { fill: none; stroke-width: 1.6; }
+.lr { stroke-dasharray: 6 4; }
+.lx { stroke-width: 1.3; }
+
+.card { fill: #ffffff; stroke: #d0d7de; }
+.t, .gt { fill: #1f2328; }
+.s, .lgd { fill: #59636e; }
+.m { fill: #59636e; }
+.em { fill: #0969da; }
+.lbl { fill: #1f2328; }
+.dot { fill: #1f2328; }
+.bn { fill: #f6f8fa; stroke: #d0d7de; }
+.ba { fill: #ddf4ff; stroke: #54aeff; }
+.bg { fill: #dafbe1; stroke: #4ac26b; }
+.bp { fill: #fbefff; stroke: #c297ff; }
+.bo { fill: #fff1e5; stroke: #fb8f44; }
+.bt { fill: #eaeef2; stroke: #afb8c1; }
+.grp { fill: rgba(84,174,255,0.07); stroke: #54aeff; }
+.ln { stroke: #59636e; }
+.lr { stroke: #bc4c00; }
+.lx { stroke: #8c959f; }
+.mk-n { fill: #59636e; }
+.mk-r { fill: #bc4c00; }
+.mk-x { fill: #8c959f; }
+@media (prefers-color-scheme: dark) {
+.card { fill: #0d1117; stroke: #30363d; }
+.t, .gt { fill: #e6edf3; }
+.s, .lgd { fill: #9198a1; }
+.m { fill: #9198a1; }
+.em { fill: #4493f8; }
+.lbl { fill: #e6edf3; }
+.dot { fill: #e6edf3; }
+.bn { fill: #161b22; stroke: #3d444d; }
+.ba { fill: rgba(56,139,253,0.15); stroke: #1f6feb; }
+.bg { fill: rgba(46,160,67,0.15); stroke: #2ea043; }
+.bp { fill: rgba(171,125,248,0.15); stroke: #8957e5; }
+.bo { fill: rgba(219,109,40,0.15); stroke: #db6d28; }
+.bt { fill: #21262d; stroke: #3d444d; }
+.grp { fill: rgba(56,139,253,0.06); stroke: #1f6feb; }
+.ln { stroke: #9198a1; }
+.lr { stroke: #f0883e; }
+.lx { stroke: #6e7681; }
+.mk-n { fill: #9198a1; }
+.mk-r { fill: #f0883e; }
+.mk-x { fill: #6e7681; }
+}
+</style>
+<defs>
+<marker id="am" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-n"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-r"/></marker>
+<marker id="ax" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-x"/></marker>
+</defs>
+<rect x="0.5" y="0.5" width="879" height="711" rx="12" class="card"/>
+<rect x="360" y="22" width="140" height="36" rx="18" class="bn"/>
+<text x="430" y="45" class="t" text-anchor="middle">客户端</text>
+<path d="M430,58 V84" class="ln" marker-end="url(#am)"/>
+<rect x="240" y="84" width="380" height="50" rx="8" class="bn"/>
+<text x="430.0" y="105.0" class="t" text-anchor="middle">nginx</text>
+<text x="430.0" y="123.0" class="s" text-anchor="middle">静态资源 · 入口限流 · 分发到 3 个应用实例</text>
+<rect x="230" y="162" width="400" height="246" rx="12" class="grp"/>
+<text x="246" y="187" class="gt" text-anchor="start">应用实例 ×3 · 准入漏斗</text>
+<text x="614" y="187" class="s" text-anchor="end">每层只放行下一层需要的量</text>
+<path d="M430,134 V202" class="ln" marker-end="url(#am)"/>
+<rect x="250" y="202" width="360" height="48" rx="8" class="ba"/>
+<text x="430.0" y="222.0" class="t" text-anchor="middle">L1 本地售罄标记</text>
+<text x="430.0" y="240.0" class="s" text-anchor="middle">进程内判断，0 次网络 IO</text>
+<path d="M250,226 H214" class="lx" marker-end="url(#ax)"/>
+<text x="206" y="230.5" class="s" text-anchor="end">已售罄，直接返回</text>
+<path d="M430,250 V272" class="ln" marker-end="url(#am)"/>
+<rect x="275" y="272" width="310" height="48" rx="8" class="ba"/>
+<text x="430.0" y="292.0" class="t" text-anchor="middle">L2 本地令牌桶</text>
+<text x="430.0" y="310.0" class="s" text-anchor="middle">按剩余库存定速放行</text>
+<path d="M275,296 H214" class="lx" marker-end="url(#ax)"/>
+<text x="206" y="300.5" class="s" text-anchor="end">超出速率，返回 429</text>
+<path d="M430,320 V342" class="ln" marker-end="url(#am)"/>
+<rect x="300" y="342" width="260" height="48" rx="8" class="ba"/>
+<text x="430.0" y="362.0" class="t" text-anchor="middle">L3 一次 Redis Lua</text>
+<text x="430.0" y="380.0" class="s" text-anchor="middle">限频 · 判重 · 分桶扣减 · 写预占</text>
+<path d="M300,366 H214" class="lx" marker-end="url(#ax)"/>
+<text x="206" y="370.5" class="s" text-anchor="end">没抢到，返回失败</text>
+<rect x="656" y="330" width="204" height="76" rx="8" class="bp"/>
+<text x="758.0" y="355.0" class="t" text-anchor="middle">Redis Cluster</text>
+<text x="758.0" y="373.0" class="s" text-anchor="middle">3 主 3 从</text>
+<text x="758.0" y="391.0" class="s" text-anchor="middle">按 hash tag 分桶</text>
+<path d="M560,366 H656" class="ln" marker-end="url(#am)"/>
+<path d="M430,390 V462" class="ln" marker-end="url(#am)"/>
+<text x="442" y="440" class="lbl" text-anchor="start">仅抢到的请求发一条普通消息</text>
+<rect x="280" y="462" width="300" height="48" rx="8" class="bp"/>
+<text x="430.0" y="482.0" class="t" text-anchor="middle">RocketMQ 5.x</text>
+<text x="430.0" y="500.0" class="s" text-anchor="middle">削峰 · 定时关单消息</text>
+<rect x="656" y="462" width="204" height="52" rx="8" class="bo"/>
+<text x="758.0" y="484.0" class="t" text-anchor="middle">对账器</text>
+<text x="758.0" y="502.0" class="s" text-anchor="middle">核对 MySQL 后重投或补偿</text>
+<path d="M758,462 V406" class="lr" marker-end="url(#ar)"/>
+<text x="768" y="438" class="s" text-anchor="start">扫描到期预占</text>
+<path d="M656,488 H580" class="lr" marker-end="url(#ar)"/>
+<text x="618.0" y="480" class="s" text-anchor="middle">重投</text>
+<path d="M430,510 V538" class="ln" marker-end="url(#am)"/>
+<rect x="240" y="538" width="380" height="52" rx="8" class="bg"/>
+<text x="430.0" y="560.0" class="t" text-anchor="middle">批量消费</text>
+<text x="430.0" y="578.0" class="s" text-anchor="middle">按券分组：一次 INSERT IGNORE + 一次 stock - n</text>
+<path d="M430,590 V618" class="ln" marker-end="url(#am)"/>
+<rect x="240" y="618" width="380" height="70" rx="8" class="bp"/>
+<text x="430.0" y="640.0" class="t" text-anchor="middle">MySQL 8.0</text>
+<text x="430.0" y="658.0" class="s" text-anchor="middle">订单 2 库 × 4 表（user_id 基因）· 库存单表</text>
+<text x="430.0" y="676.0" class="em" text-anchor="middle">stock ≥ n 条件扣减：超卖的最后防线</text>
+<rect x="20" y="538" width="180" height="52" rx="8" class="bo"/>
+<text x="110.0" y="560.0" class="t" text-anchor="middle">超时关单</text>
+<text x="110.0" y="578.0" class="s" text-anchor="middle">到期未支付即关闭</text>
+<path d="M280,486 H110 V538" class="lr" marker-end="url(#ar)"/>
+<text x="215.0" y="478" class="s" text-anchor="middle">定时消息</text>
+<path d="M110,590 V653 H240" class="lr" marker-end="url(#ar)"/>
+<text x="185.0" y="645" class="s" text-anchor="middle">关单 · 回补库存</text>
+<path d="M696,616 H738" class="ln" marker-end="url(#am)"/>
+<text x="748" y="620" class="lgd" text-anchor="start">主链路</text>
+<path d="M696,638 H738" class="lr" marker-end="url(#ar)"/>
+<text x="748" y="642" class="lgd" text-anchor="start">兜底与恢复</text>
+<path d="M696,660 H738" class="lx" marker-end="url(#ax)"/>
+<text x="748" y="664" class="lgd" text-anchor="start">拒绝返回</text>
+</svg>
